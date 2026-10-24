@@ -215,10 +215,20 @@ def load_machine(path: Path | None = None) -> Machine:
 
 
 def load_calibration(path: Path | None = None) -> Calibration:
-    p = path or CONFIG_DIR / "calibration.yaml"
-    if not p.exists():
-        p = CONFIG_DIR / "calibration.example.yaml"
-    return Calibration.from_raw(_load(p))
+    """Real calibration if it exists; otherwise the simulated one in sim mode,
+    so a fresh clone can dry-run. The example file is the last resort and is
+    deliberately incomplete, so preflight refuses rather than inventing values.
+    """
+    if path is not None:
+        return Calibration.from_raw(_load(path))
+    for candidate in (
+        CONFIG_DIR / "calibration.yaml",
+        *( (CONFIG_DIR / "calibration.sim.yaml",) if sim_mode() else () ),
+        CONFIG_DIR / "calibration.example.yaml",
+    ):
+        if candidate.exists():
+            return Calibration.from_raw(_load(candidate))
+    raise FileNotFoundError(f"no calibration file found in {CONFIG_DIR}")
 
 
 def save_calibration(cal_raw: dict[str, Any], path: Path | None = None) -> Path:
