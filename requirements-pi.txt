@@ -1,0 +1,3 @@
+-r requirements.txt
+picamera2==0.3.22
+lgpio==0.2.2.0

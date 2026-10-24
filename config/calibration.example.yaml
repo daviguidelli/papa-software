@@ -1,0 +1,52 @@
+# calibration.example.yaml - the shape of the file the Calibration tab writes.
+# Copy to calibration.yaml. All numbers below are placeholders, not
+# recommended values. Counts and dimensions are data: changing the mounting
+# base means editing this file (through the GUI), not the code.
+
+substrate:
+  width_mm: 25.0          # across the slide, local +x
+  length_mm: 75.0         # down the slide, local +y
+  pattern_size_mm: 25.0   # side of the square the DXF is scaled into,
+                          # measured from the slide origin
+
+swab_rack:
+  rows: 15
+  swabs_per_slide: 2      # a fresh swab starts every slide; 2 to 3 expected
+  swabs:
+    - {id: 1, row: 1, side: right, x: 112.40, y: 38.10, z_grip: 12.30, calibrated: true}
+    - {id: 2, row: 1, side: left,  x:  98.40, y: 38.10, z_grip: 12.30, calibrated: false}
+
+slide_slots:
+  rows: 3
+  cols: 3
+  slots:
+    # x, y is the top-left corner of the slide in machine coordinates
+    - {id: 1, x: 60.00, y: 200.00, calibrated: true}
+
+load_cell:
+  x: 30.00
+  y: 40.00
+  z_safe: 25.00
+  scale_counts_per_g: 0.0
+  tare_counts: 0
+
+disposal: {x: 10.00, y: 10.00, z_release: 20.00}
+
+# Links the two Z references: scribe Z = contact height + this offset.
+slide_surface_offset_mm: 0.0
+
+gripper: {open_us: 1000, closed_us: 2000}
+
+detection:
+  camera_to_machine:
+    points_px: []   # four clicked image points
+    points_mm: []   # the matching jogged machine points
+  swab_stem_mm: 2.54        # 0.1 in, seen end-on
+  swab_roi_mm: 4.0          # search disc a little wider than the stem
+  # Hue in OpenCV units (0-179, degrees halved). Blue film lands near 105-120.
+  # Sample these in the Calibration tab rather than typing them.
+  film_hsv:  {h: [100, 130], s_min: 80, v_min: 60}
+  stem_hsv:  {h: [102, 128], s_min: 90, v_min: 55}
+  slide_min_blue_fraction: 0.35
+  swab_min_blue_fraction: 0.30
+  slide_misaligned_fraction: 0.12   # between this and slide_min -> "misaligned"

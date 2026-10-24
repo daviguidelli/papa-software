@@ -1,0 +1,12 @@
+[project]
+name = "papa"
+version = "0.1.0"
+description = "PAPA: automated subtractive thin-film patterning platform"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+include = ["papa*"]

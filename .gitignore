@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+# runtime state, never committed
+var/
+*.log
+config/calibration.yaml
+!config/calibration.example.yaml

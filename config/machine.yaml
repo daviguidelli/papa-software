@@ -1,0 +1,50 @@
+# machine.yaml - set once by whoever builds the machine.
+# Nothing here is edited by an operator; see calibration.yaml for that.
+
+moonraker_url: http://192.168.50.2:7125
+moonraker_timeout_s: 30
+
+# How slide-local axes map onto machine axes. A rotated mounting base is a
+# config change, never a code change. Valid values: +X -X +Y -Y
+axes:
+  local_x: "+X"
+  local_y: "-Y"
+
+limits_mm:
+  x: [0, 350]
+  y: [0, 350]
+  z: [0, 340]
+
+speeds_mm_s:
+  travel: 150.0      # pen-up moves
+  scribe: 20.0       # swab in contact with the film
+  z_approach: 1.0    # stepped descent onto the load cell, deliberately slow
+  z_lift: 10.0
+
+# Z calibration against the load cell. abort_force_g must stay well under the
+# cell rating (TAL221 is commonly 100 g - confirm the part before trusting it).
+zcal:
+  target_force_g: 5.0
+  abort_force_g: 20.0
+  step_mm: 0.05
+  max_travel_mm: 8.0
+  settle_readings: 3     # consecutive readings above target before accepting
+  backoff_mm: 0.5
+
+# Swab retirement. Whichever limit is reached first triggers a mid-slide swap.
+wear:
+  max_path_mm: 100.0
+  max_contact_s: 120.0
+
+toolpath:
+  block_target_mm: 3.0   # wear is checked between blocks, so this sets the
+                         # granularity of a swab swap
+  resume_overlap_mm: 0.3 # back up slightly on resume so no gap is left
+
+pins:
+  hx711_dat: 5
+  hx711_clk: 6
+  servo_pwm: 13          # hardware PWM, separate 4xAA pack
+
+retry:
+  max_grip_failures: 3
