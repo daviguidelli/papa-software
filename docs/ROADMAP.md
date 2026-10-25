@@ -14,11 +14,22 @@ What is done, what is next, and what is still undecided.
 - Blue presence detection in HSV for films and stems
 - The whole loop, end to end, with no printer: 34 tests plus a CLI dry run
 
-## Next: export the GUI into the repo
+## Done: the Jog and test page
 
-The prototype has the three tabs and all the interaction worked out. It needs
-to become `apps/static/index.html` and be wired to the endpoints that already
-exist in `apps/server.py`. Nothing in the backend should need to change.
+`apps/static/index.html` is real and wired to the API, verified in a browser
+against the mock. Per-device selection (`PAPA_REAL`) means it can drive a real
+printer from a laptop with everything else mocked.
+
+## Next: validate against the real printer
+
+One line changes: `moonraker_url` in `config/machine.yaml`. Then home, jog 1 mm,
+and check the readout against a ruler. If `/printer/info` answers but moves are
+refused, it is almost always `trusted_clients`.
+
+## Next: the Calibration and Operation tabs
+
+Same page, two more panels. The endpoints already exist; the prototype has the
+interaction worked out.
 
 ## Next: the Pi bench, one device at a time
 

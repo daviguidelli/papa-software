@@ -20,9 +20,38 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = Path(os.environ.get("PAPA_CONFIG_DIR", REPO_ROOT / "config"))
 
 
+DEVICES = ("printer", "loadcell", "gripper", "camera")
+
+
 def sim_mode() -> bool:
-    """True when every hardware driver should be swapped for a mock."""
+    """True when hardware drivers should be swapped for mocks by default."""
     return os.environ.get("PAPA_SIM", "") not in ("", "0", "false", "False")
+
+
+def real_devices() -> set[str]:
+    """Devices forced real even in sim mode, from PAPA_REAL.
+
+    This is what makes laptop validation possible: PAPA_SIM=1 PAPA_REAL=printer
+    talks to a real Moonraker over the network while the load cell, gripper and
+    camera stay mocked, because those live on GPIO pins the laptop does not
+    have.
+    """
+    raw = os.environ.get("PAPA_REAL", "")
+    names = {n.strip().lower() for n in raw.split(",") if n.strip()}
+    unknown = names - set(DEVICES)
+    if unknown:
+        raise ValueError(
+            f"PAPA_REAL names unknown devices: {', '.join(sorted(unknown))}. "
+            f"Valid names: {', '.join(DEVICES)}"
+        )
+    return names
+
+
+def is_real(device: str) -> bool:
+    """Whether this one device should use its real driver."""
+    if device not in DEVICES:
+        raise ValueError(f"unknown device {device!r}; valid: {', '.join(DEVICES)}")
+    return (not sim_mode()) or device in real_devices()
 
 
 def _load(path: Path) -> dict[str, Any]:

@@ -1,17 +1,25 @@
 """Hardware interfaces, with a single place that decides real or mock.
 
-PAPA_SIM=1 swaps every driver. Nothing else in the codebase checks for
-simulation, so the state machine cannot behave differently in a dry run.
+Selection is per device, so the four can be mixed. `PAPA_SIM=1` mocks
+everything; `PAPA_REAL` names the exceptions. The combination that matters
+before anything is wired:
+
+    PAPA_SIM=1 PAPA_REAL=printer python -m apps.server
+
+That drives a real printer over the network from a laptop while the load cell,
+gripper and camera stay mocked, because those three live on GPIO pins a laptop
+does not have. Nothing else in the codebase checks for simulation, so the state
+machine cannot behave differently in a dry run.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from papa.config import Calibration, Machine, sim_mode
+from papa.config import Calibration, Machine, is_real
 
 
 def make_printer(machine: Machine) -> Any:
-    if sim_mode():
+    if not is_real("printer"):
         from papa.sim.mocks import MockMoonraker
 
         return MockMoonraker()
@@ -21,7 +29,7 @@ def make_printer(machine: Machine) -> Any:
 
 
 def make_loadcell(machine: Machine, cal: Calibration, printer: Any) -> Any:
-    if sim_mode():
+    if not is_real("loadcell"):
         from papa.sim.mocks import MockLoadCell
 
         return MockLoadCell(printer=printer)
@@ -38,7 +46,7 @@ def make_loadcell(machine: Machine, cal: Calibration, printer: Any) -> Any:
 
 
 def make_gripper(machine: Machine, cal: Calibration) -> Any:
-    if sim_mode():
+    if not is_real("gripper"):
         from papa.sim.mocks import MockGripper
 
         return MockGripper()
@@ -49,7 +57,7 @@ def make_gripper(machine: Machine, cal: Calibration) -> Any:
 
 
 def make_camera() -> Any:
-    if sim_mode():
+    if not is_real("camera"):
         from papa.sim.mocks import MockCamera
 
         return MockCamera()

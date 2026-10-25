@@ -23,6 +23,25 @@ Two setup details, both outside this repo: Moonraker must list the Pi under
 `trusted_clients`, and a direct Pi-to-mainboard cable has no router, so both
 ends need fixed IPs on the same subnet.
 
+## Drive the printer from a laptop
+
+Before anything is wired to the Pi, point a laptop at the printer and prove the
+link works:
+
+```bash
+# edit config/machine.yaml: moonraker_url -> http://<printer-ip>:7125
+PAPA_SIM=1 PAPA_REAL=printer python -m apps.server   # then open localhost:8080
+```
+
+`PAPA_SIM=1` mocks everything, `PAPA_REAL` names the exceptions. Real printer,
+mocked load cell, gripper and camera — because those three live on GPIO pins a
+laptop does not have. The header says which of the four is real, so a reading
+is never mistaken for hardware.
+
+The page refuses a target outside `limits_mm` before sending it, each held jog
+waits for the previous move to finish, and the log pane shows every request and
+what came back, which is the first place to look when a move does nothing.
+
 ## Run it without a printer
 
 Nothing here needs the machine to develop against. `PAPA_SIM=1` swaps every
@@ -32,7 +51,7 @@ really descends and really stops, and every G-code line is logged.
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-pytest                                  # 34 tests, no hardware
+pytest                                  # 42 tests, no hardware
 PAPA_SIM=1 python -m apps.server        # GUI + API on :8080
 ```
 
@@ -128,5 +147,7 @@ the calibration and jog endpoints refuse.
 ## Status
 
 Toolpath, config, detection, Z calibration, the swab rule and the full loop run
-and are covered by tests in simulation. Hardware drivers are written but
-untested against real hardware. Nothing has run on the printer yet.
+and are covered by 42 tests in simulation. The Jog and test page is built and
+driven in a browser against the mock printer. Calibration and Operation are
+still prototypes. Hardware drivers are written but untested against real
+hardware, and nothing has run on the printer yet.

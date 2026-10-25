@@ -1,14 +1,530 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
-<title>PAPA</title>
-<!--
-  Placeholder. The real page is the prototype built in the design tool
-  (Operation / Calibration / Jog and test as tabs); it gets exported here and
-  wired to the /api endpoints in apps/server.py.
--->
-<body style="margin:0;background:#060E1C;color:#EAF1FB;font-family:system-ui,sans-serif">
-<main style="max-width:720px;margin:0 auto;padding:64px 24px">
-  <h1 style="font-weight:600">PAPA</h1>
-  <p style="color:#9FB1CC">Backend is up. The tabbed GUI is exported into this folder;
-  until then, the API is browsable at <a style="color:#4C9BE8" href="/docs">/docs</a>.</p>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAPA — Jog and test</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ground:#060E1C; --ink:#EAF1FB; --muted:#9FB1CC;
+  --gold:#D9B45A; --blue:#4C9BE8; --green:#4FD08A; --red:#D2382C;
+  --line:rgba(130,170,220,0.20); --panel:rgba(255,255,255,0.03);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:15px;line-height:1.45}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.muted{color:var(--muted)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes line{0%{background-position:-200% 0}100%{background-position:300% 0}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+.bg{position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(900px 520px at 12% -8%,rgba(76,155,232,.24),transparent 62%),
+    radial-gradient(760px 520px at 100% 6%,rgba(217,180,90,.11),transparent 60%),
+    linear-gradient(rgba(130,170,220,.055) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(130,170,220,.055) 1px,transparent 1px);
+  background-size:auto,auto,48px 48px,48px 48px}
+.page{position:relative;z-index:1}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+
+header{background:rgba(6,14,28,.72);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.hrow{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;padding:14px 0}
+.title{font-size:21px;font-weight:600;letter-spacing:-.01em}
+.headline{height:1px;background-image:linear-gradient(90deg,transparent,var(--gold),transparent);
+  background-size:40% 100%;background-repeat:no-repeat;animation:line 6s linear infinite}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:3px;
+  font-size:13px;font-weight:500;border:1px solid var(--line);background:var(--panel)}
+.chip.ok{background:rgba(79,208,138,.10);border-color:rgba(79,208,138,.35);color:#C4F2DA}
+.chip.warn{background:rgba(232,200,115,.12);border-color:#E8C873;color:#F6E2A8}
+.chip.bad{background:rgba(210,56,44,.16);border-color:#FF6B5E;color:#FFD9D5}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 10px var(--green);animation:pulse 2s ease-in-out infinite}
+.dot.bad{background:var(--red);box-shadow:0 0 10px var(--red)}
+.dot.warn{background:var(--gold);box-shadow:0 0 10px var(--gold)}
+
+nav{display:flex;flex-wrap:wrap;gap:8px;padding:18px 0 0}
+.tab{min-height:44px;padding:10px 20px;border-radius:3px;cursor:pointer;
+  font:600 13px/1 'IBM Plex Sans',sans-serif;letter-spacing:.08em;text-transform:uppercase;
+  background:rgba(255,255,255,.02);color:var(--muted);border:1px solid rgba(130,170,220,.25)}
+.tab[aria-selected="true"]{background:rgba(217,180,90,.14);color:#fff;border-color:var(--gold);
+  box-shadow:0 0 22px rgba(217,180,90,.28)}
+.tab:disabled{border-style:dashed;color:#5E718F;cursor:not-allowed}
+
+main{padding:20px 0 64px}
+.grid{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start}
+.card{position:relative;flex:1 1 400px;min-width:0;padding:22px;border-radius:6px;
+  background:linear-gradient(180deg,rgba(20,38,68,.80),rgba(10,22,42,.80));
+  border:1px solid var(--line);box-shadow:0 14px 44px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.05)}
+.card::before,.card::after{content:"";position:absolute;width:16px;height:16px;pointer-events:none}
+.card::before{top:-1px;left:-1px;border-top:2px solid var(--gold);border-left:2px solid var(--gold);border-top-left-radius:6px}
+.card::after{bottom:-1px;right:-1px;border-bottom:2px solid var(--gold);border-right:2px solid var(--gold);border-bottom-right-radius:6px}
+.label{font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+h2{margin:8px 0 6px;font-size:24px;font-weight:600;letter-spacing:-.015em;line-height:1.2}
+.col{display:flex;flex-direction:column;gap:22px;flex:1 1 400px;min-width:0}
+
+.btn{min-height:46px;padding:12px 22px;border-radius:3px;cursor:pointer;
+  font:600 14px/1 'IBM Plex Sans',sans-serif;letter-spacing:.08em;text-transform:uppercase;
+  transition:filter .2s,transform .2s}
+.btn:hover:not(:disabled){filter:brightness(1.15);transform:translateY(-1px)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.primary{border:0;background:var(--gold);color:#07101F;box-shadow:0 0 26px rgba(217,180,90,.38)}
+.ghost{border:1px solid rgba(234,241,251,.55);background:var(--panel);color:var(--ink)}
+.danger{border:0;background:var(--red);color:#fff;box-shadow:0 0 26px rgba(210,56,44,.40)}
+.row{display:flex;flex-wrap:wrap;gap:10px}
+.row>*{flex:1 1 130px}
+
+.readout{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px}
+.axis{flex:1 1 90px;padding:10px 12px;border-radius:4px;border:1px solid var(--line);background:var(--panel)}
+.axis .v{font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:500}
+.axis.stale .v{color:var(--muted)}
+
+.steps{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+.step{min-height:40px;padding:8px 14px;border-radius:3px;cursor:pointer;
+  font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:500;
+  background:var(--panel);color:var(--ink);border:1px solid rgba(130,170,220,.3)}
+.step[aria-pressed="true"]{background:var(--gold);color:#07101F;border-color:var(--gold);
+  box-shadow:0 0 18px rgba(217,180,90,.35)}
+
+.pad{display:grid;grid-template-columns:repeat(3,58px);grid-template-rows:repeat(3,58px);gap:8px}
+.pad button,.zcol button{display:flex;align-items:center;justify-content:center;border-radius:4px;
+  font-family:'IBM Plex Mono',monospace;font-size:17px;cursor:pointer;color:var(--ink);
+  border:1px solid rgba(130,170,220,.35);background:rgba(255,255,255,.04);
+  touch-action:none;user-select:none;transition:filter .15s}
+.pad button:active,.zcol button:active{filter:brightness(1.4)}
+.pad button:disabled{border-style:dashed;opacity:.25;cursor:default}
+.pad .home,.zcol .home{border-color:rgba(217,180,90,.6);background:rgba(217,180,90,.10);font-size:12px;letter-spacing:.06em}
+.zcol{display:flex;flex-direction:column;gap:8px}
+.zcol button{width:58px;height:58px}
+
+.field{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:4px;
+  border:1px solid var(--line);background:var(--panel)}
+.field .n{flex:1 1 0;min-width:0}
+.field input{width:104px;padding:8px 10px;border-radius:3px;text-align:right;
+  font-family:'IBM Plex Mono',monospace;font-size:16px;
+  background:rgba(6,12,24,.6);color:var(--ink);border:1px solid rgba(130,170,220,.35)}
+.field input:focus{outline:2px solid var(--gold);outline-offset:1px}
+.field .u{width:34px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted)}
+
+.force{display:flex;align-items:flex-end;gap:12px}
+.force .v{font-family:'IBM Plex Mono',monospace;font-size:40px;font-weight:500;line-height:1;letter-spacing:-.02em}
+.track{height:8px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden;margin:12px 0 6px}
+.fill{height:100%;background:linear-gradient(90deg,#1F5A91,var(--blue));
+  box-shadow:0 0 14px rgba(76,155,232,.65);transition:width .3s ease;width:0}
+
+.log{height:220px;overflow:auto;padding:12px;border-radius:4px;background:rgba(6,12,24,.7);
+  border:1px solid var(--line);font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.7}
+.log div{white-space:pre-wrap;overflow-wrap:anywhere}
+.log .err{color:#FF9D93}
+.log .tx{color:#CFE4FA}
+.log .ok{color:#C4F2DA}
+
+.banner{padding:12px 14px;border-radius:4px;font-size:13px;margin-bottom:16px;
+  border:1px solid #E8C873;background:rgba(232,200,115,.12);color:#F6E2A8}
+.banner.bad{border-color:#FF6B5E;background:rgba(210,56,44,.14);color:#FFD9D5}
+.banner.hide{display:none}
+.soon{padding:40px 22px;text-align:center;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="bg" aria-hidden="true"></div>
+<div class="page">
+
+<header>
+  <div class="wrap hrow">
+    <div>
+      <div class="title">PAPA</div>
+      <div class="muted" style="font-size:13px">Automated subtractive thin-film patterning</div>
+    </div>
+    <div style="flex:1 1 0"></div>
+    <div class="row" style="flex:0 1 auto" id="chips"></div>
+  </div>
+  <div class="headline" aria-hidden="true"></div>
+</header>
+
+<div class="wrap">
+  <nav role="tablist" aria-label="Modes">
+    <button class="tab" role="tab" id="tab-jog" aria-selected="true" aria-controls="panel-jog">Jog and test</button>
+    <button class="tab" role="tab" id="tab-cal" aria-selected="false" aria-controls="panel-cal" disabled title="Not built yet">Calibration</button>
+    <button class="tab" role="tab" id="tab-op" aria-selected="false" aria-controls="panel-op" disabled title="Not built yet">Operation</button>
+  </nav>
+</div>
+
+<main class="wrap">
+  <div id="banner" class="banner hide" role="status"></div>
+
+  <section id="panel-jog" role="tabpanel" aria-labelledby="tab-jog" class="grid">
+
+    <div class="card">
+      <div class="label">Jog and test · Motion</div>
+      <h2>Gantry</h2>
+      <p class="muted" style="margin:0 0 18px">Every button sends one G-code script and waits for
+      <span class="mono">M400</span>, so the readout is the machine's own position.</p>
+
+      <div class="readout" id="readout">
+        <div class="axis stale"><div class="label" style="font-size:11px">X</div><div class="v" id="px">—</div></div>
+        <div class="axis stale"><div class="label" style="font-size:11px">Y</div><div class="v" id="py">—</div></div>
+        <div class="axis stale"><div class="label" style="font-size:11px">Z</div><div class="v" id="pz">—</div></div>
+      </div>
+
+      <div class="label" style="margin-bottom:8px">Step size</div>
+      <div class="steps" id="steps"></div>
+      <p class="muted" style="margin:-8px 0 18px;font-size:12px">Hold a button to repeat.
+      Each repeat waits for the previous move to finish, so releasing leaves at most one step
+      in flight. Arrow keys jog X and Y, Page Up and Page Down jog Z.</p>
+
+      <div style="display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start">
+        <div>
+          <div class="label" style="margin-bottom:8px">X and Y</div>
+          <div class="pad">
+            <button disabled></button>
+            <button data-jog="0,1,0" aria-label="Y plus">↑</button>
+            <button disabled></button>
+            <button data-jog="-1,0,0" aria-label="X minus">←</button>
+            <button class="home" data-home="X Y" aria-label="Home X and Y">XY</button>
+            <button data-jog="1,0,0" aria-label="X plus">→</button>
+            <button disabled></button>
+            <button data-jog="0,-1,0" aria-label="Y minus">↓</button>
+            <button disabled></button>
+          </div>
+        </div>
+        <div>
+          <div class="label" style="margin-bottom:8px">Z</div>
+          <div class="zcol">
+            <button data-jog="0,0,1" aria-label="Z plus">Z+</button>
+            <button class="home" data-home="Z" aria-label="Home Z">Z0</button>
+            <button data-jog="0,0,-1" aria-label="Z minus">Z−</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:20px">
+        <button class="btn ghost" data-home="">Home all</button>
+        <button class="btn ghost" id="refresh">Refresh</button>
+        <button class="btn danger" id="estop">Emergency stop</button>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <div class="label">Jog and test · Go to</div>
+        <h2>Absolute move</h2>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+          <div class="field"><div class="n">X</div><input id="gx" type="number" step="0.1" value="150"><div class="u">mm</div></div>
+          <div class="field"><div class="n">Y</div><input id="gy" type="number" step="0.1" value="150"><div class="u">mm</div></div>
+          <div class="field"><div class="n">Z</div><input id="gz" type="number" step="0.1" value="30"><div class="u">mm</div></div>
+          <div class="field"><div class="n">Speed</div><input id="gf" type="number" step="5" value="60"><div class="u">mm/s</div></div>
+        </div>
+        <button class="btn primary" id="goto" style="width:100%">Move there</button>
+      </div>
+
+      <div class="card">
+        <div class="label">Jog and test · Gripper and load cell</div>
+        <h2>Toolhead</h2>
+        <div class="row" style="margin-bottom:16px">
+          <button class="btn ghost" data-grip="open">Open</button>
+          <button class="btn ghost" data-grip="close">Close</button>
+        </div>
+        <div class="force">
+          <div class="v" id="force">—</div>
+          <div class="muted mono" style="font-size:15px;padding-bottom:4px">g</div>
+          <div style="flex:1 1 0"></div>
+          <span class="chip" id="forceChip">No load</span>
+        </div>
+        <div class="track"><div class="fill" id="forceBar"></div></div>
+        <div class="muted" style="font-size:12px;margin-bottom:14px" id="forceScale">—</div>
+        <div class="row">
+          <button class="btn ghost" id="tare">Tare</button>
+          <button class="btn ghost" id="poll">Watch force</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="label">Jog and test · Traffic</div>
+        <h2>Log</h2>
+        <p class="muted" style="margin:0 0 12px">Every request and what came back. The first place to look when a move does nothing.</p>
+        <div class="log" id="log" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="panel-cal" role="tabpanel" aria-labelledby="tab-cal" hidden>
+    <div class="card soon">Calibration is still a prototype. Jog and test comes first because it is what proves the link.</div>
+  </section>
+  <section id="panel-op" role="tabpanel" aria-labelledby="tab-op" hidden>
+    <div class="card soon">Operation is still a prototype.</div>
+  </section>
 </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const STEPS = [0.05, 0.1, 1, 10, 50];
+let step = 1;
+let pos = null;
+let watching = false;
+let abortForce = 20;  // replaced from /api/devices
+
+// ---------- log ----------
+function log(text, cls) {
+  const el = $('log');
+  const line = document.createElement('div');
+  line.className = cls || '';
+  const t = new Date().toTimeString().slice(0, 8);
+  line.textContent = `${t}  ${text}`;
+  el.appendChild(line);
+  while (el.childElementCount > 300) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
+
+function banner(text, bad) {
+  const el = $('banner');
+  el.textContent = text || '';
+  el.className = 'banner' + (text ? (bad ? ' bad' : '') : ' hide');
+}
+
+// ---------- api ----------
+async function api(path, opts) {
+  const o = Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {});
+  if (o.body && typeof o.body !== 'string') o.body = JSON.stringify(o.body);
+  log(`${(o.method || 'GET')} ${path}`, 'tx');
+  let r;
+  try {
+    r = await fetch(path, o);
+  } catch (err) {
+    log(`network error: ${err.message}`, 'err');
+    banner(`Cannot reach the server at ${location.host}. Is it running?`, true);
+    throw err;
+  }
+  let body = null;
+  try { body = await r.json(); } catch (_) { body = null; }
+  if (!r.ok) {
+    const raw = (body && (body.error || body.detail)) || r.statusText;
+    const msg = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    log(`${r.status}  ${msg}`, 'err');
+    banner(`${msg} (${r.status})`, true);
+    throw new Error(msg);
+  }
+  return body;
+}
+
+// ---------- position ----------
+function showPos(p) {
+  pos = p;
+  $('px').textContent = p.x.toFixed(2);
+  $('py').textContent = p.y.toFixed(2);
+  $('pz').textContent = p.z.toFixed(2);
+  document.querySelectorAll('.axis').forEach((a) => a.classList.remove('stale'));
+  if (!p.is_homed) {
+    banner(`Not homed (${p.homed || 'no axes'}). Home before trusting any coordinate.`);
+  } else if ($('banner').textContent.startsWith('Not homed')) {
+    banner('');
+  }
+}
+
+async function readPos() {
+  try { showPos(await api('/api/machine/position')); } catch (_) {}
+}
+
+// ---------- devices ----------
+async function readDevices() {
+  let d;
+  try { d = await api('/api/devices'); } catch (_) { return; }
+  if (d.zcal) {
+    abortForce = d.zcal.abort_force_g;
+    $('forceScale').textContent =
+      `Target ${d.zcal.target_force_g.toFixed(1)} g · abort ${abortForce.toFixed(0)} g · `
+      + `probe step ${d.zcal.step_mm.toFixed(2)} mm at ${d.speeds.z_approach.toFixed(1)} mm/s`;
+  }
+  const chips = $('chips');
+  chips.innerHTML = '';
+  const printer = d.devices.printer;
+  const add = (text, cls, dotCls) => {
+    const s = document.createElement('span');
+    s.className = 'chip ' + (cls || '');
+    if (dotCls !== null) {
+      const dot = document.createElement('span');
+      dot.className = 'dot ' + (dotCls || '');
+      dot.setAttribute('aria-hidden', 'true');
+      s.appendChild(dot);
+    }
+    s.appendChild(document.createTextNode(text));
+    chips.appendChild(s);
+  };
+  if (printer.reachable) {
+    add(printer.real ? `Printer ${d.moonraker_url}` : 'Mock printer',
+        printer.real ? 'ok' : 'warn', printer.real ? '' : 'warn');
+  } else {
+    add(`Unreachable: ${d.moonraker_url}`, 'bad', 'bad');
+    banner(`Moonraker did not answer at ${d.moonraker_url}. Check the IP, that the printer is on, `
+         + 'and that the Pi or laptop address is in Moonraker trusted_clients.', true);
+  }
+  ['loadcell', 'gripper', 'camera'].forEach((name) => {
+    const dev = d.devices[name];
+    if (dev.error) add(`${name} failed`, 'bad', 'bad');
+    else if (!dev.real) add(`${name} mocked`, 'warn', 'warn');
+    else add(name, 'ok', '');
+  });
+}
+
+// ---------- jog, held or clicked ----------
+let holdTimer = null;
+// Coarse steps do not accelerate. Each repeat waits for the move to finish, so
+// releasing still leaves one step of travel in flight: at 50 mm that is 50 mm
+// of overshoot, and nobody wants that arriving faster than they can let go.
+function holdStart(fn) {
+  holdStop();
+  let n = 0;
+  const coarse = step >= 10;
+  const tick = () => {
+    fn();
+    n += 1;
+    holdTimer = setTimeout(tick, coarse ? 600 : n < 6 ? 150 : n < 18 ? 90 : 60);
+  };
+  holdTimer = setTimeout(tick, coarse ? 700 : 400);
+}
+function holdStop() {
+  if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+}
+
+// One move at a time: a held button must not queue fifty requests.
+let inflight = false;
+async function jog(dx, dy, dz) {
+  if (inflight) return;
+  inflight = true;
+  try {
+    showPos(await api('/api/machine/jog', {
+      method: 'POST',
+      body: { dx: dx * step, dy: dy * step, dz: dz * step },
+    }));
+  } catch (_) {
+    holdStop();
+  } finally {
+    inflight = false;
+  }
+}
+
+function wireHold(el, fn) {
+  el.addEventListener('click', fn);
+  el.addEventListener('pointerdown', (e) => { e.preventDefault(); holdStart(fn); });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) =>
+    el.addEventListener(ev, holdStop));
+}
+
+// ---------- force ----------
+async function readForce() {
+  let d;
+  try { d = await api('/api/loadcell'); } catch (_) { watching = false; $('poll').textContent = 'Watch force'; return; }
+  const g = d.grams;
+  $('force').textContent = g.toFixed(2);
+  const pct = Math.max(0, Math.min(100, (g / abortForce) * 100));
+  $('forceBar').style.width = pct + '%';
+  const chip = $('forceChip');
+  chip.textContent = g >= abortForce ? 'Abort force' : g > 0.2 ? 'Contact' : 'No load';
+  chip.className = 'chip ' + (g >= abortForce ? 'bad' : g > 0.2 ? 'ok' : '');
+}
+
+// ---------- wiring ----------
+function build() {
+  const box = $('steps');
+  STEPS.forEach((v) => {
+    const b = document.createElement('button');
+    b.className = 'step';
+    b.textContent = v < 1 ? v.toFixed(2) + ' mm' : v + ' mm';
+    b.setAttribute('aria-pressed', String(v === step));
+    b.onclick = () => {
+      step = v;
+      box.querySelectorAll('.step').forEach((o) => o.setAttribute('aria-pressed', 'false'));
+      b.setAttribute('aria-pressed', 'true');
+    };
+    box.appendChild(b);
+  });
+
+  document.querySelectorAll('[data-jog]').forEach((el) => {
+    const [dx, dy, dz] = el.dataset.jog.split(',').map(Number);
+    wireHold(el, () => jog(dx, dy, dz));
+  });
+
+  document.querySelectorAll('[data-home]').forEach((el) => {
+    el.onclick = async () => {
+      try {
+        showPos(await api('/api/machine/home', { method: 'POST', body: { axes: el.dataset.home } }));
+        log('homed ' + (el.dataset.home || 'all'), 'ok');
+      } catch (_) {}
+    };
+  });
+
+  document.querySelectorAll('[data-grip]').forEach((el) => {
+    el.onclick = async () => {
+      try {
+        const d = await api('/api/gripper/' + el.dataset.grip, { method: 'POST' });
+        log('gripper ' + d.state, 'ok');
+      } catch (_) {}
+    };
+  });
+
+  $('goto').onclick = async () => {
+    try {
+      showPos(await api('/api/machine/move', {
+        method: 'POST',
+        body: {
+          x: parseFloat($('gx').value), y: parseFloat($('gy').value),
+          z: parseFloat($('gz').value), speed_mm_s: parseFloat($('gf').value),
+        },
+      }));
+    } catch (_) {}
+  };
+
+  $('estop').onclick = async () => {
+    try {
+      await api('/api/machine/estop', { method: 'POST' });
+      banner('Emergency stop sent. Klipper is shut down: it needs a firmware restart and a re-home.', true);
+      log('EMERGENCY STOP', 'err');
+    } catch (_) {}
+  };
+
+  $('refresh').onclick = () => { readPos(); readDevices(); };
+  $('tare').onclick = async () => {
+    try { log('tare -> ' + JSON.stringify(await api('/api/loadcell/tare', { method: 'POST' })), 'ok'); }
+    catch (_) {}
+  };
+  $('poll').onclick = () => {
+    watching = !watching;
+    $('poll').textContent = watching ? 'Stop watching' : 'Watch force';
+    if (watching) pollForce();
+  };
+
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.onclick = () => {
+      document.querySelectorAll('.tab').forEach((o) => {
+        o.setAttribute('aria-selected', String(o === t));
+        $(o.getAttribute('aria-controls')).hidden = o !== t;
+      });
+    };
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    const map = { ArrowLeft: [-1, 0, 0], ArrowRight: [1, 0, 0], ArrowUp: [0, 1, 0], ArrowDown: [0, -1, 0] };
+    if (map[e.key]) { e.preventDefault(); jog(...map[e.key]); }
+    if (e.key === 'PageUp') { e.preventDefault(); jog(0, 0, 1); }
+    if (e.key === 'PageDown') { e.preventDefault(); jog(0, 0, -1); }
+  });
+}
+
+async function pollForce() {
+  while (watching) {
+    await readForce();
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
+build();
+readDevices().then(readPos).then(readForce);
+log('ready', 'ok');
+</script>
+</body>
+</html>

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -27,22 +27,80 @@ STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="PAPA")
 
 
+class Device:
+    """One lazily constructed device.
+
+    Lazy on purpose: a laptop has no HX711, and building every driver at
+    startup would mean a missing load cell stops you jogging the gantry. Each
+    device is built on first use and a failure is remembered, so the endpoints
+    that need it return 503 with the reason while everything else keeps working.
+    """
+
+    def __init__(self, name: str, factory: Callable[[], Any]) -> None:
+        self.name = name
+        self._factory = factory
+        self._obj: Any = None
+        self.error: str | None = None
+
+    @property
+    def built(self) -> bool:
+        return self._obj is not None
+
+    def get(self) -> Any:
+        if self._obj is None and self.error is None:
+            try:
+                self._obj = self._factory()
+            except Exception as exc:                     # noqa: BLE001
+                self.error = f"{type(exc).__name__}: {exc}"
+        if self.error is not None:
+            raise HTTPException(503, f"{self.name} is unavailable ({self.error})")
+        return self._obj
+
+    def describe(self) -> dict:
+        return {
+            "real": cfgmod.is_real(self.name),
+            "built": self.built,
+            "error": self.error,
+        }
+
+
 class Hub:
     """Owns the hardware handles and the one running job."""
 
     def __init__(self) -> None:
         self.machine = cfgmod.load_machine()
         self.cal = cfgmod.load_calibration()
-        self.printer = make_printer(self.machine)
-        self.loadcell = make_loadcell(self.machine, self.cal, self.printer)
-        self.gripper = make_gripper(self.machine, self.cal)
-        self.camera = make_camera()
+        self.devices = {
+            "printer": Device("printer", lambda: make_printer(self.machine)),
+            "loadcell": Device(
+                "loadcell",
+                lambda: make_loadcell(self.machine, self.cal, self.printer),
+            ),
+            "gripper": Device("gripper", lambda: make_gripper(self.machine, self.cal)),
+            "camera": Device("camera", make_camera),
+        }
         self.orch: Orchestrator | None = None
         self.thread: threading.Thread | None = None
         self.status = Status()
         self.strokes: list[Any] = []
         self.dxf_name = ""
         self.lock = threading.Lock()
+
+    @property
+    def printer(self) -> Any:
+        return self.devices["printer"].get()
+
+    @property
+    def loadcell(self) -> Any:
+        return self.devices["loadcell"].get()
+
+    @property
+    def gripper(self) -> Any:
+        return self.devices["gripper"].get()
+
+    @property
+    def camera(self) -> Any:
+        return self.devices["camera"].get()
 
     @property
     def busy(self) -> bool:
@@ -64,6 +122,29 @@ hub = Hub()
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/api/devices")
+def devices() -> dict:
+    """What this process is actually talking to, and whether it answers.
+
+    The page shows this, so there is never any doubt about whether a reading
+    came from hardware or from a mock.
+    """
+    reachable, url, detail = False, "", None
+    try:
+        reachable = hub.printer.ping()          # builds it, so describe() comes after
+        url = getattr(hub.printer, "base_url", "")
+    except HTTPException as exc:
+        detail = str(exc.detail)
+    out = {name: d.describe() for name, d in hub.devices.items()}
+    out["printer"].update(reachable=reachable, url=url)
+    if detail:
+        out["printer"]["detail"] = detail
+    return {"sim": cfgmod.sim_mode(), "devices": out,
+            "moonraker_url": hub.machine.moonraker_url,
+            "zcal": hub.machine.zcal, "speeds": hub.machine.speeds,
+            "limits": hub.machine.limits}
 
 
 # ---------- operation ----------
