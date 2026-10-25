@@ -42,7 +42,7 @@ The page refuses a target outside `limits_mm` before sending it, each held jog
 waits for the previous move to finish, and the log pane shows every request and
 what came back, which is the first place to look when a move does nothing.
 
-New here? Read `docs/GETTING-STARTED.md`. Line width (kerf) and other numbers that must be measured: `docs/EXPERIMENTS.md`.
+New here? Read `docs/GETTING-STARTED.md`; the step-by-step hardware checkout is `docs/VALIDATION.md` (bench scripts in `scripts/bench/`). Line width (kerf) and other numbers that must be measured: `docs/EXPERIMENTS.md`.
 
 ## Run it without a printer
 

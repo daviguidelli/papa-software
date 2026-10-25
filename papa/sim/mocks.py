@@ -64,6 +64,8 @@ class MockMoonraker:
                         ty = self.y + v if relative else v
                     elif tok[0] == "Z":
                         tz = self.z + v if relative else v
+                if not (-0.001 <= tx <= 350 and -0.001 <= ty <= 350 and -0.001 <= tz <= 340):
+                    raise RuntimeError(f"Move out of range: {tx:.3f} {ty:.3f} {tz:.3f}")
                 dist = ((tx - self.x) ** 2 + (ty - self.y) ** 2 + (tz - self.z) ** 2) ** 0.5
                 self.x, self.y, self.z = tx, ty, tz
                 if self.speed_factor > 0:
