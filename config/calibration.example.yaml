@@ -37,6 +37,15 @@ slide_surface_offset_mm: 0.0
 
 gripper: {open_us: 1000, closed_us: 2000}
 
+# Width of film a swab actually removes at the working force. NOT derivable:
+# it depends on swab, force, speed and film, so it must be measured before any
+# pattern with closely spaced lines can be trusted. See docs/EXPERIMENTS.md.
+# null means "not measured", and the GUI says so rather than guessing.
+scribe:
+  kerf_mm: null
+  measured_at_force_g: null
+  measured_at_speed_mm_s: null
+
 detection:
   camera_to_machine:
     points_px: []   # four clicked image points

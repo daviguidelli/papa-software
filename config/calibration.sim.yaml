@@ -272,6 +272,11 @@ slide_surface_offset_mm: 0.4
 gripper:
   open_us: 1000
   closed_us: 2000
+
+scribe:
+  kerf_mm: null
+  measured_at_force_g: null
+  measured_at_speed_mm_s: null
 detection:
   camera_to_machine:
     points_px:

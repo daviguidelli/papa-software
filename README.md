@@ -42,6 +42,8 @@ The page refuses a target outside `limits_mm` before sending it, each held jog
 waits for the previous move to finish, and the log pane shows every request and
 what came back, which is the first place to look when a move does nothing.
 
+New here? Read `docs/GETTING-STARTED.md`. Line width (kerf) and other numbers that must be measured: `docs/EXPERIMENTS.md`.
+
 ## Run it without a printer
 
 Nothing here needs the machine to develop against. `PAPA_SIM=1` swaps every

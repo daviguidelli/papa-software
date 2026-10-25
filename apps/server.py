@@ -21,7 +21,7 @@ from papa.ops.jobs import STATE_DIR, Job
 from papa.ops.machine import Orchestrator, Status
 from papa.ops.swabs import Rack
 from papa.toolpath import blocks as blockmod
-from papa.toolpath import dxf_loader, fit
+from papa.toolpath import dxf_loader, fit, spacing as spacingmod
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="PAPA")
@@ -171,6 +171,7 @@ async def upload_pattern(file: UploadFile) -> dict:
         "fitted_size_mm": result.fitted_size,
         "area_mm": [w, h],
         "svg": fit.to_svg(result.strokes, w, h),
+        "spacing": spacingmod.report(result.strokes, hub.cal.kerf_mm),
     }
 
 

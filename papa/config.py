@@ -201,6 +201,16 @@ class Calibration:
         return {k: int(v) for k, v in self.raw["gripper"].items()}
 
     @property
+    def kerf_mm(self) -> float | None:
+        """Measured line width, or None when nobody has measured it yet.
+
+        None is a real answer and is shown as one: a guessed kerf silently
+        turns "these two lines will merge" into "these two lines are fine".
+        """
+        v = self.raw.get("scribe", {}).get("kerf_mm")
+        return float(v) if v else None
+
+    @property
     def detection(self) -> dict[str, Any]:
         return dict(self.raw.get("detection", {}))
 

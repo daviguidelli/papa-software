@@ -23,6 +23,7 @@ from papa.ops.machine import Orchestrator, Status  # noqa: E402
 from papa.ops.swabs import Rack              # noqa: E402
 from papa.toolpath import blocks as blockmod  # noqa: E402
 from papa.toolpath import dxf_loader, fit     # noqa: E402
+from papa.toolpath import spacing as spacingmod  # noqa: E402
 
 
 def _ids(text: str) -> list[int]:
@@ -75,6 +76,17 @@ def cmd_preview(args: argparse.Namespace) -> int:
     print(f"{args.dxf}: {len(strokes)} strokes, {len(bl)} blocks")
     print(f"pattern square {w} x {h} mm, total path "
           f"{sum(s.length for s in strokes):.1f} mm")
+    rep = spacingmod.report(strokes, cal.kerf_mm)
+    if rep["min_distance_mm"] is None:
+        print("spacing: a single path, nothing to merge with")
+    else:
+        print(f"closest approach {rep['min_distance_mm']:.3f} mm "
+              f"at {rep['at_mm'][0]:.2f}, {rep['at_mm'][1]:.2f}")
+    if rep.get("warning"):
+        print(f"  ! {rep['warning']}")
+    elif rep.get("margin_mm") is not None:
+        print(f"  {rep['margin_mm']:.3f} mm of film left between the closest cuts")
+
     out = Path(args.out or STATE_DIR / "preview.svg")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(fit.to_svg(strokes, w, h))
