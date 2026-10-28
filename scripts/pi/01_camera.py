@@ -31,12 +31,17 @@ def main() -> int:
 
     cam = Picamera2()
     if args.preview:
+        import os
         from picamera2 import Preview
         cam.configure(cam.create_preview_configuration())
-        cam.start_preview(Preview.QTGL)
+        cam.start_preview(Preview.QTGL if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") else Preview.DRM)
         cam.start()
-        print("preview running for 15 s")
-        time.sleep(15)
+        print("live preview on the Pi's screen. Ctrl+C to stop.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
         cam.stop()
         return 0
 
