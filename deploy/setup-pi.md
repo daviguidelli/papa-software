@@ -66,11 +66,11 @@ current.
 ## 5. Install
 
 ```bash
-sudo apt install -y python3-venv python3-picamera2 python3-lgpio
+sudo apt install -y python3-venv python3-picamera2 python3-lgpio python3-numpy python3-opencv
 git clone https://github.com/daviguidelli/papa-software
 cd papa-software
 python3 -m venv .venv --system-site-packages   # picamera2 comes from apt
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-pi-venv.txt
 .venv/bin/python -m pytest -q                  # should pass with PAPA_SIM=1
 ```
 

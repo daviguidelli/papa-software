@@ -1,0 +1,12 @@
+# Pi: numpy and OpenCV come from apt (python3-numpy python3-opencv) so they match picamera2.
+# A pip numpy 2.x inside the venv shadows apt's and can break picamera2.
+# core (laptop + Pi)
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+PyYAML==6.0.2
+ezdxf==1.3.5
+httpx==0.28.1
+websockets==14.1
+python-multipart==0.0.20
+# Pi only - install with: pip install -r requirements-pi.txt

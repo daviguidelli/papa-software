@@ -24,8 +24,12 @@ class PiCamera:
         self._cam.start()
 
     def frame(self) -> np.ndarray:
-        """One RGB frame as HxWx3 uint8."""
-        return self._cam.capture_array("main")
+        """One RGB frame as HxWx3 uint8.
+
+        Picamera2's "RGB888" is laid out B,G,R in memory (OpenCV order), so it
+        is flipped here. Skipping this swaps red and blue and breaks detection.
+        """
+        return np.ascontiguousarray(self._cam.capture_array("main")[:, :, ::-1])
 
     def close(self) -> None:
         self._cam.stop()
