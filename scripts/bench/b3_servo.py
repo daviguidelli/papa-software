@@ -28,7 +28,7 @@ def run() -> int:
     g = make_gripper(m, cal)
 
     if args.find:
-        print("  type a pulse width in microseconds (500-2500), or q. Start near 1500;")
+        print("  type a pulse width in microseconds (600-2400), or q. Start near 1500;")
         print("  change by 50 us. Stop the moment it hums or binds.")
         while True:
             s = input("  us> ").strip()

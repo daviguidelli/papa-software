@@ -10,6 +10,7 @@ import time
 from typing import Protocol
 
 PERIOD_US = 20_000  # 50 Hz
+MIN_US, MAX_US = 600, 2400  # goBILDA Proton servo spec
 
 
 class Gripper(Protocol):
@@ -32,7 +33,7 @@ class ServoGripper:
         self._state = "unknown"
 
     def _pulse(self, width_us: int) -> None:
-        width_us = max(400, min(2600, int(width_us)))
+        width_us = max(MIN_US, min(MAX_US, int(width_us)))
         duty = 100.0 * width_us / PERIOD_US
         self._lg.tx_pwm(self._h, self.pin, 50, duty)
         time.sleep(self.settle_s)
