@@ -90,7 +90,7 @@ share a ground.
 
 ---
 
-## Stage 4 — Camera (Pi + Camera Module 3 mounted)
+## Stage 4 — Camera (Pi + HQ Camera mounted)
 
 `python -m scripts.bench.b4_camera [--sample x,y]`
 
@@ -102,6 +102,8 @@ Saves a frame and a blue mask to `var/bench/`. Copy them to the laptop with
 - frame-to-frame difference under 2, so lighting is stable
 - the 2.54 mm swab stem spans at least ~10 px
 - `--sample` on a real film and a real stem gives hue bands that separate them
+
+The HQ Camera has no autofocus: set focus on the lens ring with a slide in place, then lock the thumbscrew. Lens choice (6 mm or 16 mm) and mounting height set the field of view, so work out pixels-per-mm before fixing the mount.
 
 Fix focus first, then white balance, then exposure; lock all three. Detection
 thresholds only mean something under those exact settings.

@@ -1,4 +1,4 @@
-"""Pi Camera Module 3 capture.
+"""Raspberry Pi HQ Camera (IMX477) capture. Focus is a manual ring on the lens; there is no autofocus.
 
 Detection runs on still frames, not video: a still at scan time and another
 just before each slide starts is all the state machine needs.

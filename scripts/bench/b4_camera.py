@@ -1,4 +1,4 @@
-"""Camera. Needs: Pi + Camera Module 3 mounted over the bed.
+"""Camera. Needs: Pi + HQ Camera (IMX477, manual-focus C/CS lens) mounted over the bed.
 
   python -m scripts.bench.b4_camera                  # stills, sharpness, stability
   python -m scripts.bench.b4_camera --sample 960,540 # HSV band from a pixel
