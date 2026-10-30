@@ -1,48 +1,55 @@
 import cv2
 import numpy as np
+import subprocess
+from pathlib import Path
 
-# Load your photograph
-image = cv2.imread("electrode.jpg")
+# Save photos next to this script, regardless of where it is launched.
+folder = Path(__file__).resolve().parent
+original = folder / 'electrode.jpg'
+processed = folder / 'red_detected.jpg'
 
+print('Starting Raspberry Pi HQ Camera...')
+try:
+    subprocess.run([
+        'rpicam-still', '-t', '5000',
+        '--width', '4056', '--height', '3040',
+        '-o', str(original)
+    ], check=True)
+except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+    raise SystemExit(f'Camera capture failed: {exc}')
+
+image = cv2.imread(str(original))
 if image is None:
-    raise FileNotFoundError("Could not find electrode.jpg")
+    raise SystemExit(f'Could not read captured photo: {original}')
 
-# Convert from BGR to HSV color space
 hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-# Red wraps around both ends of the HSV hue range
 lower_red1 = np.array([0, 100, 80])
 upper_red1 = np.array([10, 255, 255])
-
 lower_red2 = np.array([170, 100, 80])
 upper_red2 = np.array([179, 255, 255])
-
-# Find pixels that are red
 mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
 mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-
-mask = mask1 | mask2
-
-# Remove small specks of noise
+mask = cv2.bitwise_or(mask1, mask2)
 kernel = np.ones((5, 5), np.uint8)
 mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-# Find outlines of red regions
-contours, _ = cv2.findContours(
-    mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-)
-
-# Draw a circle around each sufficiently large red region
+count = 0
 for contour in contours:
     if cv2.contourArea(contour) > 100:
         (x, y), radius = cv2.minEnclosingCircle(contour)
-
         center = (int(x), int(y))
-        radius = int(radius)
+        cv2.circle(image, center, int(radius), (0, 255, 0), 4)
+        count += 1
+        print(f'Red region {count}: center = {center}, radius = {radius:.1f} pixels')
 
-        cv2.circle(image, center, radius, (0, 255, 0), 4)
+if not cv2.imwrite(str(processed), image):
+    raise SystemExit('Could not save processed photo')
+print(f'Done! Detected {count} red region(s).')
+print(f'Original: {original}')
+print(f'Processed: {processed}')
 
-# Save the result
-cv2.imwrite("red_detected.jpg", image)
-
-print("Done! Saved red_detected.jpg")
+try:
+    subprocess.Popen(['xdg-open', str(processed)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+except FileNotFoundError:
+    print('Image viewer unavailable; open the processed file manually.')
