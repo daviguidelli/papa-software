@@ -1,23 +1,39 @@
 from picamera2 import Picamera2
+import cv2
 
 picam2 = Picamera2()
 
-# Full-field, binned mode (fast, good for vision). Use (4056, 3040) for full resolution.
-config = picam2.create_preview_configuration(
-    main={"size": (2028, 1520), "format": "RGB888"},
-    raw={"size": (2028, 1520)}
+SENSOR_W, SENSOR_H = 4056, 3040
+
+# 1. Sensor mode: full sensor (raw stream decides this)
+# 3. Output size: keep it 4:3 so nothing gets trimmed to fit
+config = picam2.create_still_configuration(
+    main={"size": (SENSOR_W, SENSOR_H), "format": "RGB888"},
+    raw={"size": (SENSOR_W, SENSOR_H)}
 )
 picam2.configure(config)
 
-# Force the crop to the whole sensor
-full = picam2.camera_properties["ScalerCropMaximum"]
-picam2.set_controls({"ScalerCrop": full})
+# 2. Digital crop: force the whole sensor
+full_crop = picam2.camera_properties["ScalerCropMaximum"]
+picam2.set_controls({"ScalerCrop": full_crop})
 
 picam2.start()
-
-# Verify
+picam2.capture_metadata()          # let settings take effect
 md = picam2.capture_metadata()
-print("ScalerCrop in use:", md["ScalerCrop"])   # should be close to (0, 0, 4056, 3040)
-print("Sensor mode:", picam2.camera_configuration()["raw"]["size"])
 
-frame = picam2.capture_array()   # numpy array, ready for OpenCV / AprilTag detection
+# ---- Checks ----
+raw_size = picam2.camera_configuration()["raw"]["size"]
+crop = md["ScalerCrop"]
+frame = picam2.capture_array()
+
+print("Raw sensor mode:", raw_size)
+print("ScalerCrop:     ", crop)
+print("Frame shape:    ", frame.shape)
+
+assert tuple(raw_size) == (SENSOR_W, SENSOR_H), "Sensor mode is cropped/binned"
+assert crop[2] >= SENSOR_W - 16 and crop[3] >= SENSOR_H - 16, "ScalerCrop is cropping"
+assert frame.shape[1] / frame.shape[0] == 4 / 3, "Output aspect isn't 4:3"
+print("✅ Full sensor, uncropped")
+
+cv2.imwrite("full_field.png", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+picam2.stop()
