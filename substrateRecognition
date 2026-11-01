@@ -6,23 +6,30 @@ import json
 from pathlib import Path
 
 # ==========================================
-# PAPA CAMERA - AUTOMATIC SUBSTRATE DETECTION
+# PAPA CAMERA - SUBSTRATE DETECTION
 # ==========================================
 
-# SETTINGS
 BASE_DIR = Path(__file__).resolve().parent
 SCANS_DIR = BASE_DIR / "scans"
 
 PHOTO_WIDTH = 4056
 PHOTO_HEIGHT = 3040
-PREVIEW_TIME = 5000  # milliseconds
+PREVIEW_TIME = 5000
 
 MIN_RED_AREA = 100
-MAX_PAIR_DISTANCE = 1200  # pixels; adjust for your layout
+MAX_PAIR_DISTANCE = 1200
+
+# Substrate centers within this vertical distance
+# are considered part of the same row.
+ROW_TOLERANCE = 150
+
+# Size of black S1, S2, S3 labels
+LABEL_SCALE = 2.0
+LABEL_THICKNESS = 5
 
 
 # ==========================================
-# 1. CREATE A NEW SCAN FOLDER
+# 1. CREATE SCAN FOLDER
 # ==========================================
 
 def create_scan_folder():
@@ -31,41 +38,41 @@ def create_scan_folder():
     existing_ids = []
 
     for folder in SCANS_DIR.glob("scan_*"):
-        try:
-            existing_ids.append(int(folder.name.split("_")[-1]))
-        except ValueError:
-            continue
+        if folder.is_dir():
+            try:
+                existing_ids.append(
+                    int(folder.name.split("_")[-1])
+                )
+            except ValueError:
+                continue
 
     next_id = max(existing_ids, default=0) + 1
 
     scan_folder = SCANS_DIR / f"scan_{next_id:04d}"
     scan_folder.mkdir()
 
-    print(f"Created {scan_folder}")
-
     return scan_folder, next_id
 
 
 # ==========================================
-# 2. ACTIVATE CAMERA AND TAKE PHOTO
+# 2. CAPTURE PHOTO
 # ==========================================
 
 def capture_photo(scan_folder):
     photo_path = scan_folder / "original.jpg"
 
-    print("Starting Raspberry Pi HQ Camera...")
+    print("Taking photograph...")
 
-    command = [
-        "rpicam-still",
-        "-t", str(PREVIEW_TIME),
-        "--width", str(PHOTO_WIDTH),
-        "--height", str(PHOTO_HEIGHT),
-        "-o", str(photo_path)
-    ]
-
-    subprocess.run(command, check=True)
-
-    print("Photo captured!")
+    subprocess.run(
+        [
+            "rpicam-still",
+            "-t", str(PREVIEW_TIME),
+            "--width", str(PHOTO_WIDTH),
+            "--height", str(PHOTO_HEIGHT),
+            "-o", str(photo_path)
+        ],
+        check=True
+    )
 
     return photo_path
 
@@ -75,7 +82,10 @@ def capture_photo(scan_folder):
 # ==========================================
 
 def detect_red_markers(image):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2HSV
+    )
 
     lower_red1 = np.array([0, 100, 80])
     upper_red1 = np.array([10, 255, 255])
@@ -84,17 +94,24 @@ def detect_red_markers(image):
     upper_red2 = np.array([179, 255, 255])
 
     mask1 = cv2.inRange(
-        hsv, lower_red1, upper_red1
+        hsv,
+        lower_red1,
+        upper_red1
     )
 
     mask2 = cv2.inRange(
-        hsv, lower_red2, upper_red2
+        hsv,
+        lower_red2,
+        upper_red2
     )
 
     mask = cv2.bitwise_or(mask1, mask2)
 
-    # Remove tiny red noise
-    small_kernel = np.ones((5, 5), np.uint8)
+    # Remove tiny isolated red pixels
+    small_kernel = np.ones(
+        (5, 5),
+        np.uint8
+    )
 
     mask = cv2.morphologyEx(
         mask,
@@ -102,7 +119,7 @@ def detect_red_markers(image):
         small_kernel
     )
 
-    # Connect nearby red regions into one marker
+    # Combine nearby parts of one red marker
     large_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
         (31, 31)
@@ -114,7 +131,6 @@ def detect_red_markers(image):
         large_kernel
     )
 
-    # Find contours of red regions
     contours, _ = cv2.findContours(
         mask,
         cv2.RETR_EXTERNAL,
@@ -124,9 +140,7 @@ def detect_red_markers(image):
     markers = []
 
     for contour in contours:
-        area = cv2.contourArea(contour)
-
-        if area < MIN_RED_AREA:
+        if cv2.contourArea(contour) < MIN_RED_AREA:
             continue
 
         (x, y), radius = cv2.minEnclosingCircle(
@@ -139,30 +153,16 @@ def detect_red_markers(image):
             "radius": round(float(radius), 2)
         })
 
-    markers.sort(key=lambda m: (m["y"], m["x"]))
-
     print(f"Detected {len(markers)} red markers")
 
     return markers
 
 
 # ==========================================
-# 4. PAIR DIAGONAL DOTS INTO SUBSTRATES
+# 4. PAIR RED MARKERS
 # ==========================================
 
 def pair_markers(markers):
-    """
-    Greedy nearest-neighbor pairing.
-
-    Each pair of red dots is treated as
-    one candidate substrate.
-
-    IMPORTANT:
-    This is an initial pairing method.
-    Verify pairs visually before using
-    coordinates to control the printer.
-    """
-
     remaining = list(range(len(markers)))
     substrates = []
 
@@ -170,28 +170,32 @@ def pair_markers(markers):
         best_pair = None
         best_distance = float("inf")
 
-        for i in remaining:
-            for j in remaining:
-                if j <= i:
-                    continue
+        for index, i in enumerate(remaining):
+            for j in remaining[index + 1:]:
+                dx = (
+                    markers[j]["x"] -
+                    markers[i]["x"]
+                )
 
-                dx = markers[j]["x"] - markers[i]["x"]
-                dy = markers[j]["y"] - markers[i]["y"]
+                dy = (
+                    markers[j]["y"] -
+                    markers[i]["y"]
+                )
 
-                # Require diagonal separation
+                # The two dots must be diagonal
                 if abs(dx) < 5 or abs(dy) < 5:
                     continue
 
                 distance = np.hypot(dx, dy)
 
-                if distance < best_distance:
+                if (
+                    distance <= MAX_PAIR_DISTANCE
+                    and distance < best_distance
+                ):
                     best_distance = distance
                     best_pair = (i, j)
 
         if best_pair is None:
-            break
-
-        if best_distance > MAX_PAIR_DISTANCE:
             break
 
         i, j = best_pair
@@ -199,11 +203,15 @@ def pair_markers(markers):
         dot1 = markers[i]
         dot2 = markers[j]
 
-        center_x = (dot1["x"] + dot2["x"]) / 2
-        center_y = (dot1["y"] + dot2["y"]) / 2
+        center_x = (
+            dot1["x"] + dot2["x"]
+        ) / 2
+
+        center_y = (
+            dot1["y"] + dot2["y"]
+        ) / 2
 
         substrates.append({
-            "substrate_id": len(substrates) + 1,
             "marker_1": dot1,
             "marker_2": dot2,
             "center_x": round(center_x, 2),
@@ -216,36 +224,108 @@ def pair_markers(markers):
         remaining.remove(i)
         remaining.remove(j)
 
-    print(f"Identified {len(substrates)} candidate substrates")
-
     return substrates, remaining
 
 
 # ==========================================
-# 5. DRAW CIRCLES AND SUBSTRATE LABELS
+# 5. NUMBER SUBSTRATES IN READING ORDER
+# ==========================================
+
+def number_substrates(substrates):
+    """
+    Number by rows:
+    left to right, then top to bottom.
+
+    Each substrate gets exactly one ID.
+    """
+
+    # Start by sorting from top to bottom
+    sorted_substrates = sorted(
+        substrates,
+        key=lambda s: (
+            s["center_y"],
+            s["center_x"]
+        )
+    )
+
+    rows = []
+
+    for substrate in sorted_substrates:
+        matched_row = None
+
+        for row in rows:
+            if abs(
+                substrate["center_y"] -
+                row["average_y"]
+            ) <= ROW_TOLERANCE:
+                matched_row = row
+                break
+
+        if matched_row is None:
+            rows.append({
+                "average_y": substrate["center_y"],
+                "substrates": [substrate]
+            })
+        else:
+            matched_row["substrates"].append(
+                substrate
+            )
+
+            matched_row["average_y"] = np.mean(
+                [
+                    s["center_y"]
+                    for s in matched_row["substrates"]
+                ]
+            )
+
+    # Sort rows from top to bottom
+    rows.sort(
+        key=lambda row: row["average_y"]
+    )
+
+    numbered = []
+    next_id = 1
+
+    for row in rows:
+        # Sort within each row from left to right
+        row["substrates"].sort(
+            key=lambda s: s["center_x"]
+        )
+
+        for substrate in row["substrates"]:
+            substrate["substrate_id"] = next_id
+
+            numbered.append(substrate)
+
+            next_id += 1
+
+    return numbered
+
+
+# ==========================================
+# 6. DRAW BLACK LABELS ON PHOTO
 # ==========================================
 
 def annotate_image(image, markers, substrates):
+    # Start with the ORIGINAL photograph,
+    # not a black mask or empty image.
     output = image.copy()
 
-    # Draw green circles around all red dots
+    # Green circles around red markers
     for marker in markers:
         center = (
             int(marker["x"]),
             int(marker["y"])
         )
 
-        radius = max(1, int(marker["radius"]))
-
         cv2.circle(
             output,
             center,
-            radius,
+            max(1, int(marker["radius"])),
             (0, 255, 0),
             4
         )
 
-    # Draw lines connecting substrate pairs
     for substrate in substrates:
         dot1 = substrate["marker_1"]
         dot2 = substrate["marker_2"]
@@ -260,58 +340,44 @@ def annotate_image(image, markers, substrates):
             int(dot2["y"])
         )
 
-        center = (
-            int(substrate["center_x"]),
-            int(substrate["center_y"])
-        )
+        center_x = int(substrate["center_x"])
+        center_y = int(substrate["center_y"])
 
-        # Blue connecting line
+        # Blue line between the two red dots
         cv2.line(
             output,
             point1,
             point2,
             (255, 0, 0),
-            4
+            3
         )
 
-        # Yellow center marker
-        cv2.circle(
-            output,
-            center,
-            8,
-            (0, 255, 255),
-            -1
+        # Label: S1, S2, S3, etc.
+        label = f"S{substrate['substrate_id']}"
+
+        # Measure text so its CENTER is placed
+        # at the midpoint between the red dots.
+        (text_width, text_height), baseline = (
+            cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                LABEL_SCALE,
+                LABEL_THICKNESS
+            )
         )
 
-        # Full substrate label
-        label = f"Substrate {substrate['substrate_id']}"
+        text_x = center_x - text_width // 2
+        text_y = center_y + text_height // 2
 
-        label_position = (
-            center[0] + 20,
-            center[1] - 25
-        )
-
-        # Thick black outline for readability
+        # Draw BLACK text directly onto photo
         cv2.putText(
             output,
             label,
-            label_position,
+            (text_x, text_y),
             cv2.FONT_HERSHEY_SIMPLEX,
-            2.0,
+            LABEL_SCALE,
             (0, 0, 0),
-            9,
-            cv2.LINE_AA
-        )
-
-        # Yellow label text
-        cv2.putText(
-            output,
-            label,
-            label_position,
-            cv2.FONT_HERSHEY_SIMPLEX,
-            2.0,
-            (0, 255, 255),
-            4,
+            LABEL_THICKNESS,
             cv2.LINE_AA
         )
 
@@ -319,29 +385,36 @@ def annotate_image(image, markers, substrates):
 
 
 # ==========================================
-# 6. SAVE IMAGE AND COORDINATE DATA
+# 7. SAVE RESULTS
 # ==========================================
 
 def save_results(
     scan_folder,
     scan_id,
-    annotated_image,
+    annotated,
     markers,
     substrates,
     unmatched
 ):
+    # Only save the original photo and
+    # ONE labeled/processed photo.
     detected_path = scan_folder / "detected.jpg"
 
-    if not cv2.imwrite(
-        str(detected_path), annotated_image
-    ):
-        raise RuntimeError("Could not save detected.jpg")
+    success = cv2.imwrite(
+        str(detected_path),
+        annotated
+    )
+
+    if not success:
+        raise RuntimeError(
+            "Could not save labeled photograph"
+        )
 
     results = {
         "scan_id": scan_id,
+        "coordinate_units": "pixels",
         "image_width": PHOTO_WIDTH,
         "image_height": PHOTO_HEIGHT,
-        "coordinate_units": "pixels",
         "marker_count": len(markers),
         "substrate_count": len(substrates),
         "pairing_verified": False,
@@ -354,46 +427,54 @@ def save_results(
     json_path = scan_folder / "substrates.json"
 
     with open(json_path, "w") as file:
-        json.dump(results, file, indent=4)
-
-    print("Results saved successfully!")
+        json.dump(
+            results,
+            file,
+            indent=4
+        )
 
     return detected_path
 
 
 # ==========================================
-# 7. MAIN PROGRAM
+# 8. MAIN PROGRAM
 # ==========================================
 
 def main():
     print("================================")
-    print("PAPA CAMERA DETECTION STARTING")
+    print("PAPA SUBSTRATE DETECTION")
     print("================================")
 
-    # Create numbered scan folder
     scan_folder, scan_id = create_scan_folder()
 
-    # Take a new photo
+    # Capture original photograph
     photo_path = capture_photo(scan_folder)
 
-    # Load photo into OpenCV
+    # Load the actual photograph
     image = cv2.imread(str(photo_path))
 
     if image is None:
-        raise RuntimeError("Could not load camera photo")
+        raise RuntimeError(
+            "Camera photograph could not be loaded"
+        )
 
-    # Detect red dots
+    # Detect red markers
     markers = detect_red_markers(image)
 
-    # Group dots into candidate substrates
+    # Pair red dots into substrates
     substrates, unmatched = pair_markers(markers)
 
-    # Draw circles, lines, and substrate labels
+    # Assign unique IDs in reading order
+    substrates = number_substrates(substrates)
+
+    # Draw labels on original photograph
     annotated = annotate_image(
-        image, markers, substrates
+        image,
+        markers,
+        substrates
     )
 
-    # Save images and JSON data
+    # Save labeled photograph and coordinates
     detected_path = save_results(
         scan_folder,
         scan_id,
@@ -403,28 +484,30 @@ def main():
         unmatched
     )
 
-    # Open processed photograph
-    print("Opening processed photograph...")
+    print(f"Detected {len(substrates)} substrates")
 
+    for substrate in substrates:
+        print(
+            f"S{substrate['substrate_id']}: "
+            f"({substrate['center_x']}, "
+            f"{substrate['center_y']})"
+        )
+
+    print(f"Labeled photo: {detected_path}")
+
+    # Open ONLY the labeled photograph
     try:
         subprocess.Popen([
             "xdg-open",
             str(detected_path)
         ])
     except OSError:
-        print(
-            "Image saved, but automatic preview "
-            "could not be opened."
-        )
+        print("Photo saved. Preview unavailable.")
 
     print("================================")
     print("SCAN COMPLETE")
-    print(f"Scan ID: {scan_id:04d}")
-    print(f"Substrates: {len(substrates)}")
-    print(f"Saved in: {scan_folder}")
     print("================================")
 
 
 if __name__ == "__main__":
     main()
-
