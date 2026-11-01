@@ -284,7 +284,7 @@ def annotate_image(image, markers, substrates):
         )
 
         # Substrate identification label
-        label = f"S{substrate['substrate_id']}"
+        label = f"Substrate {substrate['substrate_id']}"
 
         cv2.putText(
             output,
