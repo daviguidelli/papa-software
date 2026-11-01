@@ -222,7 +222,7 @@ def pair_markers(markers):
 
 
 # ==========================================
-# 5. DRAW CIRCLES AND SUBSTRATE IDS
+# 5. DRAW CIRCLES AND SUBSTRATE LABELS
 # ==========================================
 
 def annotate_image(image, markers, substrates):
@@ -283,17 +283,36 @@ def annotate_image(image, markers, substrates):
             -1
         )
 
-        # Substrate identification label
+        # Full substrate label
         label = f"Substrate {substrate['substrate_id']}"
 
+        label_position = (
+            center[0] + 20,
+            center[1] - 25
+        )
+
+        # Thick black outline for readability
         cv2.putText(
             output,
             label,
-            (center[0] + 15, center[1] - 15),
+            label_position,
             cv2.FONT_HERSHEY_SIMPLEX,
-            1.5,
+            2.0,
+            (0, 0, 0),
+            9,
+            cv2.LINE_AA
+        )
+
+        # Yellow label text
+        cv2.putText(
+            output,
+            label,
+            label_position,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            2.0,
             (0, 255, 255),
-            3
+            4,
+            cv2.LINE_AA
         )
 
     return output
@@ -369,7 +388,7 @@ def main():
     # Group dots into candidate substrates
     substrates, unmatched = pair_markers(markers)
 
-    # Draw circles, lines, and IDs
+    # Draw circles, lines, and substrate labels
     annotated = annotate_image(
         image, markers, substrates
     )
@@ -384,13 +403,19 @@ def main():
         unmatched
     )
 
-    # Display the processed photograph
+    # Open processed photograph
     print("Opening processed photograph...")
 
-    subprocess.Popen([
-        "xdg-open",
-        str(detected_path)
-    ])
+    try:
+        subprocess.Popen([
+            "xdg-open",
+            str(detected_path)
+        ])
+    except OSError:
+        print(
+            "Image saved, but automatic preview "
+            "could not be opened."
+        )
 
     print("================================")
     print("SCAN COMPLETE")
@@ -402,3 +427,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
