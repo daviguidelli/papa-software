@@ -32,7 +32,9 @@ print("Frame shape:    ", frame.shape)
 
 assert tuple(raw_size) == (SENSOR_W, SENSOR_H), "Sensor mode is cropped/binned"
 assert crop[2] >= SENSOR_W - 16 and crop[3] >= SENSOR_H - 16, "ScalerCrop is cropping"
-assert frame.shape[1] / frame.shape[0] == 4 / 3, "Output aspect isn't 4:3"
+h, w = frame.shape[:2]
+print(f"Aspect: {w/h:.4f} (sensor is {SENSOR_W/SENSOR_H:.4f})")
+assert abs(w/h - SENSOR_W/SENSOR_H) < 0.01, "Output aspect doesn't match sensor"
 print("✅ Full sensor, uncropped")
 
 cv2.imwrite("full_field.png", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
