@@ -16,32 +16,29 @@ PHOTO_WIDTH = 4056
 PHOTO_HEIGHT = 3040
 PREVIEW_TIME = 5000
 
-# RED MARKER DETECTION
+# Red marker detection
 MIN_RED_AREA = 100
 RED_CLOSE_KERNEL = 31
 
-# SUBSTRATE PAIRING
-# Each substrate has exactly TWO diagonal red markers.
+# Pairing settings
 MIN_DIAGONAL_DX = 10
 MIN_DIAGONAL_DY = 10
 MAX_PAIR_DISTANCE = 1200
 
-# Optional known spacing between markers (pixels).
-# Leave as None until measured.
+# If you know the marker spacing in pixels,
+# enter it here to improve pairing.
 EXPECTED_DX = None
 EXPECTED_DY = None
 PAIR_TOLERANCE = 0.30
 
-# NUMBERING
+# Numbering and label settings
 ROW_TOLERANCE = 150
-
-# BLACK LABEL APPEARANCE
 LABEL_SCALE = 2.0
 LABEL_THICKNESS = 5
 
 
 # ==========================================
-# 1. CREATE NEW SCAN FOLDER
+# 1. CREATE SCAN FOLDER
 # ==========================================
 
 def create_scan_folder():
@@ -56,25 +53,23 @@ def create_scan_folder():
                     int(folder.name.split("_")[-1])
                 )
             except ValueError:
-                continue
+                pass
 
     scan_id = max(existing_ids, default=0) + 1
     folder = SCANS_DIR / f"scan_{scan_id:04d}"
     folder.mkdir()
 
-    print(f"Created {folder}")
-
     return folder, scan_id
 
 
 # ==========================================
-# 2. TAKE PHOTO
+# 2. CAPTURE ORIGINAL PHOTOGRAPH
 # ==========================================
 
 def capture_photo(folder):
     photo_path = folder / "original.jpg"
 
-    print("Starting Raspberry Pi HQ Camera...")
+    print("Taking camera photograph...")
 
     subprocess.run(
         [
@@ -87,22 +82,16 @@ def capture_photo(folder):
         check=True
     )
 
-    print("Photo captured!")
-
     return photo_path
 
 
 # ==========================================
-# 3. DETECT RED REGIONS
+# 3. FIND RED MARKERS
 # ==========================================
 
 def detect_red_markers(image):
-    hsv = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2HSV
-    )
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    # Red wraps around the HSV hue range
     mask1 = cv2.inRange(
         hsv,
         np.array([0, 100, 80]),
@@ -117,15 +106,15 @@ def detect_red_markers(image):
 
     mask = cv2.bitwise_or(mask1, mask2)
 
-    # Remove tiny isolated red pixels
+    # Remove small red noise
     mask = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,
         np.ones((5, 5), np.uint8)
     )
 
-    # Connect fragmented parts of one marker
-    close_kernel = cv2.getStructuringElement(
+    # Connect fragmented regions of one marker
+    kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
         (RED_CLOSE_KERNEL, RED_CLOSE_KERNEL)
     )
@@ -133,7 +122,7 @@ def detect_red_markers(image):
     mask = cv2.morphologyEx(
         mask,
         cv2.MORPH_CLOSE,
-        close_kernel
+        kernel
     )
 
     contours, _ = cv2.findContours(
@@ -165,27 +154,16 @@ def detect_red_markers(image):
         key=lambda m: (m["y"], m["x"])
     )
 
-    print(f"Detected {len(markers)} red markers")
+    print(f"Red markers detected: {len(markers)}")
 
     return markers
 
 
 # ==========================================
-# 4. PAIR TWO DIAGONAL MARKERS
+# 4. PAIR DIAGONAL MARKERS
 # ==========================================
 
 def pair_markers(markers):
-    """
-    Pair diagonal red markers into substrates.
-
-    Each marker may be used only once.
-
-    If expected spacing is not configured,
-    prefer the closest valid diagonal pair.
-
-    Check the labeled photo to confirm pairs.
-    """
-
     candidates = []
 
     for i in range(len(markers)):
@@ -237,9 +215,8 @@ def pair_markers(markers):
                 "score": score
             })
 
-    candidates.sort(
-        key=lambda c: c["score"]
-    )
+    # Prefer the best available pairs
+    candidates.sort(key=lambda c: c["score"])
 
     used = set()
     substrates = []
@@ -248,20 +225,22 @@ def pair_markers(markers):
         i = candidate["i"]
         j = candidate["j"]
 
+        # A marker cannot belong to two substrates
         if i in used or j in used:
             continue
 
         a = markers[i]
         b = markers[j]
 
-        center_x = (a["x"] + b["x"]) / 2
-        center_y = (a["y"] + b["y"]) / 2
-
         substrates.append({
             "marker_1": a,
             "marker_2": b,
-            "center_x": round(center_x, 2),
-            "center_y": round(center_y, 2),
+            "center_x": round(
+                (a["x"] + b["x"]) / 2, 2
+            ),
+            "center_y": round(
+                (a["y"] + b["y"]) / 2, 2
+            ),
             "pair_distance_px": round(
                 candidate["distance"], 2
             )
@@ -275,15 +254,11 @@ def pair_markers(markers):
         if i not in used
     ]
 
-    print(
-        f"Identified {len(substrates)} candidate substrates"
-    )
-
     return substrates, unmatched
 
 
 # ==========================================
-# 5. NUMBER LEFT TO RIGHT, TOP TO BOTTOM
+# 5. ASSIGN UNIQUE SUBSTRATE NUMBERS
 # ==========================================
 
 def number_substrates(substrates):
@@ -314,9 +289,7 @@ def number_substrates(substrates):
                 "items": [substrate]
             })
         else:
-            matching_row["items"].append(
-                substrate
-            )
+            matching_row["items"].append(substrate)
 
             matching_row["average_y"] = float(
                 np.mean([
@@ -325,12 +298,9 @@ def number_substrates(substrates):
                 ])
             )
 
-    rows.sort(
-        key=lambda row: row["average_y"]
-    )
+    rows.sort(key=lambda r: r["average_y"])
 
     numbered = []
-    next_id = 1
 
     for row in rows:
         row["items"].sort(
@@ -338,42 +308,35 @@ def number_substrates(substrates):
         )
 
         for substrate in row["items"]:
-            substrate["substrate_id"] = next_id
+            substrate["substrate_id"] = len(numbered) + 1
             numbered.append(substrate)
-            next_id += 1
 
     return numbered
 
 
 # ==========================================
-# 6. DRAW GREEN CIRCLES AND BLACK LABELS
+# 6. DRAW CIRCLES AND BLACK SUBSTRATE LABELS
 # ==========================================
 
 def annotate_image(image, markers, substrates):
-    # Keep the original photograph as background
+    # Preserve the original color photograph
     output = image.copy()
 
-    # GREEN CIRCLES around ALL detected red markers
+    # Green circle around EVERY detected red marker
     for marker in markers:
-        center = (
-            int(marker["x"]),
-            int(marker["y"])
-        )
-
-        radius = max(
-            10,
-            int(marker["radius"]) + 5
-        )
+        x = int(marker["x"])
+        y = int(marker["y"])
+        radius = max(10, int(marker["radius"]) + 5)
 
         cv2.circle(
             output,
-            center,
+            (x, y),
             radius,
             (0, 255, 0),
             5
         )
 
-    # BLACK LABEL for each identified substrate
+    # One black label at the center of each pair
     for substrate in substrates:
         center_x = int(substrate["center_x"])
         center_y = int(substrate["center_y"])
@@ -389,7 +352,6 @@ def annotate_image(image, markers, substrates):
             )
         )
 
-        # Center label between the two red markers
         text_x = center_x - text_width // 2
         text_y = center_y + text_height // 2
 
@@ -408,7 +370,7 @@ def annotate_image(image, markers, substrates):
 
 
 # ==========================================
-# 7. SAVE ORIGINAL AND LABELED PHOTO
+# 7. SAVE ONLY TWO PHOTOGRAPHS + JSON
 # ==========================================
 
 def save_results(
@@ -419,14 +381,16 @@ def save_results(
     substrates,
     unmatched
 ):
-    labeled_path = folder / "detected.jpg"
+    # original.jpg was already saved by the camera.
+    # This is the ONLY additional image saved.
+    detected_path = folder / "detected.jpg"
 
     if not cv2.imwrite(
-        str(labeled_path),
+        str(detected_path),
         annotated
     ):
         raise RuntimeError(
-            "Could not save labeled photograph"
+            "Could not save detected.jpg"
         )
 
     results = {
@@ -443,18 +407,12 @@ def save_results(
         ]
     }
 
-    json_path = folder / "substrates.json"
+    with open(
+        folder / "substrates.json", "w"
+    ) as file:
+        json.dump(results, file, indent=4)
 
-    with open(json_path, "w") as file:
-        json.dump(
-            results,
-            file,
-            indent=4
-        )
-
-    print("Results saved successfully!")
-
-    return labeled_path
+    return detected_path
 
 
 # ==========================================
@@ -466,13 +424,10 @@ def main():
     print("PAPA CAMERA DETECTION STARTING")
     print("================================")
 
-    # Create a new scan folder
     folder, scan_id = create_scan_folder()
 
-    # Take photograph
     photo_path = capture_photo(folder)
 
-    # Load photograph
     image = cv2.imread(str(photo_path))
 
     if image is None:
@@ -480,24 +435,19 @@ def main():
             "Could not load camera photograph"
         )
 
-    # Detect all red markers
     markers = detect_red_markers(image)
 
-    # Pair diagonal markers
     substrates, unmatched = pair_markers(markers)
 
-    # Assign unique substrate numbers
     substrates = number_substrates(substrates)
 
-    # Draw green circles and black S1/S2 labels
     annotated = annotate_image(
         image,
         markers,
         substrates
     )
 
-    # Save processed photograph and JSON
-    labeled_path = save_results(
+    detected_path = save_results(
         folder,
         scan_id,
         annotated,
@@ -506,7 +456,7 @@ def main():
         unmatched
     )
 
-    print(f"Scan ID: {scan_id:04d}")
+    print(f"Scan: {scan_id:04d}")
     print(f"Red markers: {len(markers)}")
     print(f"Substrates: {len(substrates)}")
     print(f"Unmatched markers: {len(unmatched)}")
@@ -514,21 +464,22 @@ def main():
     for substrate in substrates:
         print(
             f"S{substrate['substrate_id']}: "
-            f"center=({substrate['center_x']}, "
+            f"({substrate['center_x']}, "
             f"{substrate['center_y']})"
         )
 
-    print(f"Labeled photo: {labeled_path}")
+    print(f"Labeled photo saved: {detected_path}")
 
-    # Open ONLY the labeled photograph
+    # Open ONLY the processed photograph
+    # This is not a mask or black background.
     try:
         subprocess.Popen([
             "xdg-open",
-            str(labeled_path)
+            str(detected_path)
         ])
     except OSError:
         print(
-            "Photograph saved; automatic preview unavailable."
+            "Photo saved; automatic preview unavailable."
         )
 
     print("================================")
