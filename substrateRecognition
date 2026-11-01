@@ -93,12 +93,28 @@ def detect_red_markers(image):
 
     mask = cv2.bitwise_or(mask1, mask2)
 
-    kernel = np.ones((5, 5), np.uint8)
+    # Remove tiny red noise
+    small_kernel = np.ones((5, 5), np.uint8)
 
     mask = cv2.morphologyEx(
-        mask, cv2.MORPH_OPEN, kernel
+        mask,
+        cv2.MORPH_OPEN,
+        small_kernel
     )
 
+    # Connect nearby red regions into one marker
+    large_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (31, 31)
+    )
+
+    mask = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_CLOSE,
+        large_kernel
+    )
+
+    # Find contours of red regions
     contours, _ = cv2.findContours(
         mask,
         cv2.RETR_EXTERNAL,
