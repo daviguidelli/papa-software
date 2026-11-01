@@ -1,0 +1,23 @@
+from picamera2 import Picamera2
+
+picam2 = Picamera2()
+
+# Full-field, binned mode (fast, good for vision). Use (4056, 3040) for full resolution.
+config = picam2.create_preview_configuration(
+    main={"size": (2028, 1520), "format": "RGB888"},
+    raw={"size": (2028, 1520)}
+)
+picam2.configure(config)
+
+# Force the crop to the whole sensor
+full = picam2.camera_properties["ScalerCropMaximum"]
+picam2.set_controls({"ScalerCrop": full})
+
+picam2.start()
+
+# Verify
+md = picam2.capture_metadata()
+print("ScalerCrop in use:", md["ScalerCrop"])   # should be close to (0, 0, 4056, 3040)
+print("Sensor mode:", picam2.camera_configuration()["raw"]["size"])
+
+frame = picam2.capture_array()   # numpy array, ready for OpenCV / AprilTag detection
