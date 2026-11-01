@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 # ==========================================
-# PAPA - RED MARKER SUBSTRATE DETECTION
+# PAPA CAMERA - SUBSTRATE DETECTION
 # ==========================================
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -16,26 +16,32 @@ PHOTO_WIDTH = 4056
 PHOTO_HEIGHT = 3040
 PREVIEW_TIME = 5000
 
+# RED MARKER DETECTION
 MIN_RED_AREA = 100
+RED_CLOSE_KERNEL = 31
 
-# Marker pair geometry
-MIN_DIAGONAL_DX = 30
-MIN_DIAGONAL_DY = 30
+# SUBSTRATE PAIRING
+# Each substrate has exactly TWO diagonal red markers.
+MIN_DIAGONAL_DX = 10
+MIN_DIAGONAL_DY = 10
 MAX_PAIR_DISTANCE = 1200
 
-# Pair spacing must be reasonably consistent
-SPACING_TOLERANCE = 0.25
+# Optional known spacing between markers (pixels).
+# Leave as None until measured.
+EXPECTED_DX = None
+EXPECTED_DY = None
+PAIR_TOLERANCE = 0.30
 
-# Numbering tolerance (pixels)
+# NUMBERING
 ROW_TOLERANCE = 150
 
-# Black label appearance
+# BLACK LABEL APPEARANCE
 LABEL_SCALE = 2.0
 LABEL_THICKNESS = 5
 
 
 # ==========================================
-# 1. CREATE A NUMBERED SCAN FOLDER
+# 1. CREATE NEW SCAN FOLDER
 # ==========================================
 
 def create_scan_folder():
@@ -56,15 +62,19 @@ def create_scan_folder():
     folder = SCANS_DIR / f"scan_{scan_id:04d}"
     folder.mkdir()
 
+    print(f"Created {folder}")
+
     return folder, scan_id
 
 
 # ==========================================
-# 2. CAPTURE PHOTOGRAPH
+# 2. TAKE PHOTO
 # ==========================================
 
 def capture_photo(folder):
-    path = folder / "original.jpg"
+    photo_path = folder / "original.jpg"
+
+    print("Starting Raspberry Pi HQ Camera...")
 
     subprocess.run(
         [
@@ -72,21 +82,27 @@ def capture_photo(folder):
             "-t", str(PREVIEW_TIME),
             "--width", str(PHOTO_WIDTH),
             "--height", str(PHOTO_HEIGHT),
-            "-o", str(path)
+            "-o", str(photo_path)
         ],
         check=True
     )
 
-    return path
+    print("Photo captured!")
+
+    return photo_path
 
 
 # ==========================================
-# 3. DETECT RED MARKERS
+# 3. DETECT RED REGIONS
 # ==========================================
 
 def detect_red_markers(image):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2HSV
+    )
 
+    # Red wraps around the HSV hue range
     mask1 = cv2.inRange(
         hsv,
         np.array([0, 100, 80]),
@@ -101,23 +117,23 @@ def detect_red_markers(image):
 
     mask = cv2.bitwise_or(mask1, mask2)
 
-    # Remove isolated red noise
+    # Remove tiny isolated red pixels
     mask = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,
         np.ones((5, 5), np.uint8)
     )
 
-    # Join fragmented parts of the same marker
-    kernel = cv2.getStructuringElement(
+    # Connect fragmented parts of one marker
+    close_kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
-        (31, 31)
+        (RED_CLOSE_KERNEL, RED_CLOSE_KERNEL)
     )
 
     mask = cv2.morphologyEx(
         mask,
         cv2.MORPH_CLOSE,
-        kernel
+        close_kernel
     )
 
     contours, _ = cv2.findContours(
@@ -141,21 +157,35 @@ def detect_red_markers(image):
         markers.append({
             "x": round(float(x), 2),
             "y": round(float(y), 2),
-            "radius": round(float(radius), 2)
+            "radius": round(float(radius), 2),
+            "area": round(float(area), 2)
         })
 
-    markers.sort(key=lambda m: (m["y"], m["x"]))
+    markers.sort(
+        key=lambda m: (m["y"], m["x"])
+    )
 
-    print(f"Red markers detected: {len(markers)}")
+    print(f"Detected {len(markers)} red markers")
 
     return markers
 
 
 # ==========================================
-# 4. FIND VALID DIAGONAL PAIR CANDIDATES
+# 4. PAIR TWO DIAGONAL MARKERS
 # ==========================================
 
-def build_pair_candidates(markers):
+def pair_markers(markers):
+    """
+    Pair diagonal red markers into substrates.
+
+    Each marker may be used only once.
+
+    If expected spacing is not configured,
+    prefer the closest valid diagonal pair.
+
+    Check the labeled photo to confirm pairs.
+    """
+
     candidates = []
 
     for i in range(len(markers)):
@@ -177,89 +207,44 @@ def build_pair_candidates(markers):
             if distance > MAX_PAIR_DISTANCE:
                 continue
 
+            if EXPECTED_DX is not None:
+                if abs(dx - EXPECTED_DX) > (
+                    EXPECTED_DX * PAIR_TOLERANCE
+                ):
+                    continue
+
+            if EXPECTED_DY is not None:
+                if abs(dy - EXPECTED_DY) > (
+                    EXPECTED_DY * PAIR_TOLERANCE
+                ):
+                    continue
+
+            if (
+                EXPECTED_DX is not None
+                and EXPECTED_DY is not None
+            ):
+                score = (
+                    abs(dx - EXPECTED_DX) / EXPECTED_DX
+                    + abs(dy - EXPECTED_DY) / EXPECTED_DY
+                )
+            else:
+                score = distance
+
             candidates.append({
                 "i": i,
                 "j": j,
-                "dx": dx,
-                "dy": dy,
-                "distance": distance
+                "distance": distance,
+                "score": score
             })
 
-    return candidates
-
-
-# ==========================================
-# 5. ESTIMATE COMMON PAIR GEOMETRY
-# ==========================================
-
-def estimate_pair_geometry(candidates):
-    """
-    Estimate typical diagonal separation
-    from shorter candidate connections.
-
-    This is an initial estimate, not a
-    calibrated physical measurement.
-    """
-
-    if not candidates:
-        return None
-
-    distances = sorted(
-        c["distance"] for c in candidates
-    )
-
-    # Focus on the shorter candidate connections
-    sample_count = max(
-        1,
-        len(distances) // 3
-    )
-
-    typical_distance = float(
-        np.median(distances[:sample_count])
-    )
-
-    return typical_distance
-
-
-# ==========================================
-# 6. PAIR MARKERS WITHOUT REUSING THEM
-# ==========================================
-
-def pair_markers(markers):
-    candidates = build_pair_candidates(markers)
-
-    typical_distance = estimate_pair_geometry(
-        candidates
-    )
-
-    if typical_distance is None:
-        return [], list(range(len(markers)))
-
-    # Keep pairs with similar diagonal lengths
-    valid_candidates = []
-
-    for candidate in candidates:
-        relative_error = abs(
-            candidate["distance"] -
-            typical_distance
-        ) / typical_distance
-
-        if relative_error <= SPACING_TOLERANCE:
-            candidate["error"] = relative_error
-            valid_candidates.append(candidate)
-
-    # Prefer spacing consistency, then distance
-    valid_candidates.sort(
-        key=lambda c: (
-            c["error"],
-            c["distance"]
-        )
+    candidates.sort(
+        key=lambda c: c["score"]
     )
 
     used = set()
     substrates = []
 
-    for candidate in valid_candidates:
+    for candidate in candidates:
         i = candidate["i"]
         j = candidate["j"]
 
@@ -290,11 +275,15 @@ def pair_markers(markers):
         if i not in used
     ]
 
+    print(
+        f"Identified {len(substrates)} candidate substrates"
+    )
+
     return substrates, unmatched
 
 
 # ==========================================
-# 7. NUMBER SUBSTRATES BY ROW
+# 5. NUMBER LEFT TO RIGHT, TOP TO BOTTOM
 # ==========================================
 
 def number_substrates(substrates):
@@ -325,7 +314,10 @@ def number_substrates(substrates):
                 "items": [substrate]
             })
         else:
-            matching_row["items"].append(substrate)
+            matching_row["items"].append(
+                substrate
+            )
+
             matching_row["average_y"] = float(
                 np.mean([
                     s["center_y"]
@@ -333,7 +325,9 @@ def number_substrates(substrates):
                 ])
             )
 
-    rows.sort(key=lambda r: r["average_y"])
+    rows.sort(
+        key=lambda row: row["average_y"]
+    )
 
     numbered = []
     next_id = 1
@@ -352,12 +346,34 @@ def number_substrates(substrates):
 
 
 # ==========================================
-# 8. DRAW LABELS ON ORIGINAL PHOTO
+# 6. DRAW GREEN CIRCLES AND BLACK LABELS
 # ==========================================
 
-def annotate_image(image, substrates):
+def annotate_image(image, markers, substrates):
+    # Keep the original photograph as background
     output = image.copy()
 
+    # GREEN CIRCLES around ALL detected red markers
+    for marker in markers:
+        center = (
+            int(marker["x"]),
+            int(marker["y"])
+        )
+
+        radius = max(
+            10,
+            int(marker["radius"]) + 5
+        )
+
+        cv2.circle(
+            output,
+            center,
+            radius,
+            (0, 255, 0),
+            5
+        )
+
+    # BLACK LABEL for each identified substrate
     for substrate in substrates:
         center_x = int(substrate["center_x"])
         center_y = int(substrate["center_y"])
@@ -373,7 +389,7 @@ def annotate_image(image, substrates):
             )
         )
 
-        # Center label at midpoint of red dots
+        # Center label between the two red markers
         text_x = center_x - text_width // 2
         text_y = center_y + text_height // 2
 
@@ -392,7 +408,7 @@ def annotate_image(image, substrates):
 
 
 # ==========================================
-# 9. SAVE LABELED PHOTO AND JSON
+# 7. SAVE ORIGINAL AND LABELED PHOTO
 # ==========================================
 
 def save_results(
@@ -410,10 +426,10 @@ def save_results(
         annotated
     ):
         raise RuntimeError(
-            "Could not save detected.jpg"
+            "Could not save labeled photograph"
         )
 
-    data = {
+    results = {
         "scan_id": scan_id,
         "image_width": PHOTO_WIDTH,
         "image_height": PHOTO_HEIGHT,
@@ -427,45 +443,60 @@ def save_results(
         ]
     }
 
-    with open(
-        folder / "substrates.json", "w"
-    ) as file:
-        json.dump(data, file, indent=4)
+    json_path = folder / "substrates.json"
+
+    with open(json_path, "w") as file:
+        json.dump(
+            results,
+            file,
+            indent=4
+        )
+
+    print("Results saved successfully!")
 
     return labeled_path
 
 
 # ==========================================
-# 10. MAIN
+# 8. MAIN PROGRAM
 # ==========================================
 
 def main():
     print("================================")
-    print("PAPA SUBSTRATE DETECTION")
+    print("PAPA CAMERA DETECTION STARTING")
     print("================================")
 
+    # Create a new scan folder
     folder, scan_id = create_scan_folder()
 
+    # Take photograph
     photo_path = capture_photo(folder)
 
+    # Load photograph
     image = cv2.imread(str(photo_path))
 
     if image is None:
         raise RuntimeError(
-            "Could not load original photograph"
+            "Could not load camera photograph"
         )
 
+    # Detect all red markers
     markers = detect_red_markers(image)
 
+    # Pair diagonal markers
     substrates, unmatched = pair_markers(markers)
 
+    # Assign unique substrate numbers
     substrates = number_substrates(substrates)
 
+    # Draw green circles and black S1/S2 labels
     annotated = annotate_image(
         image,
+        markers,
         substrates
     )
 
+    # Save processed photograph and JSON
     labeled_path = save_results(
         folder,
         scan_id,
@@ -475,7 +506,9 @@ def main():
         unmatched
     )
 
-    print(f"Substrates identified: {len(substrates)}")
+    print(f"Scan ID: {scan_id:04d}")
+    print(f"Red markers: {len(markers)}")
+    print(f"Substrates: {len(substrates)}")
     print(f"Unmatched markers: {len(unmatched)}")
 
     for substrate in substrates:
@@ -485,9 +518,9 @@ def main():
             f"{substrate['center_y']})"
         )
 
-    print(f"Labeled photograph: {labeled_path}")
+    print(f"Labeled photo: {labeled_path}")
 
-    # Open only the labeled photograph
+    # Open ONLY the labeled photograph
     try:
         subprocess.Popen([
             "xdg-open",
@@ -495,7 +528,7 @@ def main():
         ])
     except OSError:
         print(
-            "Photograph saved; preview unavailable."
+            "Photograph saved; automatic preview unavailable."
         )
 
     print("================================")
@@ -505,4 +538,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
