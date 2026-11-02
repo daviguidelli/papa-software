@@ -31,9 +31,11 @@ class ServoGripper:
         self.settle_s = settle_s
         lgpio.gpio_claim_output(self._h, pwm_pin, 0)
         self._state = "unknown"
+        self.pulse_us: int | None = None
 
     def _pulse(self, width_us: int) -> None:
         width_us = max(MIN_US, min(MAX_US, int(width_us)))
+        self.pulse_us = width_us
         duty = 100.0 * width_us / PERIOD_US
         self._lg.tx_pwm(self._h, self.pin, 50, duty)
         time.sleep(self.settle_s)
@@ -45,6 +47,11 @@ class ServoGripper:
     def close(self) -> None:
         self._pulse(self.closed_us)
         self._state = "closed"
+
+    def pulse(self, width_us: int) -> None:
+        """Drive to an arbitrary pulse width. Used only to find open and closed."""
+        self._pulse(width_us)
+        self._state = "manual"
 
     @property
     def state(self) -> str:

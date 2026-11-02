@@ -49,7 +49,7 @@ def make_gripper(machine: Machine, cal: Calibration) -> Any:
     if not is_real("gripper"):
         from papa.sim.mocks import MockGripper
 
-        return MockGripper()
+        return MockGripper(open_us=cal.gripper["open_us"], closed_us=cal.gripper["closed_us"])
     from papa.hw.gripper import ServoGripper
 
     g = cal.gripper

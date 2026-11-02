@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from papa.config import Calibration, Machine, Swab
+from papa.ops.geometry import to_machine
 from papa.ops.jobs import Job
 from papa.ops.swabs import Rack, RackEmpty, Wear
 from papa.ops.zcal import GripFailed, OverForce, calibrate_z
@@ -104,13 +105,7 @@ class Orchestrator:
         A rotated mounting base is a config change, so this is the only place
         that knows which way local +y runs.
         """
-        axes = self.machine.axes
-        dx = lx if axes["local_x"] == "+X" else -lx
-        dy = ly if axes["local_y"] == "+Y" else -ly
-        if axes["local_x"] in ("+Y", "-Y") or axes["local_y"] in ("+X", "-X"):
-            # swapped axes: local x runs along machine Y
-            dx, dy = dy, dx
-        return slot_x + dx, slot_y + dy
+        return to_machine(self.machine.axes, slot_x, slot_y, lx, ly)
 
     # --- the steps ---
 
@@ -118,6 +113,8 @@ class Orchestrator:
         """Everything that must be true before the first move. Names what is
         missing rather than failing with a generic error mid-job."""
         problems: list[str] = []
+        if getattr(self.printer, "guard", None) is not None and self.printer.guard.floor is None:
+            problems.append("the Z floor is not set")
         if not self.printer.ping():
             problems.append("Moonraker is not reachable")
         else:

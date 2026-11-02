@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAPA — System validation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--ground:#060E1C;--ink:#EAF1FB;--muted:#9FB1CC;--gold:#D9B45A;--blue:#4C9BE8;--green:#4FD08A;--red:#D2382C;--line:rgba(130,170,220,.22);--panel:rgba(255,255,255,.03)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font:15px/1.45 'IBM Plex Sans',system-ui,sans-serif}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.muted{color:var(--muted)}
+.bg{position:fixed;inset:0;pointer-events:none;z-index:0;background:radial-gradient(900px 520px at 12% -8%,rgba(76,155,232,.22),transparent 62%),radial-gradient(760px 520px at 100% 6%,rgba(217,180,90,.10),transparent 60%),linear-gradient(rgba(130,170,220,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(130,170,220,.05) 1px,transparent 1px);background-size:auto,auto,48px 48px,48px 48px}
+.page{position:relative;z-index:1}
+.wrap{max-width:1240px;margin:0 auto;padding:0 20px}
+header{background:rgba(6,14,28,.78);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.hrow{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;padding:12px 0}
+.title{font-size:20px;font-weight:600;letter-spacing:-.01em;margin-right:auto}
+.chip{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:3px;font-size:12.5px;font-weight:500;border:1px solid var(--line);background:var(--panel);white-space:nowrap}
+.chip.ok{background:rgba(79,208,138,.10);border-color:rgba(79,208,138,.35);color:#C4F2DA}
+.chip.warn{background:rgba(232,200,115,.12);border-color:#E8C873;color:#F6E2A8}
+.chip.bad{background:rgba(210,56,44,.16);border-color:#FF6B5E;color:#FFD9D5}
+button{font:inherit;color:var(--ink);cursor:pointer;border:1px solid rgba(130,170,220,.32);background:rgba(255,255,255,.035);border-radius:3px;padding:9px 14px;transition:filter .2s,background .2s}
+button:hover:not(:disabled){filter:brightness(1.35)}
+button:disabled{opacity:.35;cursor:not-allowed}
+button.primary{background:var(--gold);border-color:var(--gold);color:#07101F;font-weight:600}
+button.gold{border-color:rgba(217,180,90,.6);background:rgba(217,180,90,.10)}
+button.danger{background:rgba(210,56,44,.25);border-color:#FF6B5E;font-weight:700;letter-spacing:.04em}
+button.sm{padding:6px 10px;font-size:13px}
+layout,.layout{display:grid;grid-template-columns:340px 1fr;gap:20px;padding:20px 0 60px;align-items:start}
+@media(max-width:960px){.layout{grid-template-columns:1fr}}
+.side{position:sticky;top:76px;display:flex;flex-direction:column;gap:16px}
+@media(max-width:960px){.side{position:static}}
+.card{padding:18px;border-radius:6px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(20,38,68,.80),rgba(10,22,42,.80))}
+.label{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+h2{font-size:17px;margin:0 0 4px;font-weight:600}
+.note{color:var(--muted);font-size:13px;line-height:1.5;margin:8px 0 0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.row label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+input[type=number],select{width:100px;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:3px;padding:8px;color:var(--ink);font:14px 'IBM Plex Mono',monospace}
+select option{background:#0b1730}
+input[type=range]{width:100%;accent-color:var(--gold)}
+.pos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.pos div{border:1px solid var(--line);border-radius:4px;padding:7px 9px}
+.pos b{display:block;font-size:11px;font-weight:500;color:var(--muted)}
+.pos span{font:20px 'IBM Plex Mono',monospace}
+.steps{display:flex;flex-wrap:wrap;gap:6px}
+.steps button{padding:8px 11px;font:13px 'IBM Plex Mono',monospace}
+.steps button.on{background:var(--gold);border-color:var(--gold);color:#07101F}
+.pad{display:grid;grid-template-columns:repeat(3,62px);grid-template-rows:repeat(3,62px);gap:6px;justify-content:center;margin:4px 0 10px}
+.pad button{font:22px 'IBM Plex Mono',monospace;padding:0}
+.zpad{display:flex;gap:6px;justify-content:center}
+.zpad button{width:94px;height:50px;font:15px 'IBM Plex Mono',monospace;padding:0}
+#msg{min-height:20px;font:12.5px 'IBM Plex Mono',monospace;margin-top:10px;word-break:break-word}
+.good{color:var(--green)}.warn{color:var(--gold)}.err{color:#FF8A80}
+nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.tab{min-height:44px;padding:10px 20px;font:600 13px/1 'IBM Plex Sans',sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:rgba(255,255,255,.02)}
+.tab[aria-selected=true]{background:rgba(217,180,90,.14);color:#fff;border-color:var(--gold);box-shadow:0 0 22px rgba(217,180,90,.25)}
+.panel[hidden]{display:none}
+.stack{display:flex;flex-direction:column;gap:16px}
+.big{font:500 42px 'IBM Plex Mono',monospace;letter-spacing:-.02em}
+.bar{height:8px;border-radius:4px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;width:0;background:var(--green);transition:width .15s,background .15s}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font:13.5px 'IBM Plex Mono',monospace}
+.kv span:nth-child(odd){color:var(--muted)}
+.steplist{counter-reset:s;list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px}
+.steplist>li{counter-increment:s;padding-left:38px;position:relative}
+.steplist>li:before{content:counter(s);position:absolute;left:0;top:0;width:26px;height:26px;border-radius:50%;border:1px solid var(--gold);color:var(--gold);display:flex;align-items:center;justify-content:center;font:600 13px 'IBM Plex Mono',monospace}
+.ready{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+table{width:100%;border-collapse:collapse;font:13px 'IBM Plex Mono',monospace}
+th,td{padding:5px 8px;text-align:right;border-bottom:1px solid rgba(130,170,220,.12)}
+th{color:var(--muted);font-weight:500;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+th:first-child,td:first-child{text-align:left}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:760px){.two{grid-template-columns:1fr}}
+#log{max-height:160px;overflow:auto;font:12px 'IBM Plex Mono',monospace;color:var(--muted)}
+#log div{padding:2px 0;border-bottom:1px solid rgba(130,170,220,.08)}
+svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="page">
+<header><div class="wrap"><div class="hrow">
+  <div class="title">PAPA · System validation</div>
+  <span class="chip" id="cPrinter">Printer</span>
+  <span class="chip" id="cCell">Load cell</span>
+  <span class="chip" id="cServo">Servo</span>
+  <span class="chip bad" id="cHome">Not homed</span>
+  <span class="chip bad" id="cFloor">Z floor not set</span>
+  <button class="danger" id="estop">E-STOP</button>
+</div></div></header>
+
+<div class="wrap"><div class="layout">
+
+<aside class="side">
+  <div class="card">
+    <p class="label">Position</p>
+    <div class="pos"><div><b>X mm</b><span id="px">–</span></div><div><b>Y mm</b><span id="py">–</span></div><div><b>Z mm</b><span id="pz">–</span></div></div>
+    <div class="row" style="margin-top:10px">
+      <button class="gold sm" id="hXY">Home XY</button>
+      <button class="gold sm" id="hZ">Home Z</button>
+    </div>
+    <p class="note" id="hzNote"></p>
+  </div>
+
+  <div class="card">
+    <p class="label">Jog</p>
+    <div class="steps" id="steps"></div>
+    <div class="row" style="margin:10px 0 6px">
+      <label>XY mm/s<input type="number" id="fxy" value="20" min="1" max="100" step="1"></label>
+      <label>Z mm/s<input type="number" id="fz" value="5" min="0.5" max="20" step="0.5"></label>
+    </div>
+    <div class="pad" id="pad"></div>
+    <div class="zpad"><button id="zup" aria-label="Z up">Z+</button><button id="zdn" aria-label="Z down">Z−</button></div>
+    <p class="note">Arrows are machine axes: ↑ is Y+, → is X+. This is the only jog control; every tab uses it.</p>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card">
+    <p class="label">Z floor · lowest allowed Z</p>
+    <div class="big" id="floorv" style="font-size:26px">not set</div>
+    <div class="row" style="margin-top:10px">
+      <label>Allow down mm<input type="number" id="fd" value="5" min="0.5" max="50" step="0.5"></label>
+      <button class="gold sm" id="allowDown">Floor = Z − this</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label>Type floor mm<input type="number" id="ft" step="0.1"></label>
+      <button class="gold sm" id="setTyped">Set typed</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="gold sm" id="setFloor">Floor = current Z</button>
+      <button class="sm" id="clrFloor">Clear</button>
+    </div>
+    <p class="note">Z cannot move down until a floor exists, then never below it. Start with "Floor = Z − this", jog down to just above the surface, then "Floor = current Z" to lock it tight. Jobs obey it too.</p>
+  </div>
+</aside>
+
+<section>
+  <nav role="tablist" id="tabs">
+    <button class="tab" role="tab" data-tab="cell" aria-selected="true">Load cell</button>
+    <button class="tab" role="tab" data-tab="offset" aria-selected="false">Glass offset</button>
+    <button class="tab" role="tab" data-tab="servo" aria-selected="false">Servo</button>
+    <button class="tab" role="tab" data-tab="slide" aria-selected="false">Slide</button>
+  </nav>
+
+  <!-- ============ LOAD CELL ============ -->
+  <div class="panel stack" id="p-cell">
+    <div class="card">
+      <p class="label">Force</p>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div><span class="big" id="grams">–</span> <span class="muted mono">g</span></div>
+        <span class="chip" id="cellReal"></span>
+      </div>
+      <div class="bar"><i id="forceBar"></i></div>
+      <p class="note mono" id="forceNote"></p>
+      <div class="row" style="margin-top:12px">
+        <button id="watch">Watch force</button>
+        <button id="tare" class="gold">Tare</button>
+        <label>Known weight g<input type="number" id="kw" value="100" min="1" step="1"></label>
+        <button id="scale" class="gold">Calibrate scale</button>
+        <button id="saveScale" disabled>Save tare + scale</button>
+      </div>
+      <p class="note" id="scaleNote"></p>
+    </div>
+
+    <div class="card">
+      <p class="label">Where is the load cell</p>
+      <div class="kv" id="lcPos"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="gold" id="capXY">Capture XY from current position</button>
+        <button id="goXY">Go to load cell XY</button>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label>Probe start Z mm<input type="number" id="zs" step="0.5"></label>
+        <button class="sm" id="capZ">Use current Z</button>
+        <button class="gold sm" id="saveZ">Save</button>
+      </div>
+      <p class="note">Jog the swab tip over the middle of the cell and capture. "Go to" moves X and Y only, at whatever Z you are at. The start Z only needs to be a few mm above the cell: the probe finds the real height itself by stepping down until the force reads the target.</p>
+    </div>
+
+    <div class="card">
+      <p class="label">Probe test</p>
+      <div class="ready" id="probeReady"></div>
+      <div class="row" style="align-items:center">
+        <button class="primary" id="probe">Probe load cell</button>
+        <label style="flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="gripped"> A swab is gripped</label>
+      </div>
+      <div class="kv" id="probeOut" style="margin-top:12px"></div>
+      <p class="note" id="probeNote"></p>
+    </div>
+  </div>
+
+  <!-- ============ GLASS OFFSET ============ -->
+  <div class="panel stack" id="p-offset" hidden>
+    <div class="card">
+      <h2>Load cell to glass offset</h2>
+      <p class="note" style="margin-top:0">The load cell sits above the glass. A job finds the swab's contact height on the cell, then adds this offset to get the scribe height on the slide. Use the same swab for both touches.</p>
+      <ol class="steplist" style="margin-top:16px">
+        <li>
+          <b>Contact on the load cell</b>
+          <div class="kv" style="margin:6px 0"><span>Cell contact Z</span><span id="ocZ">not set</span></div>
+          <div class="row"><button class="gold sm" id="useProbe">Use last probe result</button><button class="sm" id="useCellNow">Use current Z</button></div>
+          <p class="note">Probe on the Load cell tab, or jog the swab down onto the cell by hand until it just reads force.</p>
+        </li>
+        <li>
+          <b>Contact on the glass</b>
+          <div class="kv" style="margin:6px 0"><span>Glass contact Z</span><span id="ogZ">not set</span></div>
+          <div class="row"><button class="gold sm" id="useGlassNow">Use current Z</button></div>
+          <p class="note">Jog over the slide, lower in 0.05 to 0.1 mm steps until the swab just touches the glass, then capture. Stay above the Z floor.</p>
+        </li>
+        <li>
+          <b>Offset</b>
+          <div class="kv" style="margin:6px 0"><span>Glass − cell</span><span id="ooff">–</span><span>Locked value</span><span id="olock">–</span></div>
+          <div class="row"><button class="primary" id="lockOff" disabled>Lock offset</button></div>
+          <div class="row" style="margin-top:10px"><label>Or type mm<input type="number" id="offTyped" step="0.01"></label><button class="sm" id="lockTyped">Lock typed</button></div>
+          <p class="note">Scribe Z = cell contact Z + offset. The offset is normally negative because the glass is lower than the cell.</p>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ============ SERVO ============ -->
+  <div class="panel stack" id="p-servo" hidden>
+    <div class="card">
+      <h2>Gripper servo</h2>
+      <p class="note" style="margin-top:0"><b class="warn">First run:</b> no swab in the jaws and the jaws clear of everything. Small moves first.</p>
+      <div class="row" style="justify-content:space-between;align-items:center;margin-top:10px">
+        <div><span class="big" id="pulse">–</span> <span class="muted mono">µs</span></div>
+        <span class="chip" id="servoReal"></span>
+      </div>
+      <input type="range" id="slider" min="600" max="2400" step="1" style="margin-top:12px">
+      <div class="row" style="margin-top:10px" id="nudges"></div>
+      <div class="row" style="margin-top:12px"><button class="gold" id="sendPulse">Move servo to this value</button><button id="relTorque">Release torque</button></div>
+    </div>
+    <div class="card">
+      <p class="label">Lock the two states</p>
+      <div class="two">
+        <div><div class="kv"><span>OPEN locked</span><span id="lkOpen">–</span></div><div class="row" style="margin-top:10px"><button class="primary" id="lockOpen">Lock current as OPEN</button></div></div>
+        <div><div class="kv"><span>CLOSED locked</span><span id="lkClosed">–</span></div><div class="row" style="margin-top:10px"><button class="primary" id="lockClosed">Lock current as CLOSED</button></div></div>
+      </div>
+      <p class="note">Find the value where the jaws are fully open, lock it. Then find where they grip a swab firmly without crushing it, lock that. Locked values are saved to the calibration file and used by every job.</p>
+      <div class="row" style="margin-top:12px"><button id="testOpen">Test OPEN</button><button id="testClosed">Test CLOSED</button></div>
+      <p class="note" id="servoNote"></p>
+    </div>
+  </div>
+
+  <!-- ============ SLIDE ============ -->
+  <div class="panel stack" id="p-slide" hidden>
+    <div class="card">
+      <h2>Slide corner and size</h2>
+      <p class="note" style="margin-top:0">Jog the tip to the top-left corner of the glass as closely as you can, capture it, then trace the square to check it by eye.</p>
+      <div class="two" style="margin-top:14px">
+        <div>
+          <div class="row"><label>Slot<select id="slot"></select></label><span class="chip" id="slotChip"></span></div>
+          <div class="row" style="margin-top:12px">
+            <button class="primary" id="capCorner">Capture top-left corner</button>
+            <button id="goCorner">Go to corner</button>
+          </div>
+          <p class="label" style="margin-top:18px">Dimensions</p>
+          <div class="row">
+            <label>Width mm<input type="number" id="sw" step="0.1" min="1"></label>
+            <label>Length mm<input type="number" id="sl" step="0.1" min="1"></label>
+            <label>Pattern square mm<input type="number" id="sp" step="0.1" min="1"></label>
+          </div>
+          <div class="row" style="margin-top:10px"><button class="gold" id="saveSize">Save dimensions</button></div>
+          <p class="note" id="sizeNote"></p>
+        </div>
+        <div><svg id="svg" viewBox="0 0 100 100" style="width:100%;height:300px"></svg></div>
+      </div>
+    </div>
+    <div class="card">
+      <p class="label">Trace it · XY only, Z stays where it is</p>
+      <div class="row" style="align-items:flex-end">
+        <label>Speed mm/s<input type="number" id="ts" value="15" min="1" max="100"></label>
+        <button class="gold" id="trPat">Trace pattern square</button>
+        <button class="gold" id="trOut">Trace slide outline</button>
+      </div>
+      <p class="note">Raise Z so the tip hovers just above the glass first. The tip walks the four corners and returns to the start. E-STOP cancels.</p>
+      <table style="margin-top:12px"><thead><tr><th>Corner</th><th>Pattern X</th><th>Pattern Y</th><th>Slide X</th><th>Slide Y</th></tr></thead><tbody id="coords"></tbody></table>
+      <p class="note" id="mapNote"></p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <p class="label">Activity</p>
+    <div id="log"></div>
+  </div>
+</section>
+</div></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const fmt=(v,d=3)=>v==null||Number.isNaN(+v)?'–':(+v).toFixed(d);
+const S={pos:null,homed:'',busy:false,floor:null,allowZHome:false,dev:null,step:1,tab:'cell',cal:null,grip:null,pulse:1500,slide:null,slot:1,tared:null,scaled:null,watching:false,probe:null};
+const LS={get(k,d){try{const v=localStorage.getItem('papa.'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem('papa.'+k,JSON.stringify(v))}catch(e){}}};
+
+async function api(path,body){
+  const r=await fetch(path,body===undefined?undefined:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  let j={};try{j=await r.json()}catch(e){}
+  if(!r.ok){const m=j.error||j.detail||('HTTP '+r.status);throw new Error(typeof m==='string'?m:JSON.stringify(m))}
+  return j;
+}
+const post=(p,b)=>api(p,b||{});
+function log(t,c){const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+'  '+t;if(c)d.className=c;const L=$('#log');L.prepend(d);while(L.children.length>40)L.lastChild.remove()}
+function say(t,c){const m=$('#msg');m.textContent=t;m.className=c||''}
+async function run(label,fn){
+  if(S.busy)return;
+  S.busy=true;say('');paint();
+  try{const r=await fn();log(label,'good');return r}
+  catch(e){say(String(e.message||e),'err');log(label+' failed: '+(e.message||e),'err')}
+  finally{S.busy=false;paint()}
+}
+
+/* ---------- state refresh ---------- */
+function setPos(p){S.pos=[p.x,p.y,p.z];S.homed=p.homed||''}
+async function poll(){
+  try{
+    setPos(await api('/api/machine/position'));
+    const g=await api('/api/guard');S.floor=g.floor;S.allowZHome=g.allow_z_home;
+  }catch(e){S.pos=null}
+  paint();
+}
+async function loadDev(){try{S.dev=await api('/api/devices')}catch(e){S.dev=null}paint()}
+async function loadCal(){try{S.cal=await api('/api/calibration')}catch(e){}paintCell();paintOffset();paintServo()}
+async function loadGrip(){try{S.grip=await api('/api/gripper');if(S.grip.pulse_us)S.pulse=S.grip.pulse_us;else if(S.grip.locked)S.pulse=S.grip.locked.open_us}catch(e){S.grip=null;$('#servoNote').textContent='Servo unavailable: '+e.message}paintServo()}
+async function loadSlide(){try{S.slide=await api('/api/slide?slot='+S.slot)}catch(e){}paintSlide()}
+
+/* ---------- paint ---------- */
+function chipFor(id,name,d,extra){
+  const c=$(id);if(!d){c.className='chip warn';c.textContent=name+' · ?';return}
+  c.className='chip '+(d.error?'bad':d.real?'ok':'warn');
+  c.textContent=name+' · '+(d.error?'UNAVAILABLE':d.real?'REAL':'MOCK')+(extra||'');
+}
+function paint(){
+  ['x','y','z'].forEach((a,i)=>{$('#p'+a).textContent=S.pos?fmt(S.pos[i]):'–'});
+  const homedAll=['x','y','z'].every(a=>S.homed.includes(a));
+  $('#cHome').className='chip '+(homedAll?'ok':'bad');
+  $('#cHome').textContent=S.pos?(homedAll?'Homed XYZ':'Homed: '+(S.homed.toUpperCase()||'none')):'Printer unreachable';
+  $('#cFloor').className='chip '+(S.floor==null?'bad':'ok');
+  $('#cFloor').textContent=S.floor==null?'Z floor not set':'Z floor '+fmt(S.floor,2);
+  $('#floorv').textContent=S.floor==null?'not set':fmt(S.floor,3)+' mm';
+  if(S.dev){
+    const d=S.dev.devices;chipFor('#cPrinter','Printer',d.printer,d.printer.reachable===false?' (no answer)':'');
+    chipFor('#cCell','Load cell',d.loadcell);chipFor('#cServo','Servo',d.gripper);
+    $('#cellReal').className=$('#cCell').className;$('#cellReal').textContent=d.loadcell.real?'REAL reading':'MOCK · not a real reading';
+    $('#servoReal').className=$('#cServo').className;$('#servoReal').textContent=d.gripper.real?'REAL servo':'MOCK · nothing will move';
+  }
+  const off=S.busy||!S.pos;
+  document.querySelectorAll('.jogbtn').forEach(b=>b.disabled=off);
+  $('#zdn').disabled=off||S.floor==null;
+  $('#hXY').disabled=off;$('#hZ').disabled=off||!S.allowZHome;
+  ['allowDown','setTyped','setFloor','clrFloor','capXY','goXY','capZ','saveZ','probe','useCellNow','useGlassNow','capCorner','goCorner','trPat','trOut','saveSize','tare','scale','relTorque','sendPulse','lockOpen','lockClosed','testOpen','testClosed','lockTyped','lockOff'].forEach(i=>{const b=$('#'+i);if(b)b.disabled=off||(i==='lockOff'&&offsetValue()==null)})
+  $('#hzNote').textContent=S.allowZHome?'Z homing unlocked. Clear the area first.':'Home Z is locked: the last Z home stalled the motors. Home Z from Mainsail once its switch and config are verified, or start the server with PAPA_ALLOW_Z_HOME=1.';
+  paintProbeReady();
+}
+function lcCal(){return (S.cal&&S.cal.load_cell)||{}}
+function paintCell(){
+  const l=lcCal(),set=l.xy_set,zset=l.z_safe_set;
+  $('#lcPos').innerHTML=`<span>XY</span><span class="${set?'good':'warn'}">${set?`X ${fmt(l.x,2)}  Y ${fmt(l.y,2)}`:'not captured yet'}</span><span>Probe start Z</span><span class="${zset?'good':'warn'}">${zset?fmt(l.z_safe,2)+' mm':'not set yet'}</span>`;
+  if(zset&&document.activeElement!==$('#zs'))$('#zs').value=l.z_safe;
+  const z=S.dev&&S.dev.zcal;
+  $('#probeNote').textContent=z?`Steps down ${z.step_mm} mm at a time from the start Z, up to ${z.max_travel_mm} mm. Accepts contact at ${z.target_force_g} g, aborts at ${z.abort_force_g} g. Tares the cell first.`:'';
+  paintProbeReady();
+}
+function paintProbeReady(){
+  const l=lcCal(),homedAll=['x','y','z'].every(a=>S.homed.includes(a));
+  const items=[['Z floor set',S.floor!=null],['Homed XYZ',homedAll],['Load cell XY captured',!!l.xy_set],['Probe start Z set',!!l.z_safe_set],['Start Z above floor',!!l.z_safe_set&&S.floor!=null&&l.z_safe>=S.floor],['Swab gripped',$('#gripped')&&$('#gripped').checked]];
+  $('#probeReady').innerHTML=items.map(([t,ok])=>`<span class="chip ${ok?'ok':'warn'}">${ok?'✓':'○'} ${t}</span>`).join('');
+  if($('#probe'))$('#probe').disabled=S.busy||!S.pos||!items.every(i=>i[1]);
+}
+function paintOffset(){
+  const cz=LS.get('cellZ',null),gz=LS.get('glassZ',null);
+  $('#ocZ').textContent=cz==null?'not set':fmt(cz,3)+' mm';$('#ogZ').textContent=gz==null?'not set':fmt(gz,3)+' mm';
+  const off=cz!=null&&gz!=null?gz-cz:null;
+  $('#ooff').textContent=off==null?'–':fmt(off,3)+' mm';
+  const lk=S.cal&&S.cal.slide_surface_offset_mm;
+  $('#olock').textContent=lk==null?'–':fmt(lk,3)+' mm';
+  $('#lockOff').disabled=S.busy||!S.pos||off==null;
+}
+const offsetValue=()=>{const cz=LS.get('cellZ',null),gz=LS.get('glassZ',null);return cz!=null&&gz!=null?gz-cz:null};
+function paintServo(){
+  $('#pulse').textContent=S.pulse;$('#slider').value=S.pulse;
+  if(S.grip){$('#slider').min=S.grip.min_us;$('#slider').max=S.grip.max_us;
+    $('#lkOpen').textContent=S.grip.locked.open_us+' µs';$('#lkClosed').textContent=S.grip.locked.closed_us+' µs'}
+}
+function paintSlide(){
+  const sl=S.slide;if(!sl)return;
+  const sel=$('#slot');
+  if(!sel.options.length||sel.options.length!==sl.grid[0]*sl.grid[1]){
+    sel.innerHTML='';for(let i=1;i<=sl.grid[0]*sl.grid[1];i++){const o=document.createElement('option');o.value=i;o.textContent=i;sel.appendChild(o)}
+  }
+  [...sel.options].forEach(o=>{const s=sl.slots.find(s=>s.id==o.value);o.textContent=o.value+(s&&s.calibrated?'  ✓':'')});
+  sel.value=S.slot;
+  const cal=sl.slot&&sl.slot.calibrated;
+  $('#slotChip').className='chip '+(cal?'ok':'warn');$('#slotChip').textContent=cal?`corner X ${fmt(sl.slot.x,2)} Y ${fmt(sl.slot.y,2)}`:'corner not captured';
+  const sub=sl.substrate;
+  for(const [id,k] of [['sw','width_mm'],['sl','length_mm'],['sp','pattern_size_mm']])if(document.activeElement!==$('#'+id))$('#'+id).value=sub[k];
+  $('#mapNote').textContent=`Slide origin is the top-left corner. Local +x runs to machine ${sl.axes.local_x}, local +y to machine ${sl.axes.local_y}. Change this in machine.yaml if the slide sits rotated.`;
+  $('#sizeNote').textContent=sl.fits?'':'The pattern square is larger than the slide.';
+  $('#sizeNote').className='note '+(sl.fits?'':'err');
+  const W=sub.width_mm,L=sub.length_mm,P=sub.pattern_size_mm,pad=Math.max(W,L)*.18,fs=Math.max(W,L)*.055;
+  $('#svg').setAttribute('viewBox',`${-pad} ${-pad} ${W+pad*2} ${L+pad*1.6}`);
+  $('#svg').innerHTML=`<rect x="0" y="0" width="${W}" height="${L}" rx="1" fill="rgba(76,155,232,.10)" stroke="#4C9BE8" stroke-width="${fs*.12}"/>
+  <rect x="0" y="0" width="${P}" height="${P}" fill="rgba(217,180,90,.22)" stroke="#D9B45A" stroke-width="${fs*.1}" stroke-dasharray="${fs*.4} ${fs*.25}"/>
+  <circle cx="0" cy="0" r="${fs*.35}" fill="#D9B45A"/>
+  <text x="${fs*.7}" y="${-fs*.5}" font-size="${fs}">top-left corner (0, 0)</text>
+  <text x="${W/2}" y="${L+fs*1.4}" font-size="${fs}" text-anchor="middle">${fmt(W,1)} mm</text>
+  <text x="${W+fs*.5}" y="${L/2}" font-size="${fs}" transform="rotate(90 ${W+fs*.5} ${L/2})" text-anchor="middle">${fmt(L,1)} mm</text>
+  <text x="${P/2}" y="${P/2+fs*.3}" font-size="${fs}" text-anchor="middle" style="fill:#D9B45A">${fmt(P,1)} mm</text>`;
+  const o=sl.slot;
+  $('#coords').innerHTML=o?['top-left','top-right','bottom-right','bottom-left'].map((n,i)=>`<tr><td>${n}</td><td>${fmt(o.pattern[i][0],2)}</td><td>${fmt(o.pattern[i][1],2)}</td><td>${fmt(o.outline[i][0],2)}</td><td>${fmt(o.outline[i][1],2)}</td></tr>`).join(''):'<tr><td colspan="5" class="muted">Capture the corner to see machine coordinates.</td></tr>';
+}
+
+/* ---------- jog ---------- */
+const STEPS=[0.05,0.1,1,10,50];
+STEPS.forEach(v=>{const b=document.createElement('button');b.textContent=(v<1?v.toFixed(2):v)+' mm';if(v===S.step)b.className='on';
+  b.onclick=()=>{S.step=v;[...$('#steps').children].forEach(c=>c.className='');b.className='on'};$('#steps').appendChild(b)});
+async function jog(dx,dy,dz){
+  const speed=dz?+$('#fz').value:+$('#fxy').value;
+  await run(`jog ${dx?'X'+(dx>0?'+':'−'):''}${dy?'Y'+(dy>0?'+':'−'):''}${dz?'Z'+(dz>0?'+':'−'):''} ${S.step}`,async()=>{setPos(await post('/api/machine/jog',{dx,dy,dz,speed_mm_s:speed}));say('')});
+}
+const padEl=$('#pad');
+[[0,0],['↑',[0,1]],[0,0],['←',[-1,0]],[0,0],['→',[1,0]],[0,0],['↓',[0,-1]],[0,0]].forEach(([l,v],i)=>{
+  if(!v){const d=document.createElement('div');if(i===4){d.textContent='XY';d.style.cssText='display:flex;align-items:center;justify-content:center;color:var(--muted);font:12px IBM Plex Mono,monospace'}padEl.appendChild(d);return}
+  const b=document.createElement('button');b.className='jogbtn';b.textContent=l;b.setAttribute('aria-label',{'↑':'Y plus','↓':'Y minus','←':'X minus','→':'X plus'}[l]);
+  b.onclick=()=>jog(v[0]*S.step,v[1]*S.step,0);padEl.appendChild(b)});
+$('#zup').className='jogbtn';$('#zup').onclick=()=>jog(0,0,S.step);$('#zdn').onclick=()=>jog(0,0,-S.step);
+$('#hXY').onclick=()=>{if(confirm('Home X and Y? Clear the toolhead area first.'))run('home XY',async()=>{setPos(await post('/api/machine/home',{axes:'X Y'}))})};
+$('#hZ').onclick=()=>{if(confirm('Home Z? Keep a hand on E-STOP.'))run('home Z',async()=>{setPos(await post('/api/machine/home',{axes:'Z'}))})};
+$('#estop').onclick=async()=>{try{await post('/api/machine/estop');say('Emergency stop sent. Restart firmware (Mainsail) and re-home.','err');log('E-STOP','err')}catch(e){say(String(e.message||e),'err')}};
+
+/* ---------- Z floor ---------- */
+async function putFloor(z,what){
+  if(!Number.isFinite(z)){say('Enter a number','err');return}
+  if(!confirm(`Set the Z floor to ${z.toFixed(3)} mm (${what})?`))return;
+  await run('Z floor '+z.toFixed(3),async()=>{const g=await post('/api/guard/floor',{z});S.floor=g.floor;say('Z floor set.','good')});
+}
+$('#allowDown').onclick=()=>{if(!S.pos)return;const d=Math.max(.5,Math.min(50,+$('#fd').value||5));putFloor(Math.max(0,S.pos[2]-d),`${d} mm below current Z ${S.pos[2].toFixed(3)}`)};
+$('#setTyped').onclick=()=>putFloor(parseFloat($('#ft').value),'typed');
+$('#setFloor').onclick=()=>{if(S.pos)putFloor(S.pos[2],'current Z')};
+$('#clrFloor').onclick=()=>run('Z floor cleared',async()=>{const g=await post('/api/guard/floor',{z:null});S.floor=g.floor;say('Z floor cleared. Z down is blocked.','warn')});
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  S.tab=t.dataset.tab;document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected',x===t));
+  ['cell','offset','servo','slide'].forEach(n=>$('#p-'+n).hidden=n!==S.tab);
+  if(S.tab!=='cell')setWatch(false);
+  if(S.tab==='servo')loadGrip();if(S.tab==='slide')loadSlide();if(S.tab==='offset'){loadCal()}
+});
+
+/* ---------- load cell ---------- */
+let wt=null;
+function setWatch(on){S.watching=on;$('#watch').textContent=on?'Stop watching':'Watch force';clearInterval(wt);if(on)wt=setInterval(readForce,350)}
+async function readForce(){
+  try{const d=await api('/api/loadcell');showForce(d.grams)}catch(e){setWatch(false);$('#forceNote').textContent='Load cell unavailable: '+e.message}
+}
+function showForce(g){
+  $('#grams').textContent=fmt(g,2);const z=S.dev&&S.dev.zcal,ab=z?z.abort_force_g:20,tg=z?z.target_force_g:5;
+  const b=$('#forceBar');b.style.width=Math.max(0,Math.min(100,g/ab*100))+'%';b.style.background=g>=ab?'#FF6B5E':g>=tg?'#D9B45A':'#4FD08A';
+  $('#forceNote').textContent=`target ${tg} g · abort ${ab} g`;
+}
+$('#watch').onclick=()=>{setWatch(!S.watching);if(S.watching)readForce()};
+$('#tare').onclick=()=>run('tare',async()=>{const r=await post('/api/loadcell/tare');S.tared=r.tare_counts;$('#scaleNote').textContent='Tared at '+r.tare_counts+' counts. Unload the cell first.';$('#saveScale').disabled=S.scaled==null;await readForce()});
+$('#scale').onclick=()=>run('scale',async()=>{
+  const g=+$('#kw').value;if(!(g>0))throw new Error('Enter the known weight in grams');
+  const r=await post('/api/loadcell/scale',{grams:g});S.scaled=r.scale_counts_per_g;
+  $('#scaleNote').textContent=`Scale ${fmt(S.scaled,4)} counts per gram. Tare with the cell empty first, then place ${g} g on it before pressing Calibrate scale.`;
+  $('#saveScale').disabled=S.tared==null;await readForce()});
+$('#saveScale').onclick=()=>run('save tare + scale',async()=>{await post('/api/loadcell/save_scale',{tare_counts:S.tared,scale_counts_per_g:S.scaled});await loadCal();$('#scaleNote').textContent='Saved to the calibration file.'});
+$('#capXY').onclick=()=>run('load cell XY captured',async()=>{await post('/api/loadcell/position',{capture_xy:true});await loadCal()});
+$('#goXY').onclick=()=>run('go to load cell XY',async()=>{const l=lcCal();if(!l.xy_set)throw new Error('Capture the load cell XY first');setPos(await post('/api/machine/move',{x:l.x,y:l.y,speed_mm_s:+$('#fxy').value}))});
+$('#capZ').onclick=()=>{if(S.pos)$('#zs').value=S.pos[2].toFixed(3)};
+$('#saveZ').onclick=()=>run('probe start Z saved',async()=>{const v=parseFloat($('#zs').value);if(!Number.isFinite(v))throw new Error('Enter the probe start Z');await post('/api/loadcell/position',{z_safe:v});await loadCal()});
+$('#gripped').onchange=paintProbeReady;
+$('#probe').onclick=()=>{if(!confirm('Probe the load cell now? The head moves to the cell and steps down. Keep a hand on E-STOP.'))return;
+  run('probe',async()=>{const r=await post('/api/loadcell/probe');S.probe=r;LS.set('lastProbe',r);
+    $('#probeOut').innerHTML=`<span>Contact Z</span><span class="good">${fmt(r.contact_z,3)} mm</span><span>Force at contact</span><span>${fmt(r.force_g,2)} g</span><span>Steps</span><span>${r.steps}</span>`;
+    LS.set('cellZ',r.contact_z);paintOffset();setPos(await api('/api/machine/position'))})};
+
+/* ---------- glass offset ---------- */
+$('#useProbe').onclick=()=>{const r=S.probe||LS.get('lastProbe',null);if(!r){say('No probe result yet. Run the probe on the Load cell tab.','err');return}LS.set('cellZ',r.contact_z);paintOffset()};
+$('#useCellNow').onclick=()=>{if(S.pos){LS.set('cellZ',S.pos[2]);paintOffset()}};
+$('#useGlassNow').onclick=()=>{if(S.pos){LS.set('glassZ',S.pos[2]);paintOffset()}};
+async function lockOffset(v){
+  if(!confirm(`Lock the glass offset at ${v.toFixed(3)} mm?\nScribe Z = cell contact Z + ${v.toFixed(3)}`))return;
+  await run('glass offset '+v.toFixed(3),async()=>{await post('/api/calibration/surface_offset',{offset_mm:v});await loadCal()});
+}
+$('#lockOff').onclick=()=>{const v=offsetValue();if(v!=null)lockOffset(v)};
+$('#lockTyped').onclick=()=>{const v=parseFloat($('#offTyped').value);if(Number.isFinite(v))lockOffset(v);else say('Enter an offset','err')};
+
+/* ---------- servo ---------- */
+function setPulse(v,send){
+  const lo=S.grip?S.grip.min_us:600,hi=S.grip?S.grip.max_us:2400;
+  S.pulse=Math.max(lo,Math.min(hi,Math.round(v)));paintServo();if(send)sendPulse();
+}
+function sendPulse(){return run('servo '+S.pulse+' µs',async()=>{S.grip=await post('/api/gripper/pulse',{us:S.pulse});paintServo()})}
+[-100,-25,-5,5,25,100].forEach(d=>{const b=document.createElement('button');b.className='sm';b.textContent=(d>0?'+':'')+d;b.onclick=()=>setPulse(S.pulse+d,true);$('#nudges').appendChild(b)});
+$('#slider').oninput=e=>{S.pulse=+e.target.value;$('#pulse').textContent=S.pulse};
+$('#slider').onchange=e=>setPulse(+e.target.value,true);
+$('#sendPulse').onclick=sendPulse;
+$('#relTorque').onclick=()=>run('servo released',async()=>{S.grip=await post('/api/gripper/release');paintServo()});
+async function lockServo(which){
+  if(!confirm(`Lock ${S.pulse} µs as ${which.toUpperCase()}?`))return;
+  await run(`servo ${which} locked ${S.pulse}`,async()=>{S.grip=await post('/api/gripper/lock',{which,us:S.pulse});paintServo();$('#servoNote').textContent=S.grip.warning||'Locked and saved.';$('#servoNote').className='note '+(S.grip.warning?'warn':'good')});
+}
+$('#lockOpen').onclick=()=>lockServo('open');$('#lockClosed').onclick=()=>lockServo('closed');
+$('#testOpen').onclick=()=>run('servo test OPEN',async()=>{await post('/api/gripper/open');await loadGrip()});
+$('#testClosed').onclick=()=>run('servo test CLOSED',async()=>{await post('/api/gripper/close');await loadGrip()});
+
+/* ---------- slide ---------- */
+$('#slot').onchange=e=>{S.slot=+e.target.value;loadSlide()};
+$('#capCorner').onclick=()=>{if(!confirm(`Capture the current X/Y as the top-left corner of slot ${S.slot}?`))return;run('corner captured, slot '+S.slot,async()=>{S.slide=await post('/api/slide/corner',{id:S.slot});paintSlide()})};
+$('#goCorner').onclick=()=>run('go to corner',async()=>{const s=S.slide&&S.slide.slot;if(!s||!s.calibrated)throw new Error('Capture this slot\'s corner first');setPos(await post('/api/machine/move',{x:s.x,y:s.y,speed_mm_s:+$('#fxy').value}))});
+$('#saveSize').onclick=()=>run('slide size saved',async()=>{S.slide=await post('/api/slide/size',{slot:S.slot,width_mm:+$('#sw').value,length_mm:+$('#sl').value,pattern_size_mm:+$('#sp').value});paintSlide()});
+function trace(which){if(!confirm(`Trace the ${which} at Z ${fmt(S.pos&&S.pos[2],2)}? The head moves in XY only.`))return;
+  run('trace '+which,async()=>{setPos(await post('/api/slide/trace',{id:S.slot,which,speed_mm_s:+$('#ts').value}))})}
+$('#trPat').onclick=()=>trace('pattern');$('#trOut').onclick=()=>trace('outline');
+
+/* ---------- start ---------- */
+setInterval(()=>{if(!S.busy)poll()},1500);
+setInterval(loadDev,15000);
+(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint()})();
+</script>
+</body>
+</html>

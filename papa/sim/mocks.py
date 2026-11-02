@@ -149,9 +149,18 @@ class MockGripper:
     log: list[str] = field(default_factory=list)
     fail_next: bool = False
     state: str = "unknown"
+    open_us: int = 1000
+    closed_us: int = 2000
+    pulse_us: int | None = None
+
+    def pulse(self, width_us: int) -> None:
+        self.log.append(f"pulse {int(width_us)}")
+        self.pulse_us = int(width_us)
+        self.state = "manual"
 
     def open(self) -> None:
         self.log.append("open")
+        self.pulse_us = self.open_us
         self.state = "open"
 
     def close(self) -> None:
@@ -160,6 +169,7 @@ class MockGripper:
             self.fail_next = False
             self.state = "failed"
             return
+        self.pulse_us = self.closed_us
         self.state = "closed"
 
     def release(self) -> None:
