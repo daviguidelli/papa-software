@@ -166,3 +166,57 @@ def test_saving_never_turns_sim_values_into_the_real_calibration(api):
     api.post("/api/calibration/surface_offset", json={"offset_mm": -1})
     assert saved(api)["swab_rack"]["swabs"][0]["x"] == 112.40          # example file, not sim's 112.4/30.0 set
     assert len(saved(api)["slide_slots"]["slots"]) == 1
+
+
+# ---------- live camera ----------
+
+def test_snapshot_is_a_jpeg_and_respects_width(api):
+    import cv2
+    import numpy as np
+
+    r = api.get("/api/camera/snapshot?width=640")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert r.content[:2] == b"\xff\xd8"
+    img = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+    assert img.shape[1] == 640 and img.shape[0] == 360          # 16:9 kept
+
+
+def test_stream_is_multipart_and_carries_several_frames(api):
+    with api.stream("GET", "/api/camera/stream?width=320&fps=15&frames=3") as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("multipart/x-mixed-replace; boundary=frame")
+        body = b"".join(r.iter_bytes())
+    assert body.count(b"--frame") == 3 and body.count(b"\xff\xd8") >= 3
+
+
+def test_stream_slot_is_released_after_the_client_finishes(api):
+    for _ in range(6):                                           # more than MAX_STREAMS
+        with api.stream("GET", "/api/camera/stream?width=160&frames=1") as r:
+            assert r.status_code == 200
+            b"".join(r.iter_bytes())
+
+
+def test_missing_camera_is_a_clean_503(api):
+    def boom():
+        raise RuntimeError("no libcamera on this machine")
+    api.server.hub.devices["camera"] = api.server.Device("camera", boom)
+    r = api.get("/api/camera/stream")
+    assert r.status_code == 503 and "no libcamera" in r.json()["error"]
+    assert api.get("/api/camera/snapshot").status_code == 503
+
+
+def test_remote_camera_host_down_is_a_502_not_a_hang(api, monkeypatch):
+    monkeypatch.setenv("PAPA_CAMERA_URL", "http://127.0.0.1:9")
+    for path in ("/api/camera/snapshot", "/api/camera/stream"):
+        r = api.get(path)
+        assert r.status_code == 502 and "unreachable" in r.json()["error"]
+    assert api.get("/api/devices").json()["devices"]["camera"]["remote"] == "http://127.0.0.1:9"
+
+
+def test_locked_camera_passes_attributes_through():
+    from papa.hw.camera import LockedCamera
+    from papa.sim.mocks import MockCamera
+
+    cam = LockedCamera(MockCamera())
+    cam.slide_slots = (1, 2)
+    assert cam._inner.slide_slots == (1, 2) and cam.frame().shape == (1080, 1920, 3)

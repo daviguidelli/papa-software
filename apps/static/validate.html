@@ -88,6 +88,7 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
   <span class="chip" id="cPrinter">Printer</span>
   <span class="chip" id="cCell">Load cell</span>
   <span class="chip" id="cServo">Servo</span>
+  <span class="chip" id="cCam">Camera</span>
   <span class="chip bad" id="cHome">Not homed</span>
   <span class="chip bad" id="cFloor">Z floor not set</span>
   <button class="danger" id="estop">E-STOP</button>
@@ -144,6 +145,7 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
     <button class="tab" role="tab" data-tab="offset" aria-selected="false">Glass offset</button>
     <button class="tab" role="tab" data-tab="servo" aria-selected="false">Servo</button>
     <button class="tab" role="tab" data-tab="slide" aria-selected="false">Slide</button>
+    <button class="tab" role="tab" data-tab="cam" aria-selected="false">Camera</button>
   </nav>
 
   <!-- ============ LOAD CELL ============ -->
@@ -284,6 +286,28 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
     </div>
   </div>
 
+  <!-- ============ CAMERA ============ -->
+  <div class="panel stack" id="p-cam" hidden>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Live footage</h2><span class="chip" id="camReal"></span>
+      </div>
+      <div style="position:relative;margin-top:12px;background:#000;border:1px solid var(--line);border-radius:4px;min-height:260px">
+        <img id="live" alt="Live camera view" style="width:100%;display:block">
+        <svg id="camGridOv" hidden viewBox="0 0 3 3" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"><path d="M1 0V3M2 0V3M0 1H3M0 2H3" stroke="rgba(217,180,90,.45)" stroke-width="1" vector-effect="non-scaling-stroke" fill="none"/><path d="M1.5 0V3M0 1.5H3" stroke="rgba(255,255,255,.7)" stroke-width="1" vector-effect="non-scaling-stroke" fill="none"/></svg>
+        <div id="camMsg" class="muted mono" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;font-size:13px"></div>
+      </div>
+      <div class="row" style="margin-top:12px;align-items:flex-end">
+        <label>Width px<select id="camW"><option>640</option><option selected>960</option><option>1280</option><option>1920</option></select></label>
+        <label>Frames/s<select id="camF"><option>2</option><option>5</option><option selected>8</option><option>12</option></select></label>
+        <label style="flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="camGrid"> Grid</label>
+        <button id="camToggle">Pause</button>
+        <button class="gold" id="camSnap">Save snapshot</button>
+      </div>
+      <p class="note">The stream runs only while this tab is open. The stamp burned into the bottom-left says REAL, MOCK or REMOTE, the time, and the size of the source frame, so a frozen picture or a mocked camera is obvious. Focus is the manual ring on the lens. Lower the width or frame rate if the picture lags over Wi-Fi.</p>
+    </div>
+  </div>
+
   <div class="card" style="margin-top:16px">
     <p class="label">Activity</p>
     <div id="log"></div>
@@ -348,6 +372,9 @@ function paint(){
     chipFor('#cCell','Load cell',d.loadcell);chipFor('#cServo','Servo',d.gripper);
     $('#cellReal').className=$('#cCell').className;$('#cellReal').textContent=d.loadcell.real?'REAL reading':'MOCK · not a real reading';
     $('#servoReal').className=$('#cServo').className;$('#servoReal').textContent=d.gripper.real?'REAL servo':'MOCK · nothing will move';
+    const cam=d.camera,cc=$('#cCam');
+    if(cam.remote){cc.className='chip ok';cc.textContent='Camera · REMOTE'}else chipFor('#cCam','Camera',cam);
+    $('#camReal').className=cc.className;$('#camReal').textContent=cam.remote?'REMOTE · from '+cam.remote:cam.error?'UNAVAILABLE':cam.real?'REAL camera':'MOCK · synthetic picture';
   }
   const off=S.busy||!S.pos;
   document.querySelectorAll('.jogbtn').forEach(b=>b.disabled=off);
@@ -447,8 +474,9 @@ $('#clrFloor').onclick=()=>run('Z floor cleared',async()=>{const g=await post('/
 /* ---------- tabs ---------- */
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   S.tab=t.dataset.tab;document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected',x===t));
-  ['cell','offset','servo','slide'].forEach(n=>$('#p-'+n).hidden=n!==S.tab);
+  ['cell','offset','servo','slide','cam'].forEach(n=>$('#p-'+n).hidden=n!==S.tab);
   if(S.tab!=='cell')setWatch(false);
+  if(S.tab==='cam')camStart();else camStop();
   if(S.tab==='servo')loadGrip();if(S.tab==='slide')loadSlide();if(S.tab==='offset'){loadCal()}
 });
 
@@ -519,6 +547,31 @@ $('#saveSize').onclick=()=>run('slide size saved',async()=>{S.slide=await post('
 function trace(which){if(!confirm(`Trace the ${which} at Z ${fmt(S.pos&&S.pos[2],2)}? The head moves in XY only.`))return;
   run('trace '+which,async()=>{setPos(await post('/api/slide/trace',{id:S.slot,which,speed_mm_s:+$('#ts').value}))})}
 $('#trPat').onclick=()=>trace('pattern');$('#trOut').onclick=()=>trace('outline');
+
+/* ---------- camera ---------- */
+let camOn=false,camTimer=null;
+const camUrl=()=>`/api/camera/stream?width=${$('#camW').value}&fps=${$('#camF').value}&t=${Date.now()}`;
+function camMsg(t){const m=$('#camMsg');m.textContent=t||'';m.style.display=t?'flex':'none'}
+function camStart(){
+  camStop();camOn=true;camMsg('Connecting to the camera…');$('#camToggle').textContent='Pause';
+  $('#live').src=camUrl();
+  camTimer=setInterval(()=>{if($('#live').naturalWidth>0)camMsg('')},400);
+}
+function camStop(){camOn=false;clearInterval(camTimer);const i=$('#live');i.removeAttribute('src');$('#camToggle').textContent='Resume'}
+$('#live').onerror=async()=>{
+  if(!camOn)return;clearInterval(camTimer);let why='The stream stopped.';
+  try{const r=await fetch('/api/camera/snapshot?width=160');if(!r.ok){const j=await r.json();why=j.error||why}}catch(e){why='Cannot reach the server.'}
+  camMsg(why+'\nPress Resume to retry.');camOn=false;$('#camToggle').textContent='Resume';
+};
+$('#camToggle').onclick=()=>{if(camOn)camStop();else camStart()};
+$('#camW').onchange=$('#camF').onchange=()=>{if(S.tab==='cam')camStart()};
+$('#camGrid').onchange=e=>{$('#camGridOv').hidden=!e.target.checked};
+$('#camSnap').onclick=async()=>{
+  try{const r=await fetch('/api/camera/snapshot?width=1920');if(!r.ok){const j=await r.json();throw new Error(j.error||r.status)}
+    const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download='papa_camera_'+new Date().toISOString().replace(/[:.]/g,'-')+'.jpg';a.click();log('snapshot saved','good')}
+  catch(e){say(String(e.message||e),'err')}
+};
+document.addEventListener('visibilitychange',()=>{if(S.tab!=='cam')return;if(document.hidden)camStop();else camStart()});
 
 /* ---------- start ---------- */
 setInterval(()=>{if(!S.busy)poll()},1500);

@@ -56,11 +56,12 @@ def make_gripper(machine: Machine, cal: Calibration) -> Any:
     return ServoGripper(machine.pins["servo_pwm"], g["open_us"], g["closed_us"])
 
 
-def make_camera() -> Any:
+def make_camera(machine: Machine | None = None) -> Any:
     if not is_real("camera"):
         from papa.sim.mocks import MockCamera
 
         return MockCamera()
     from papa.hw.camera import PiCamera
 
-    return PiCamera()
+    size = (machine.raw.get("camera_size") if machine is not None else None) or [1920, 1080]
+    return PiCamera((int(size[0]), int(size[1])))

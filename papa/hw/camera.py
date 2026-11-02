@@ -5,7 +5,8 @@ just before each slide starts is all the state machine needs.
 """
 from __future__ import annotations
 
-from typing import Protocol
+import threading
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -33,3 +34,22 @@ class PiCamera:
 
     def close(self) -> None:
         self._cam.stop()
+
+
+class LockedCamera:
+    """One frame at a time. The live view and a scan share the one sensor, and
+    Picamera2 captures are not meant to overlap."""
+
+    def __init__(self, inner: Any) -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_lock", threading.Lock())
+
+    def frame(self) -> np.ndarray:
+        with self._lock:
+            return self._inner.frame()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._inner, name, value)

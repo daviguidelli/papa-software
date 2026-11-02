@@ -40,3 +40,16 @@ example file.
 3. Load cell: tare, scale, capture XY, set start Z, grip a swab, probe.
 4. Glass offset: use the probe result, touch the glass, lock the offset.
 5. Slide: capture the corner, set the size, trace the square.
+
+## Camera tab (live footage)
+
+Shows the Pi camera live in the browser. The stream (MJPEG) only runs while the tab is open.
+
+* **Pi-served page** (`http://<pi-ip>:8080/validate`): the camera is read directly on the Pi. Chip says REAL.
+* **Laptop-served page** (`PAPA_SIM=1 PAPA_REAL=printer python -m apps.server`): the camera is mocked unless you point it at the Pi:
+  `PAPA_CAMERA_URL=http://<pi-ip>:8080 PAPA_SIM=1 PAPA_REAL=printer python -m apps.server`
+  The laptop then proxies the Pi's stream and the chip says REMOTE. If the Pi is down you get a clear 502 message, not a hang.
+* A stamp burned into the frame shows REAL/MOCK/REMOTE, the time and the source frame size, so a frozen or fake picture is obvious.
+* Controls: width, frames/s, thirds grid with centre cross, pause/resume, **Save snapshot** (1920 px JPEG).
+* Max 3 simultaneous streams; the camera sits behind a lock so a stream and a snapshot never touch it at once.
+* Optional `camera_size: [w, h]` in `machine.yaml` sets the capture size (default 1920x1080). The teammate scripts (`camCal`, `substrateRecognition`) use the full 4056x3040 4:3 sensor, so the framing differs. Align the two before trusting pixel coordinates from one in the other.

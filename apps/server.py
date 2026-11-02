@@ -7,12 +7,15 @@ endpoints refuse, which is what stops someone jogging the gantry mid-scribe.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+import httpx
+from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from papa import config as cfgmod
@@ -23,7 +26,9 @@ from papa.ops.jobs import STATE_DIR, Job
 from papa.ops.machine import Orchestrator, Status
 from papa.ops.swabs import Rack
 from papa.ops.zcal import GripFailed, OverForce, calibrate_z
+from papa.hw.camera import LockedCamera
 from papa.hw.gripper import MAX_US, MIN_US
+from papa.vision.live import encode_jpeg
 from papa.toolpath import blocks as blockmod
 from papa.toolpath import dxf_loader, fit, spacing as spacingmod
 
@@ -85,7 +90,7 @@ class Hub:
                 lambda: make_loadcell(self.machine, self.cal, self.printer),
             ),
             "gripper": Device("gripper", lambda: make_gripper(self.machine, self.cal)),
-            "camera": Device("camera", make_camera),
+            "camera": Device("camera", lambda: LockedCamera(make_camera(self.machine))),
         }
         self.orch: Orchestrator | None = None
         self.thread: threading.Thread | None = None
@@ -132,6 +137,109 @@ def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
 
 
+# ---------- live camera ----------
+
+_streams = 0
+MAX_STREAMS = 3
+BOUNDARY = "frame"
+
+
+def _camera_host() -> str:
+    """Base URL of a Pi to take footage from, when this server has no camera of
+    its own (a laptop driving a real printer). Empty means use the local one."""
+    return os.environ.get("PAPA_CAMERA_URL", "").rstrip("/")
+
+
+def _grab_jpeg(width: int) -> bytes:
+    return encode_jpeg(hub.camera.frame(), width, "REAL" if cfgmod.is_real("camera") else "MOCK")
+
+
+async def _probe_host(base: str) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            r = await c.get(base + "/api/camera/snapshot", params={"width": 160})
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"camera host {base} is unreachable ({type(exc).__name__})") from exc
+    if r.status_code != 200:
+        raise HTTPException(502, f"camera host answered {r.status_code}: {r.text[:200]}")
+
+
+@app.get("/api/camera/snapshot")
+async def camera_snapshot(width: int = 1280) -> Response:
+    width = min(max(width, 160), 4056)
+    base = _camera_host()
+    if base:
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(base + "/api/camera/snapshot", params={"width": width})
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"camera host {base} is unreachable ({type(exc).__name__})") from exc
+        if r.status_code != 200:
+            raise HTTPException(502, f"camera host answered {r.status_code}")
+        jpeg = r.content
+    else:
+        jpeg = await asyncio.to_thread(_grab_jpeg, width)
+    return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/camera/stream")
+async def camera_stream(request: Request, width: int = 960, fps: float = 8.0,
+                        frames: int = 0) -> StreamingResponse:
+    """MJPEG for an <img>. `frames` caps the stream (0 is endless); tests use it."""
+    global _streams
+    width = min(max(width, 160), 1920)
+    fps = min(max(fps, 1.0), 15.0)
+    base = _camera_host()
+    if _streams >= MAX_STREAMS:
+        raise HTTPException(429, "too many live views open; close another tab")
+    if base:
+        await _probe_host(base)
+    else:
+        hub.camera          # builds it now, so a missing camera is a clean 503 with the reason
+
+    async def local() -> Any:
+        global _streams
+        _streams += 1
+        sent, period = 0, 1.0 / fps
+        try:
+            while not await request.is_disconnected():
+                t0 = time.monotonic()
+                try:
+                    jpeg = await asyncio.to_thread(_grab_jpeg, width)
+                except Exception:                                  # noqa: BLE001
+                    break
+                yield (f"--{BOUNDARY}\r\nContent-Type: image/jpeg\r\n"
+                       f"Content-Length: {len(jpeg)}\r\n\r\n").encode() + jpeg + b"\r\n"
+                sent += 1
+                if frames and sent >= frames:
+                    break
+                await asyncio.sleep(max(0.0, period - (time.monotonic() - t0)))
+        finally:
+            _streams -= 1
+
+    async def remote() -> Any:
+        global _streams
+        _streams += 1
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None)) as c:
+                async with c.stream("GET", base + "/api/camera/stream",
+                                    params={"width": width, "fps": fps, "frames": frames}) as r:
+                    async for chunk in r.aiter_raw():
+                        yield chunk
+        except httpx.HTTPError:
+            return
+        finally:
+            _streams -= 1
+
+    return StreamingResponse(
+        remote() if base else local(),
+        media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY}",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+# ---------- validation page ----------
+
 @app.get("/validate")
 def validate_page() -> FileResponse:
     return FileResponse(STATIC / "validate.html")
@@ -152,6 +260,7 @@ def devices() -> dict:
         detail = str(exc.detail)
     out = {name: d.describe() for name, d in hub.devices.items()}
     out["printer"].update(reachable=reachable, url=url)
+    out["camera"]["remote"] = os.environ.get("PAPA_CAMERA_URL", "").rstrip("/") or None
     if detail:
         out["printer"]["detail"] = detail
     return {"sim": cfgmod.sim_mode(), "devices": out,
