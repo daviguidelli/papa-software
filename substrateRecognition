@@ -167,14 +167,18 @@ def pair_markers(markers):
     candidates = []
 
     for i in range(len(markers)):
-        for j in range(i + 1, len(markers)):
+        for j in range(len(markers)):
+
+            if i == j:
+                continue
+
             a = markers[i]
             b = markers[j]
 
-            dx = abs(b["x"] - a["x"])
-            dy = abs(b["y"] - a["y"])
-
-            distance = float(np.hypot(dx, dy))
+            # a must be the upper-right marker
+            # b must be the lower-left marker
+            dx = a["x"] - b["x"]
+            dy = b["y"] - a["y"]
 
             if dx < MIN_DIAGONAL_DX:
                 continue
@@ -182,25 +186,21 @@ def pair_markers(markers):
             if dy < MIN_DIAGONAL_DY:
                 continue
 
+            distance = float(np.hypot(dx, dy))
+
             if distance > MAX_PAIR_DISTANCE:
                 continue
 
+            # Check expected marker spacing, if provided
             if EXPECTED_DX is not None:
-                if abs(dx - EXPECTED_DX) > (
-                    EXPECTED_DX * PAIR_TOLERANCE
-                ):
+                if abs(dx - EXPECTED_DX) > EXPECTED_DX * PAIR_TOLERANCE:
                     continue
 
             if EXPECTED_DY is not None:
-                if abs(dy - EXPECTED_DY) > (
-                    EXPECTED_DY * PAIR_TOLERANCE
-                ):
+                if abs(dy - EXPECTED_DY) > EXPECTED_DY * PAIR_TOLERANCE:
                     continue
 
-            if (
-                EXPECTED_DX is not None
-                and EXPECTED_DY is not None
-            ):
+            if EXPECTED_DX is not None and EXPECTED_DY is not None:
                 score = (
                     abs(dx - EXPECTED_DX) / EXPECTED_DX
                     + abs(dy - EXPECTED_DY) / EXPECTED_DY
@@ -215,7 +215,6 @@ def pair_markers(markers):
                 "score": score
             })
 
-    # Prefer the best available pairs
     candidates.sort(key=lambda c: c["score"])
 
     used = set()
@@ -225,7 +224,6 @@ def pair_markers(markers):
         i = candidate["i"]
         j = candidate["j"]
 
-        # A marker cannot belong to two substrates
         if i in used or j in used:
             continue
 
@@ -235,15 +233,9 @@ def pair_markers(markers):
         substrates.append({
             "marker_1": a,
             "marker_2": b,
-            "center_x": round(
-                (a["x"] + b["x"]) / 2, 2
-            ),
-            "center_y": round(
-                (a["y"] + b["y"]) / 2, 2
-            ),
-            "pair_distance_px": round(
-                candidate["distance"], 2
-            )
+            "center_x": round((a["x"] + b["x"]) / 2, 2),
+            "center_y": round((a["y"] + b["y"]) / 2, 2),
+            "pair_distance_px": round(candidate["distance"], 2)
         })
 
         used.add(i)
