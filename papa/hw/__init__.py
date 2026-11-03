@@ -53,7 +53,10 @@ def make_gripper(machine: Machine, cal: Calibration) -> Any:
     from papa.hw.gripper import ServoGripper
 
     g = cal.gripper
-    return ServoGripper(machine.pins["servo_pwm"], g["open_us"], g["closed_us"])
+    return ServoGripper(
+        machine.pins["servo_pwm"], g["open_us"], g["closed_us"],
+        calibrated=bool(g.get("open_set")) and bool(g.get("closed_set")),
+    )
 
 
 def make_camera(machine: Machine | None = None) -> Any:

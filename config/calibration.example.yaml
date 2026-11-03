@@ -35,7 +35,7 @@ disposal: {x: 10.00, y: 10.00, z_release: 20.00}
 # Links the two Z references: scribe Z = contact height + this offset.
 slide_surface_offset_mm: 0.0
 
-gripper: {open_us: 1000, closed_us: 2000}
+gripper: {open_us: 1000, closed_us: 2000, open_set: false, closed_set: false}
 
 # Width of film a swab actually removes at the working force. NOT derivable:
 # it depends on swab, force, speed and film, so it must be measured before any

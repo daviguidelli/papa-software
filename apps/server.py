@@ -27,7 +27,8 @@ from papa.ops.machine import Orchestrator, Status
 from papa.ops.swabs import Rack
 from papa.ops.zcal import GripFailed, OverForce, calibrate_z
 from papa.hw.camera import LockedCamera
-from papa.hw.gripper import MAX_US, MIN_US
+from papa.hw.gripper import MAX_US, MIN_US, GripperNotCalibrated
+from papa.ops.hold import HoldJog
 from papa.vision.live import encode_jpeg
 from papa.toolpath import blocks as blockmod
 from papa.toolpath import dxf_loader, fit, spacing as spacingmod
@@ -98,6 +99,8 @@ class Hub:
         self.strokes: list[Any] = []
         self.dxf_name = ""
         self.lock = threading.Lock()
+        self.hold = HoldJog(lambda: self.printer, self.machine, lambda: self.guard)
+        self.servo_window = [1300, 1700]
 
     @property
     def printer(self) -> Any:
@@ -122,6 +125,8 @@ class Hub:
     def require_idle(self) -> None:
         if self.busy:
             raise HTTPException(409, "a job is running; the hardware is busy")
+        if self.hold.active:
+            raise HTTPException(409, "release the held jog button first")
 
     def reload_calibration(self) -> None:
         self.cal = cfgmod.load_calibration()
@@ -454,8 +459,40 @@ def move(payload: dict) -> dict:
     return position()
 
 
+@app.post("/api/machine/hold")
+def hold_jog(payload: dict) -> dict:
+    """Heartbeat of a held jog button: keeps one axis moving while they keep coming."""
+    if hub.busy:
+        raise HTTPException(409, "a job is running; the hardware is busy")
+    p = hub.printer.position()
+    if not all(a in p.homed for a in "xy") and not payload.get("dz"):
+        raise HTTPException(400, "home X and Y first")
+    try:
+        hub.hold.beat(payload.get("dx", 0), payload.get("dy", 0), payload.get("dz", 0),
+                      payload.get("speed_mm_s", 0))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"moving": hub.hold.active, "why": hub.hold.stopped_because}
+
+
+@app.post("/api/machine/hold/stop")
+def hold_stop() -> dict:
+    hub.hold.stop()
+    why = hub.hold.stopped_because
+    hub.hold.reset()
+    p = hub.printer.position()
+    return {"moving": hub.hold.active, "why": why,
+            "x": p.x, "y": p.y, "z": p.z, "homed": p.homed, "is_homed": p.is_homed}
+
+
+@app.get("/api/machine/hold")
+def hold_state() -> dict:
+    return {"moving": hub.hold.active, "why": hub.hold.stopped_because}
+
+
 @app.post("/api/machine/estop")
 def estop() -> dict:
+    hub.hold.stop("emergency stop")
     hub.printer.emergency_stop()
     return {"ok": True}
 
@@ -513,6 +550,9 @@ def _grip_info() -> dict:
         "state": getattr(g, "state", "unknown"),
         "pulse_us": getattr(g, "pulse_us", None),
         "locked": {"open_us": cal["open_us"], "closed_us": cal["closed_us"]},
+        "open_set": bool(cal.get("open_set")), "closed_set": bool(cal.get("closed_set")),
+        "calibrated": bool(getattr(g, "calibrated", True)),
+        "window": list(hub.servo_window),
         "min_us": MIN_US, "max_us": MAX_US,
     }
 
@@ -522,13 +562,29 @@ def gripper_info() -> dict:
     return _grip_info()
 
 
+@app.post("/api/gripper/window")
+def gripper_window(payload: dict) -> dict:
+    """The only range manual pulses may use. Starts narrow around centre."""
+    hub.require_idle()
+    lo, hi = int(payload.get("lo", 0)), int(payload.get("hi", 0))
+    if not MIN_US <= lo < hi <= MAX_US:
+        raise HTTPException(400, f"window must sit inside {MIN_US} to {MAX_US} us")
+    hub.servo_window = [lo, hi]
+    return _grip_info()
+
+
 @app.post("/api/gripper/pulse")
 def gripper_pulse(payload: dict) -> dict:
     hub.require_idle()
     us = int(payload.get("us", 0))
-    if not MIN_US <= us <= MAX_US:
-        raise HTTPException(400, f"pulse width must be {MIN_US} to {MAX_US} us")
-    hub.gripper.pulse(us)
+    lo, hi = hub.servo_window
+    if not lo <= us <= hi:
+        raise HTTPException(400, f"{us} us is outside the servo window {lo} to {hi} us; widen the window first")
+    slew = payload.get("slew_us_s")
+    slew = float(slew) if slew else None
+    if slew is not None and not 1 <= slew <= 2000:
+        raise HTTPException(400, "slew must be 1 to 2000 us per second")
+    hub.gripper.pulse(us, slew_us_s=slew)
     return _grip_info()
 
 
@@ -544,10 +600,13 @@ def gripper_lock(payload: dict) -> dict:
         raise HTTPException(400, f"pulse width must be {MIN_US} to {MAX_US} us")
     g = dict(hub.cal.gripper)
     g[key] = us
+    g[key.replace("_us", "_set")] = True
     if g["open_us"] == g["closed_us"]:
         raise HTTPException(400, "open and closed cannot be the same pulse width")
     _patch_calibration({"gripper": g})
     setattr(hub.gripper, key, us)
+    if g.get("open_set") and g.get("closed_set") and hasattr(hub.gripper, "calibrated"):
+        hub.gripper.calibrated = True
     out = _grip_info()
     if abs(g["open_us"] - g["closed_us"]) < 100:
         out["warning"] = "open and closed are less than 100 us apart; check both"
@@ -562,15 +621,22 @@ def gripper_release() -> dict:
 
 
 @app.post("/api/gripper/{action}")
-def gripper(action: str) -> dict:
+def gripper(action: str, payload: dict | None = None) -> dict:
     hub.require_idle()
-    if action == "open":
-        hub.gripper.open()
-    elif action == "close":
-        hub.gripper.close()
-    else:
-        raise HTTPException(404, action)
-    return {"state": getattr(hub.gripper, "state", action)}
+    slew = (payload or {}).get("slew_us_s")
+    slew = float(slew) if slew else None
+    if slew is not None and not 1 <= slew <= 2000:
+        raise HTTPException(400, "slew must be 1 to 2000 us per second")
+    try:
+        if action == "open":
+            hub.gripper.open(slew_us_s=slew)
+        elif action == "close":
+            hub.gripper.close(slew_us_s=slew)
+        else:
+            raise HTTPException(404, action)
+    except GripperNotCalibrated as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return _grip_info()
 
 
 @app.get("/api/loadcell")
@@ -626,27 +692,45 @@ def loadcell_save_scale(payload: dict) -> dict:
 
 
 @app.post("/api/loadcell/probe")
-def loadcell_probe() -> dict:
-    """Run the same stepped Z calibration a job runs, once, on its own."""
+def loadcell_probe(payload: dict | None = None) -> dict:
+    """Run the same stepped Z calibration a job runs, once, on its own.
+
+    The body may override, for this probe only: start_z (where the descent
+    begins), speed_mm_s (the stepped descent speed) and step_mm.
+    """
     hub.require_idle()
+    body = payload or {}
     lc, z, sp = hub.cal.load_cell, hub.machine.zcal, hub.machine.speeds
     if hub.guard.floor is None:
         raise HTTPException(400, "Set the Z floor first")
-    if not (lc.get("xy_set") and lc.get("z_safe_set")):
+    if not (lc.get("xy_set") and lc.get("z_safe_set")) and body.get("start_z") is None:
         raise HTTPException(400, "Capture the load cell XY and probe start Z first")
-    if lc["z_safe"] < hub.guard.floor:
+    if not lc.get("xy_set"):
+        raise HTTPException(400, "Capture the load cell XY first")
+    start_z = float(body["start_z"]) if body.get("start_z") is not None else float(lc["z_safe"])
+    speed = float(body.get("speed_mm_s") or sp["z_approach"])
+    step = float(body.get("step_mm") or z["step_mm"])
+    zlo, zhi = hub.machine.limits["z"]
+    if not zlo <= start_z <= zhi:
+        raise HTTPException(400, f"start Z must be {zlo} to {zhi} mm")
+    if not 0.05 <= speed <= 10:
+        raise HTTPException(400, "descent speed must be 0.05 to 10 mm/s")
+    if not 0.01 <= step <= 1:
+        raise HTTPException(400, "step must be 0.01 to 1 mm")
+    if start_z < hub.guard.floor:
         raise HTTPException(400, "probe start Z is below the Z floor")
     if not hub.printer.position().is_homed:
         raise HTTPException(400, "home the machine first")
     try:
         r = calibrate_z(
             hub.printer, hub.loadcell,
-            cell_x=lc["x"], cell_y=lc["y"], z_safe=lc["z_safe"],
+            cell_x=lc["x"], cell_y=lc["y"], z_safe=start_z,
             target_force_g=z["target_force_g"], abort_force_g=z["abort_force_g"],
-            step_mm=z["step_mm"], max_travel_mm=z["max_travel_mm"],
-            approach_speed_mm_s=sp["z_approach"], travel_speed_mm_s=sp["travel"],
+            step_mm=step, max_travel_mm=z["max_travel_mm"],
+            approach_speed_mm_s=speed, travel_speed_mm_s=sp["travel"],
             settle_readings=int(z.get("settle_readings", 3)),
             backoff_mm=z.get("backoff_mm", 0.5),
+            z_speed_mm_s=min(float(sp.get("z_lift", 10.0)), 10.0),
         )
     except (GripFailed, OverForce) as exc:
         raise HTTPException(409, str(exc)) from exc

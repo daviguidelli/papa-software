@@ -109,14 +109,15 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
 
   <div class="card">
     <p class="label">Jog</p>
+    <div class="steps" id="mode" style="margin-bottom:8px"><button id="mStep" class="on">Step</button><button id="mHold">Hold</button></div>
     <div class="steps" id="steps"></div>
     <div class="row" style="margin:10px 0 6px">
-      <label>XY mm/s<input type="number" id="fxy" value="20" min="1" max="100" step="1"></label>
-      <label>Z mm/s<input type="number" id="fz" value="5" min="0.5" max="20" step="0.5"></label>
+      <label>XY mm/s<input type="number" id="fxy" value="20" min="0.1" max="100" step="1"></label>
+      <label>Z mm/s<input type="number" id="fz" value="2" min="0.05" max="10" step="0.05"></label>
     </div>
     <div class="pad" id="pad"></div>
     <div class="zpad"><button id="zup" aria-label="Z up">Z+</button><button id="zdn" aria-label="Z down">Z−</button></div>
-    <p class="note">Arrows are machine axes: ↑ is Y+, → is X+. This is the only jog control; every tab uses it.</p>
+    <p class="note" id="jogNote">Arrows are machine axes: ↑ is Y+, → is X+. This is the only jog control; every tab uses it.</p>
     <div id="msg"></div>
   </div>
 
@@ -186,12 +187,18 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
     <div class="card">
       <p class="label">Probe test</p>
       <div class="ready" id="probeReady"></div>
+      <div class="row" style="align-items:flex-end;margin-bottom:12px">
+        <label>Start Z mm<input type="number" id="pz0" step="0.5"></label>
+        <label>Descent mm/s<input type="number" id="pv" value="1" min="0.05" max="10" step="0.05"></label>
+        <label>Step mm<input type="number" id="pst" value="0.05" min="0.01" max="1" step="0.01"></label>
+      </div>
       <div class="row" style="align-items:center">
         <button class="primary" id="probe">Probe load cell</button>
         <label style="flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="gripped"> A swab is gripped</label>
       </div>
       <div class="kv" id="probeOut" style="margin-top:12px"></div>
       <p class="note" id="probeNote"></p>
+      <p class="note">Order: rise to the start Z if below it, move over the cell at that height, settle onto the start Z, tare, then step down at the descent speed. Z never moves at travel speed. Each step waits for the move to finish and a force reading, so the average speed is a little below the setting, most visibly with small steps.</p>
     </div>
   </div>
 
@@ -228,13 +235,20 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
   <div class="panel stack" id="p-servo" hidden>
     <div class="card">
       <h2>Gripper servo</h2>
-      <p class="note" style="margin-top:0"><b class="warn">First run:</b> no swab in the jaws and the jaws clear of everything. Small moves first.</p>
+      <p class="note" style="margin-top:0"><b class="warn">First run:</b> no swab in the jaws, jaws clear of everything. The very first command after power-up jumps (the horn's resting spot is unknown), so start it near the middle of the window. Every move after that ramps at the chosen speed and cannot leave the window. Widen the window only in small steps.</p>
       <div class="row" style="justify-content:space-between;align-items:center;margin-top:10px">
         <div><span class="big" id="pulse">–</span> <span class="muted mono">µs</span></div>
         <span class="chip" id="servoReal"></span>
       </div>
       <input type="range" id="slider" min="600" max="2400" step="1" style="margin-top:12px">
-      <div class="row" style="margin-top:10px" id="nudges"></div>
+      <div class="row" style="margin-top:6px;align-items:flex-end">
+        <label>Window min µs<input type="number" id="wlo" value="1300" step="10"></label>
+        <label>Window max µs<input type="number" id="whi" value="1700" step="10"></label>
+        <button class="sm" id="setWin">Set window</button>
+        <label>Speed µs/s<select id="slew"><option value="20">20 (slowest)</option><option value="50" selected>50</option><option value="100">100</option><option value="250">250</option><option value="0">jump (job speed)</option></select></label>
+      </div>
+      <p class="label" style="margin-top:14px">Nudge · µs</p>
+      <div class="row" id="nudges"></div>
       <div class="row" style="margin-top:12px"><button class="gold" id="sendPulse">Move servo to this value</button><button id="relTorque">Release torque</button></div>
     </div>
     <div class="card">
@@ -243,8 +257,9 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
         <div><div class="kv"><span>OPEN locked</span><span id="lkOpen">–</span></div><div class="row" style="margin-top:10px"><button class="primary" id="lockOpen">Lock current as OPEN</button></div></div>
         <div><div class="kv"><span>CLOSED locked</span><span id="lkClosed">–</span></div><div class="row" style="margin-top:10px"><button class="primary" id="lockClosed">Lock current as CLOSED</button></div></div>
       </div>
+      <p class="note" id="calState"></p>
       <p class="note">Find the value where the jaws are fully open, lock it. Then find where they grip a swab firmly without crushing it, lock that. Locked values are saved to the calibration file and used by every job.</p>
-      <div class="row" style="margin-top:12px"><button id="testOpen">Test OPEN</button><button id="testClosed">Test CLOSED</button></div>
+      <div class="row" style="margin-top:12px"><button id="testOpen" disabled>Test OPEN</button><button id="testClosed" disabled>Test CLOSED</button></div>
       <p class="note" id="servoNote"></p>
     </div>
   </div>
@@ -319,7 +334,7 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
 <script>
 const $=s=>document.querySelector(s);
 const fmt=(v,d=3)=>v==null||Number.isNaN(+v)?'–':(+v).toFixed(d);
-const S={pos:null,homed:'',busy:false,floor:null,allowZHome:false,dev:null,step:1,tab:'cell',cal:null,grip:null,pulse:1500,slide:null,slot:1,tared:null,scaled:null,watching:false,probe:null};
+const S={pos:null,homed:'',busy:false,floor:null,allowZHome:false,dev:null,step:1,tab:'cell',cal:null,grip:null,pulse:1500,slide:null,slot:1,tared:null,scaled:null,watching:false,probe:null,hold:false};
 const LS={get(k,d){try{const v=localStorage.getItem('papa.'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem('papa.'+k,JSON.stringify(v))}catch(e){}}};
 
 async function api(path,body){
@@ -350,7 +365,7 @@ async function poll(){
 }
 async function loadDev(){try{S.dev=await api('/api/devices')}catch(e){S.dev=null}paint()}
 async function loadCal(){try{S.cal=await api('/api/calibration')}catch(e){}paintCell();paintOffset();paintServo()}
-async function loadGrip(){try{S.grip=await api('/api/gripper');if(S.grip.pulse_us)S.pulse=S.grip.pulse_us;else if(S.grip.locked)S.pulse=S.grip.locked.open_us}catch(e){S.grip=null;$('#servoNote').textContent='Servo unavailable: '+e.message}paintServo()}
+async function loadGrip(){try{S.grip=await api('/api/gripper');if(S.grip.pulse_us)S.pulse=S.grip.pulse_us;else S.pulse=Math.round((S.grip.window[0]+S.grip.window[1])/2)}catch(e){S.grip=null;$('#servoNote').textContent='Servo unavailable: '+e.message}paintServo()}
 async function loadSlide(){try{S.slide=await api('/api/slide?slot='+S.slot)}catch(e){}paintSlide()}
 
 /* ---------- paint ---------- */
@@ -380,7 +395,8 @@ function paint(){
   document.querySelectorAll('.jogbtn').forEach(b=>b.disabled=off);
   $('#zdn').disabled=off||S.floor==null;
   $('#hXY').disabled=off;$('#hZ').disabled=off||!S.allowZHome;
-  ['allowDown','setTyped','setFloor','clrFloor','capXY','goXY','capZ','saveZ','probe','useCellNow','useGlassNow','capCorner','goCorner','trPat','trOut','saveSize','tare','scale','relTorque','sendPulse','lockOpen','lockClosed','testOpen','testClosed','lockTyped','lockOff'].forEach(i=>{const b=$('#'+i);if(b)b.disabled=off||(i==='lockOff'&&offsetValue()==null)})
+  ['allowDown','setTyped','setFloor','clrFloor','capXY','goXY','capZ','saveZ','probe','useCellNow','useGlassNow','capCorner','goCorner','trPat','trOut','saveSize','tare','scale','relTorque','sendPulse','lockOpen','lockClosed','lockTyped','lockOff'].forEach(i=>{const b=$('#'+i);if(b)b.disabled=off||(i==='lockOff'&&offsetValue()==null)});
+  {const g=S.grip,ok=!!(g&&g.open_set&&g.closed_set);['testOpen','testClosed'].forEach(i=>{$('#'+i).disabled=off||!ok})}
   $('#hzNote').textContent=S.allowZHome?'Z homing unlocked. Clear the area first.':'Home Z is locked: the last Z home stalled the motors. Home Z from Mainsail once its switch and config are verified, or start the server with PAPA_ALLOW_Z_HOME=1.';
   paintProbeReady();
 }
@@ -389,6 +405,7 @@ function paintCell(){
   const l=lcCal(),set=l.xy_set,zset=l.z_safe_set;
   $('#lcPos').innerHTML=`<span>XY</span><span class="${set?'good':'warn'}">${set?`X ${fmt(l.x,2)}  Y ${fmt(l.y,2)}`:'not captured yet'}</span><span>Probe start Z</span><span class="${zset?'good':'warn'}">${zset?fmt(l.z_safe,2)+' mm':'not set yet'}</span>`;
   if(zset&&document.activeElement!==$('#zs'))$('#zs').value=l.z_safe;
+  if(zset&&document.activeElement!==$('#pz0')&&!$('#pz0').value)$('#pz0').value=l.z_safe;
   const z=S.dev&&S.dev.zcal;
   $('#probeNote').textContent=z?`Steps down ${z.step_mm} mm at a time from the start Z, up to ${z.max_travel_mm} mm. Accepts contact at ${z.target_force_g} g, aborts at ${z.abort_force_g} g. Tares the cell first.`:'';
   paintProbeReady();
@@ -411,8 +428,13 @@ function paintOffset(){
 const offsetValue=()=>{const cz=LS.get('cellZ',null),gz=LS.get('glassZ',null);return cz!=null&&gz!=null?gz-cz:null};
 function paintServo(){
   $('#pulse').textContent=S.pulse;$('#slider').value=S.pulse;
-  if(S.grip){$('#slider').min=S.grip.min_us;$('#slider').max=S.grip.max_us;
-    $('#lkOpen').textContent=S.grip.locked.open_us+' µs';$('#lkClosed').textContent=S.grip.locked.closed_us+' µs'}
+  if(S.grip){const g=S.grip;$('#slider').min=g.window[0];$('#slider').max=g.window[1];
+    if(document.activeElement!==$('#wlo'))$('#wlo').value=g.window[0];if(document.activeElement!==$('#whi'))$('#whi').value=g.window[1];
+    $('#lkOpen').textContent=(g.open_set?'':'not set · ')+g.locked.open_us+' µs';$('#lkClosed').textContent=(g.closed_set?'':'not set · ')+g.locked.closed_us+' µs';
+    const ok=g.open_set&&g.closed_set;
+    $('#calState').textContent=ok?'Both positions locked. OPEN and CLOSED are now enabled for tests and jobs.':'Lock both OPEN and CLOSED to enable the gripper. Until then it cannot open or close on its own.';
+    $('#calState').className='note '+(ok?'good':'warn');
+    $('#testOpen').disabled=S.busy||!ok;$('#testClosed').disabled=S.busy||!ok}
 }
 function paintSlide(){
   const sl=S.slide;if(!sl)return;
@@ -443,19 +465,51 @@ function paintSlide(){
 }
 
 /* ---------- jog ---------- */
-const STEPS=[0.05,0.1,1,10,50];
-STEPS.forEach(v=>{const b=document.createElement('button');b.textContent=(v<1?v.toFixed(2):v)+' mm';if(v===S.step)b.className='on';
+const STEPS=[0.01,0.05,0.1,1,10,50];
+STEPS.forEach(v=>{const b=document.createElement('button');b.textContent=(v<1?v.toFixed(v<.05?3:2):v)+' mm';if(v===S.step)b.className='on';
   b.onclick=()=>{S.step=v;[...$('#steps').children].forEach(c=>c.className='');b.className='on'};$('#steps').appendChild(b)});
 async function jog(dx,dy,dz){
   const speed=dz?+$('#fz').value:+$('#fxy').value;
   await run(`jog ${dx?'X'+(dx>0?'+':'−'):''}${dy?'Y'+(dy>0?'+':'−'):''}${dz?'Z'+(dz>0?'+':'−'):''} ${S.step}`,async()=>{setPos(await post('/api/machine/jog',{dx,dy,dz,speed_mm_s:speed}));say('')});
 }
+/* hold-to-jog: heartbeat every 100 ms; the server stops 0.35 s after the last one */
+let holdTimer=null,holdBody=null,posTimer=null;
+function paintMode(){
+  $('#mStep').className=S.hold?'':'on';$('#mHold').className=S.hold?'on':'';
+  $('#steps').style.display=S.hold?'none':'flex';
+  $('#jogNote').textContent=S.hold?'Hold a button and it keeps moving at the speed above; let go and it stops (within about a quarter second of travel). Axes move one at a time.':'Arrows are machine axes: ↑ is Y+, → is X+. This is the only jog control; every tab uses it.';
+}
+$('#mStep').onclick=()=>{S.hold=false;paintMode()};$('#mHold').onclick=()=>{S.hold=true;paintMode()};
+async function holdStart(dx,dy,dz){
+  if(S.busy||holdTimer)return;
+  const speed=dz?+$('#fz').value:+$('#fxy').value;
+  holdBody={dx,dy,dz,speed_mm_s:speed};say('');
+  const beat=async()=>{if(!holdBody)return;try{const r=await post('/api/machine/hold',holdBody);if(r.why&&holdBody){holdStop(r.why)}}catch(e){holdStop(String(e.message||e))}};
+  beat();holdTimer=setInterval(beat,100);
+  posTimer=setInterval(async()=>{try{setPos(await api('/api/machine/position'));paint()}catch(e){}},250);
+}
+async function holdStop(why){
+  if(!holdTimer&&!holdBody)return;
+  clearInterval(holdTimer);clearInterval(posTimer);holdTimer=posTimer=null;holdBody=null;
+  try{const r=await post('/api/machine/hold/stop');setPos(r);paint();const w=why||(r.why&&r.why!=='released'?r.why:'');if(w){say(w,'err');log('hold stopped: '+w,'err')}}
+  catch(e){say(String(e.message||e),'err')}
+}
+window.addEventListener('blur',()=>holdStop());
+document.addEventListener('visibilitychange',()=>{if(document.hidden)holdStop()});
+function bindHold(b,dx,dy,dz){
+  b.style.touchAction='none';b.oncontextmenu=e=>e.preventDefault();
+  b.onpointerdown=e=>{if(!S.hold||b.disabled)return;e.preventDefault();try{b.setPointerCapture(e.pointerId)}catch(_){}holdStart(dx,dy,dz)};
+  b.onpointerup=b.onpointercancel=b.onlostpointercapture=()=>{if(S.hold)holdStop()};
+  b.onkeydown=e=>{if(S.hold&&(e.key===' '||e.key==='Enter')&&!e.repeat){e.preventDefault();holdStart(dx,dy,dz)}};
+  b.onkeyup=e=>{if(S.hold&&(e.key===' '||e.key==='Enter'))holdStop()};
+}
 const padEl=$('#pad');
 [[0,0],['↑',[0,1]],[0,0],['←',[-1,0]],[0,0],['→',[1,0]],[0,0],['↓',[0,-1]],[0,0]].forEach(([l,v],i)=>{
   if(!v){const d=document.createElement('div');if(i===4){d.textContent='XY';d.style.cssText='display:flex;align-items:center;justify-content:center;color:var(--muted);font:12px IBM Plex Mono,monospace'}padEl.appendChild(d);return}
   const b=document.createElement('button');b.className='jogbtn';b.textContent=l;b.setAttribute('aria-label',{'↑':'Y plus','↓':'Y minus','←':'X minus','→':'X plus'}[l]);
-  b.onclick=()=>jog(v[0]*S.step,v[1]*S.step,0);padEl.appendChild(b)});
-$('#zup').className='jogbtn';$('#zup').onclick=()=>jog(0,0,S.step);$('#zdn').onclick=()=>jog(0,0,-S.step);
+  b.onclick=()=>{if(!S.hold)jog(v[0]*S.step,v[1]*S.step,0)};bindHold(b,v[0],v[1],0);padEl.appendChild(b)});
+$('#zup').className='jogbtn';$('#zup').onclick=()=>{if(!S.hold)jog(0,0,S.step)};$('#zdn').onclick=()=>{if(!S.hold)jog(0,0,-S.step)};
+bindHold($('#zup'),0,0,1);bindHold($('#zdn'),0,0,-1);paintMode();
 $('#hXY').onclick=()=>{if(confirm('Home X and Y? Clear the toolhead area first.'))run('home XY',async()=>{setPos(await post('/api/machine/home',{axes:'X Y'}))})};
 $('#hZ').onclick=()=>{if(confirm('Home Z? Keep a hand on E-STOP.'))run('home Z',async()=>{setPos(await post('/api/machine/home',{axes:'Z'}))})};
 $('#estop').onclick=async()=>{try{await post('/api/machine/estop');say('Emergency stop sent. Restart firmware (Mainsail) and re-home.','err');log('E-STOP','err')}catch(e){say(String(e.message||e),'err')}};
@@ -505,7 +559,7 @@ $('#capZ').onclick=()=>{if(S.pos)$('#zs').value=S.pos[2].toFixed(3)};
 $('#saveZ').onclick=()=>run('probe start Z saved',async()=>{const v=parseFloat($('#zs').value);if(!Number.isFinite(v))throw new Error('Enter the probe start Z');await post('/api/loadcell/position',{z_safe:v});await loadCal()});
 $('#gripped').onchange=paintProbeReady;
 $('#probe').onclick=()=>{if(!confirm('Probe the load cell now? The head moves to the cell and steps down. Keep a hand on E-STOP.'))return;
-  run('probe',async()=>{const r=await post('/api/loadcell/probe');S.probe=r;LS.set('lastProbe',r);
+  run('probe',async()=>{const sz=parseFloat($('#pz0').value);const r=await post('/api/loadcell/probe',{start_z:Number.isFinite(sz)?sz:undefined,speed_mm_s:+$('#pv').value,step_mm:+$('#pst').value});S.probe=r;LS.set('lastProbe',r);
     $('#probeOut').innerHTML=`<span>Contact Z</span><span class="good">${fmt(r.contact_z,3)} mm</span><span>Force at contact</span><span>${fmt(r.force_g,2)} g</span><span>Steps</span><span>${r.steps}</span>`;
     LS.set('cellZ',r.contact_z);paintOffset();setPos(await api('/api/machine/position'))})};
 
@@ -521,23 +575,31 @@ $('#lockOff').onclick=()=>{const v=offsetValue();if(v!=null)lockOffset(v)};
 $('#lockTyped').onclick=()=>{const v=parseFloat($('#offTyped').value);if(Number.isFinite(v))lockOffset(v);else say('Enter an offset','err')};
 
 /* ---------- servo ---------- */
+const slewVal=()=>{const v=+$('#slew').value;return v>0?v:undefined};
+function win(){return S.grip?S.grip.window:[1300,1700]}
 function setPulse(v,send){
-  const lo=S.grip?S.grip.min_us:600,hi=S.grip?S.grip.max_us:2400;
-  S.pulse=Math.max(lo,Math.min(hi,Math.round(v)));paintServo();if(send)sendPulse();
+  const [lo,hi]=win();
+  const c=Math.max(lo,Math.min(hi,Math.round(v)));
+  if(c!==Math.round(v))say(`Held at the window edge (${lo} to ${hi} µs). Widen the window to go further.`,'err');
+  S.pulse=c;paintServo();if(send)sendPulse();
 }
-function sendPulse(){return run('servo '+S.pulse+' µs',async()=>{S.grip=await post('/api/gripper/pulse',{us:S.pulse});paintServo()})}
-[-100,-25,-5,5,25,100].forEach(d=>{const b=document.createElement('button');b.className='sm';b.textContent=(d>0?'+':'')+d;b.onclick=()=>setPulse(S.pulse+d,true);$('#nudges').appendChild(b)});
+function sendPulse(){return run('servo '+S.pulse+' µs',async()=>{S.grip=await post('/api/gripper/pulse',{us:S.pulse,slew_us_s:slewVal()});S.pulse=S.grip.pulse_us;paintServo()})}
+[-25,-10,-5,-2,-1,1,2,5,10,25].forEach(d=>{const b=document.createElement('button');b.className='sm';b.textContent=(d>0?'+':'')+d;b.onclick=()=>setPulse(S.pulse+d,true);$('#nudges').appendChild(b)});
 $('#slider').oninput=e=>{S.pulse=+e.target.value;$('#pulse').textContent=S.pulse};
 $('#slider').onchange=e=>setPulse(+e.target.value,true);
 $('#sendPulse').onclick=sendPulse;
+$('#setWin').onclick=()=>{const lo=parseInt($('#wlo').value),hi=parseInt($('#whi').value);
+  const [clo,chi]=win();
+  if((lo<clo||hi>chi)&&!confirm(`Widen the servo window to ${lo}–${hi} µs? The jaws may travel further than you have tested.`))return;
+  run('servo window '+lo+'–'+hi,async()=>{S.grip=await post('/api/gripper/window',{lo,hi});S.pulse=Math.max(lo,Math.min(hi,S.pulse));paintServo()})};
 $('#relTorque').onclick=()=>run('servo released',async()=>{S.grip=await post('/api/gripper/release');paintServo()});
 async function lockServo(which){
   if(!confirm(`Lock ${S.pulse} µs as ${which.toUpperCase()}?`))return;
   await run(`servo ${which} locked ${S.pulse}`,async()=>{S.grip=await post('/api/gripper/lock',{which,us:S.pulse});paintServo();$('#servoNote').textContent=S.grip.warning||'Locked and saved.';$('#servoNote').className='note '+(S.grip.warning?'warn':'good')});
 }
 $('#lockOpen').onclick=()=>lockServo('open');$('#lockClosed').onclick=()=>lockServo('closed');
-$('#testOpen').onclick=()=>run('servo test OPEN',async()=>{await post('/api/gripper/open');await loadGrip()});
-$('#testClosed').onclick=()=>run('servo test CLOSED',async()=>{await post('/api/gripper/close');await loadGrip()});
+$('#testOpen').onclick=()=>run('servo test OPEN',async()=>{S.grip=await post('/api/gripper/open',{slew_us_s:slewVal()});S.pulse=S.grip.pulse_us||S.pulse;paintServo()});
+$('#testClosed').onclick=()=>run('servo test CLOSED',async()=>{S.grip=await post('/api/gripper/close',{slew_us_s:slewVal()});S.pulse=S.grip.pulse_us||S.pulse;paintServo()});
 
 /* ---------- slide ---------- */
 $('#slot').onchange=e=>{S.slot=+e.target.value;loadSlide()};

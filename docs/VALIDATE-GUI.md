@@ -53,3 +53,25 @@ Shows the Pi camera live in the browser. The stream (MJPEG) only runs while the 
 * Controls: width, frames/s, thirds grid with centre cross, pause/resume, **Save snapshot** (1920 px JPEG).
 * Max 3 simultaneous streams; the camera sits behind a lock so a stream and a snapshot never touch it at once.
 * Optional `camera_size: [w, h]` in `machine.yaml` sets the capture size (default 1920x1080). The teammate scripts (`camCal`, `substrateRecognition`) use the full 4056x3040 4:3 sensor, so the framing differs. Align the two before trusting pixel coordinates from one in the other.
+
+## Hold-to-jog
+
+Sidebar, **Hold** mode: press and keep a button down and that axis keeps moving at the XY or Z mm/s in the boxes; let go and it stops. One axis at a time.
+
+* The page sends a heartbeat every 100 ms. If it stops (button released, tab hidden, Wi-Fi drops) the server stops within 0.35 s. At most about a quarter second of motion is still queued in Klipper when that happens, so at 4 mm/s Z coasts roughly 1 mm. Use a low Z speed near anything hard.
+* Caps: XY 100 mm/s, Z 10 mm/s. Z down is disabled until a floor is set, and a held Z stops short of the floor with a message. Axis limits stop it too.
+* While a button is held, step jogs and other motion are refused (409).
+* E-STOP also cancels a hold.
+
+## Servo: fine calibration
+
+* Window: manual pulses can only go inside the **servo window**, which starts at 1300 to 1700 µs. Widen it in small steps (a confirmation appears).
+* Speed: moves ramp at 20, 50, 100 or 250 µs per second (or jump, the job speed). A 1 µs nudge at 50 µs/s takes 20 ms; a 100 µs move takes 2 s.
+* Nudges: ±1, 2, 5, 10, 25 µs.
+* The first command after power-up cannot be ramped, because the horn's resting spot is unknown. It jumps. Do it with empty, clear jaws, near the middle of the window.
+* OPEN and CLOSED stay disabled, in the GUI and in jobs on the real servo, until **both** have been locked on this tab (`open_set` and `closed_set` in calibration.yaml).
+* Procedure: find the fully open value, lock it. Find the value where a swab is held firmly without crushing it, lock it. Then Test OPEN and Test CLOSED.
+
+## Load cell probe: start Z, speed, step
+
+The Probe card has **Start Z**, **Descent mm/s** and **Step mm**. Order: rise to start Z if below it, travel over the cell at that height, settle onto the start Z, tare, then step down. Z never moves at travel speed. Start Z must be inside the machine's Z limits and not below the Z floor. Limits: 0.05 to 10 mm/s, 0.01 to 1 mm.

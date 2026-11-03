@@ -86,7 +86,7 @@ def test_servo_lock_writes_calibration_and_survives_reload(api):
     assert api.post("/api/gripper/lock", json={"which": "open", "us": 1200}).status_code == 200
     r = api.post("/api/gripper/lock", json={"which": "closed", "us": 1800})
     assert r.json()["locked"] == {"open_us": 1200, "closed_us": 1800}
-    assert saved(api)["gripper"] == {"open_us": 1200, "closed_us": 1800}
+    assert saved(api)["gripper"] == {"open_us": 1200, "closed_us": 1800, "open_set": True, "closed_set": True}
     api.post("/api/gripper/close")
     assert api.get("/api/gripper").json()["pulse_us"] == 1800
     assert api.post("/api/gripper/lock", json={"which": "open", "us": 1800}).status_code == 400
@@ -220,3 +220,140 @@ def test_locked_camera_passes_attributes_through():
     cam = LockedCamera(MockCamera())
     cam.slide_slots = (1, 2)
     assert cam._inner.slide_slots == (1, 2) and cam.frame().shape == (1080, 1920, 3)
+
+
+# ---------- hold-to-jog, fine servo, probe settings ----------
+
+import time as _time
+
+
+def _home(api):
+    api.post("/api/machine/home", json={"axes": "X Y"})
+    api.server.hub.printer.move(z=100.0)
+
+
+def _hold_for(api, seconds, body):
+    end = _time.monotonic() + seconds
+    while _time.monotonic() < end:
+        r = api.post("/api/machine/hold", json=body)
+        if r.status_code == 400:                         # the hold ended itself (limit, floor)
+            break
+        assert r.status_code == 200, r.text
+        _time.sleep(0.1)
+
+
+def test_hold_moves_while_beating_and_stops_without_beats(api):
+    _home(api)
+    x0 = api.get("/api/machine/position").json()["x"]
+    _hold_for(api, 0.8, {"dx": 1, "speed_mm_s": 20})
+    _time.sleep(0.6)                                     # dead-man window passes
+    assert not api.get("/api/machine/hold").json()["moving"]
+    x1 = api.get("/api/machine/position").json()["x"]
+    moved = x1 - x0
+    assert 6 < moved < 30                                # about 0.8 s at 20 mm/s plus look-ahead
+    _time.sleep(0.3)
+    assert api.get("/api/machine/position").json()["x"] == x1
+
+
+def test_hold_stop_endpoint_stops_immediately(api):
+    _home(api)
+    api.post("/api/machine/hold", json={"dx": -1, "speed_mm_s": 10})
+    _time.sleep(0.2)
+    r = api.post("/api/machine/hold/stop")
+    assert r.status_code == 200 and r.json()["moving"] is False
+
+
+def test_hold_z_down_needs_floor_and_stops_at_it(api):
+    _home(api)
+    api.post("/api/machine/hold", json={"dz": -1, "speed_mm_s": 5})
+    _time.sleep(0.3)
+    assert api.get("/api/machine/hold").json()["why"] == "Z floor is not set"
+    r = api.post("/api/machine/hold", json={"dz": -1, "speed_mm_s": 5})
+    assert r.status_code == 400 and "Z floor is not set" in r.json()["error"]    # sticky until released
+    assert api.post("/api/machine/hold/stop").json()["why"] == "Z floor is not set"
+    api.post("/api/guard/floor", json={"z": 99.0})
+    _hold_for(api, 1.0, {"dz": -1, "speed_mm_s": 5})
+    _time.sleep(0.1)
+    z = api.get("/api/machine/position").json()["z"]
+    assert z >= 99.0 - 1e-6
+    assert "floor" in api.get("/api/machine/hold").json()["why"]
+
+
+def test_hold_rejects_diagonals_and_silly_speeds(api):
+    _home(api)
+    assert api.post("/api/machine/hold", json={"dx": 1, "dy": 1, "speed_mm_s": 5}).status_code == 400
+    assert api.post("/api/machine/hold", json={"dz": -1, "speed_mm_s": 50}).status_code == 400
+    assert api.post("/api/machine/hold", json={"dx": 1, "speed_mm_s": 0}).status_code == 400
+
+
+def test_step_jog_is_refused_while_a_button_is_held(api):
+    _home(api)
+    api.post("/api/machine/hold", json={"dx": 1, "speed_mm_s": 10})
+    r = api.post("/api/machine/jog", json={"dx": 1})
+    api.post("/api/machine/hold/stop")
+    assert r.status_code == 409
+
+
+def test_servo_pulse_must_sit_inside_the_window(api):
+    assert api.get("/api/gripper").json()["window"] == [1300, 1700]
+    assert api.post("/api/gripper/pulse", json={"us": 1000}).status_code == 400
+    assert api.post("/api/gripper/pulse", json={"us": 1501, "slew_us_s": 50}).status_code == 200
+    assert api.post("/api/gripper/window", json={"lo": 900, "hi": 2100}).status_code == 200
+    assert api.post("/api/gripper/pulse", json={"us": 1000}).status_code == 200
+    assert api.post("/api/gripper/window", json={"lo": 100, "hi": 2100}).status_code == 400
+    assert api.post("/api/gripper/pulse", json={"us": 1500, "slew_us_s": 5000}).status_code == 400
+
+
+def test_lock_marks_each_state_and_persists_flags(api):
+    api.post("/api/gripper/lock", json={"which": "open", "us": 1400})
+    g = saved(api)["gripper"]
+    assert g["open_us"] == 1400 and g["open_set"] is True and not g.get("closed_set")
+
+
+def test_ramp_points_are_small_whole_steps_ending_on_target():
+    from papa.hw.gripper import ramp_points
+
+    pts = ramp_points(1500, 1510, 50)
+    assert pts[-1][0] == 1510 and all(abs(b[0] - a[0]) <= 1 for a, b in zip(pts, pts[1:]))
+    assert ramp_points(1500, 1500, 50) == []
+    down = ramp_points(1600, 1400, 100)
+    assert down[-1][0] == 1400 and down[0][0] < 1600
+
+
+def test_real_servo_refuses_open_and_close_until_both_locked():
+    from papa.hw.gripper import GripperNotCalibrated, ServoGripper
+
+    g = ServoGripper.__new__(ServoGripper)
+    g.calibrated = False
+    with pytest.raises(GripperNotCalibrated):
+        g.open()
+    with pytest.raises(GripperNotCalibrated):
+        g.close()
+
+
+def _ready_probe(api, z_start=100.0):
+    _home(api)
+    api.server.hub.printer._inner.homed = "xyz"
+    api.post("/api/guard/floor", json={"z": 60.0})
+    api.post("/api/loadcell/position", json={"capture_xy": True})
+    api.post("/api/loadcell/position", json={"z_safe": z_start})
+
+
+def test_probe_goes_to_start_z_before_descending_and_uses_given_speed(api):
+    _ready_probe(api)
+    mock = api.server.hub.printer._inner
+    mock.log.clear()
+    r = api.post("/api/loadcell/probe", json={"start_z": 90.0, "speed_mm_s": 0.5, "step_mm": 0.1})
+    assert r.status_code in (200, 409), r.text
+    g = [l for l in mock.log if l.startswith("G1")]
+    first_z = next(l for l in g if " Z" in l and "F" in l)
+    assert "Z90.0000" in first_z and "F600" in first_z           # 10 mm/s, never travel speed
+    assert any(l.startswith("G1 Z-0.1000 F30") for l in g)       # 0.5 mm/s descent steps
+
+
+def test_probe_rejects_unsafe_overrides(api):
+    _ready_probe(api)
+    assert api.post("/api/loadcell/probe", json={"start_z": 50.0}).status_code == 400   # under floor
+    assert api.post("/api/loadcell/probe", json={"speed_mm_s": 30}).status_code == 400
+    assert api.post("/api/loadcell/probe", json={"step_mm": 5}).status_code == 400
+    assert api.post("/api/loadcell/probe", json={"start_z": 9999}).status_code == 400

@@ -52,12 +52,19 @@ def calibrate_z(
     travel_speed_mm_s: float = 100.0,
     settle_readings: int = 3,
     backoff_mm: float = 0.5,
+    z_speed_mm_s: float = 10.0,
 ) -> ZCalResult:
     if abort_force_g <= target_force_g:
         raise ValueError("abort force must exceed target force")
 
-    printer.move(z=z_safe, speed_mm_s=travel_speed_mm_s)
+    # Go to the start Z first: rise if below it, XY at that height, then settle
+    # onto it. Z never moves at travel speed, so a start Z below the current
+    # height is approached at z_speed_mm_s, not 150 mm/s.
+    if printer.position().z < z_safe:
+        printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
     printer.move(x=cell_x, y=cell_y, speed_mm_s=travel_speed_mm_s)
+    if printer.position().z > z_safe + 1e-6:
+        printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
     loadcell.tare()
 
     travelled = 0.0
@@ -70,7 +77,7 @@ def calibrate_z(
         force = loadcell.grams()
 
         if force >= abort_force_g:
-            printer.move(z=z_safe, speed_mm_s=travel_speed_mm_s)
+            printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
             raise OverForce(
                 f"load cell read {force:.2f} g, at or above the abort force "
                 f"{abort_force_g:.2f} g"
@@ -86,7 +93,7 @@ def calibrate_z(
         else:
             hits = 0
 
-    printer.move(z=z_safe, speed_mm_s=travel_speed_mm_s)
+    printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
     raise GripFailed(
         f"no contact within {max_travel_mm:.2f} mm: the swab is missing or the "
         "grip failed"

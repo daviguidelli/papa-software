@@ -152,18 +152,19 @@ class MockGripper:
     open_us: int = 1000
     closed_us: int = 2000
     pulse_us: int | None = None
+    calibrated: bool = True
 
-    def pulse(self, width_us: int) -> None:
-        self.log.append(f"pulse {int(width_us)}")
+    def pulse(self, width_us: int, slew_us_s: float | None = None) -> None:
+        self.log.append(f"pulse {int(width_us)}" + (f" slew {slew_us_s:g}" if slew_us_s else ""))
         self.pulse_us = int(width_us)
         self.state = "manual"
 
-    def open(self) -> None:
+    def open(self, slew_us_s: float | None = None) -> None:
         self.log.append("open")
         self.pulse_us = self.open_us
         self.state = "open"
 
-    def close(self) -> None:
+    def close(self, slew_us_s: float | None = None) -> None:
         self.log.append("close")
         if self.fail_next:
             self.fail_next = False
