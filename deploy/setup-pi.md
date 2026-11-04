@@ -92,3 +92,17 @@ anything is pressing on glass.
 6. Camera: map the four points, sample the film and stem blues, test detection.
 7. Dry run in air on a slot with no slide.
 8. One swab on a sacrificial slide.
+
+## 7. Start by itself on every boot
+
+From inside the papa-software folder on the Pi:
+
+```bash
+bash deploy/install-service.sh                          # printer URL from config/machine.yaml
+bash deploy/install-service.sh http://10.24.48.56:7125  # printer on the campus network instead
+```
+
+It writes the service for the current user and folder and starts it. The GUI is
+then at `http://<pi-ip>:8080/validate` whenever the Pi is on. Logs:
+`journalctl -u papa -f`. After `git pull`, restart with `sudo systemctl restart papa`.
+Setting `PAPA_MOONRAKER_URL` overrides `moonraker_url` without editing the file.

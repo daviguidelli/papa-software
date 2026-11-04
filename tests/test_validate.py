@@ -357,3 +357,11 @@ def test_probe_rejects_unsafe_overrides(api):
     assert api.post("/api/loadcell/probe", json={"speed_mm_s": 30}).status_code == 400
     assert api.post("/api/loadcell/probe", json={"step_mm": 5}).status_code == 400
     assert api.post("/api/loadcell/probe", json={"start_z": 9999}).status_code == 400
+
+
+def test_moonraker_url_can_be_overridden_from_the_environment(monkeypatch):
+    m = cfgmod.load_machine()
+    monkeypatch.delenv("PAPA_MOONRAKER_URL", raising=False)
+    default = m.moonraker_url
+    monkeypatch.setenv("PAPA_MOONRAKER_URL", "http://10.24.48.56:7125/")
+    assert m.moonraker_url == "http://10.24.48.56:7125" != default

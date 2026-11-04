@@ -70,7 +70,7 @@ class Machine:
 
     @property
     def moonraker_url(self) -> str:
-        return str(self.raw["moonraker_url"]).rstrip("/")
+        return str(os.environ.get("PAPA_MOONRAKER_URL") or self.raw["moonraker_url"]).rstrip("/")
 
     @property
     def timeout_s(self) -> float:
