@@ -489,3 +489,51 @@ def test_tare_and_probe_stop_the_sampler(api):
     assert api.server.hub.sampler.running
     api.post("/api/loadcell/tare")
     assert not api.server.hub.sampler.running
+
+
+# ---------- substrate detection ----------
+
+def test_detect_pairs_every_film_when_the_marker_spacing_is_known():
+    from papa.sim.mocks import MockCamera
+    from papa.vision.substrates import REFERENCE_WIDTH, SubstrateParams, detect
+
+    f = MockCamera().frame()
+    k = REFERENCE_WIDTH / f.shape[1]
+    r = detect(f, SubstrateParams(expected_dx=149 * k, expected_dy=149 * k))
+    assert r["marker_count"] == 12 and r["substrate_count"] == 6 and not r["unmatched_markers"]
+    ids = [(s["substrate_id"], s["center_y"], s["center_x"]) for s in r["substrates"]]
+    assert [i[0] for i in ids] == [1, 2, 3, 4, 5, 6]
+    rows = [round(i[1] / 100) for i in ids]
+    assert rows == sorted(rows)                               # read top to bottom, then left to right
+    assert r["coordinate_units"] == "pixels" and r["pairing_verified"] is False
+
+
+def test_detect_endpoint_returns_an_annotated_picture_and_warns_on_unpaired(api):
+    r = api.post("/api/camera/detect", json={"save": False})
+    j = r.json()
+    assert r.status_code == 200 and j["image"].startswith("data:image/jpeg;base64,")
+    assert j["marker_count"] == 12 and j["unmatched_markers"] and j["warnings"]     # default pairing is unreliable
+    r2 = api.post("/api/camera/detect", json={"save": False, "expected_dx_px": 149, "expected_dy_px": 149}).json()
+    assert r2["substrate_count"] == 6 and not r2["warnings"]
+
+
+def test_detect_saves_a_scan_folder_like_the_script_does(api, tmp_path, monkeypatch):
+    monkeypatch.setattr(api.server, "STATE_DIR", tmp_path)
+    j = api.post("/api/camera/detect", json={"expected_dx_px": 149, "expected_dy_px": 149}).json()
+    d = tmp_path / "scans" / "scan_0001"
+    assert j["scan_id"] == 1 and (d / "original.jpg").exists() and (d / "detected.jpg").exists()
+    import json as _j
+    assert _j.loads((d / "substrates.json").read_text())["substrate_count"] == 6
+    assert api.post("/api/camera/detect", json={}).json()["scan_id"] == 2
+
+
+def test_detect_with_no_red_says_so(api):
+    api.server.hub.devices["camera"] = api.server.Device(
+        "camera", lambda: __import__("papa.sim.mocks", fromlist=["MockCamera"]).MockCamera(red_tape=False))
+    j = api.post("/api/camera/detect", json={"save": False}).json()
+    assert j["marker_count"] == 0 and any("No red markers" in w for w in j["warnings"])
+
+
+def test_detect_remote_host_down_is_a_502(api, monkeypatch):
+    monkeypatch.setenv("PAPA_CAMERA_URL", "http://127.0.0.1:9")
+    assert api.post("/api/camera/detect", json={}).status_code == 502

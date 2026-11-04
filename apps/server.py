@@ -31,6 +31,7 @@ from papa.hw.loadcell import LoadCellSampler
 from papa.hw.gripper import MAX_US, MIN_US, GripperNotCalibrated
 from papa.ops.hold import HoldJog
 from papa.vision.live import encode_jpeg
+from papa.vision.substrates import REFERENCE_WIDTH, SubstrateParams, annotate, detect as detect_substrates
 from papa.toolpath import blocks as blockmod
 from papa.toolpath import dxf_loader, fit, spacing as spacingmod
 
@@ -256,6 +257,78 @@ async def camera_stream(request: Request, width: int = 960, fps: float = 8.0,
 
 
 # ---------- validation page ----------
+
+def _next_scan_dir() -> tuple[Path, int]:
+    root = STATE_DIR / "scans"
+    root.mkdir(parents=True, exist_ok=True)
+    ids = [int(p.name.split("_")[-1]) for p in root.glob("scan_*") if p.name.split("_")[-1].isdigit()]
+    n = max(ids, default=0) + 1
+    d = root / f"scan_{n:04d}"
+    d.mkdir()
+    return d, n
+
+
+@app.post("/api/camera/detect")
+async def camera_detect(payload: dict | None = None) -> JSONResponse:
+    """Find the red corner tape on the current frame, pair it into substrates and
+    number them. Same method as the team's substrateRecognition script."""
+    import base64
+
+    import cv2
+
+    body = payload or {}
+    remote = _camera_host()
+    if remote:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as c:
+                r = await c.post(f"{remote}/api/camera/detect", json=body)
+            return JSONResponse(r.json(), status_code=r.status_code)
+        except httpx.HTTPError as exc:
+            return JSONResponse({"error": f"camera host {remote} unreachable: {exc}"}, status_code=502)
+
+    def work() -> dict:
+        rgb = hub.camera.frame()
+        w = rgb.shape[1]
+        k = REFERENCE_WIDTH / w
+
+        def px(name: str) -> float | None:
+            v = body.get(name)
+            return None if v in (None, "") else float(v) * k      # frame pixels -> reference pixels
+
+        base = SubstrateParams()
+        params = SubstrateParams(
+            min_red_area=float(body.get("min_red_area") or base.min_red_area),
+            expected_dx=px("expected_dx_px"), expected_dy=px("expected_dy_px"),
+        )
+        res = detect_substrates(rgb, params)
+        annotated = annotate(res.pop("_bgr"), res.pop("_markers"), res["substrates"])
+        out_w = min(1280, w)
+        small = cv2.resize(annotated, (out_w, round(annotated.shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        res["image"] = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+        res["shown_scale"] = out_w / w
+        res["warnings"] = []
+        if res["unmatched_markers"]:
+            res["warnings"].append(
+                f"{len(res['unmatched_markers'])} red marker(s) were not paired. Enter the real marker spacing "
+                "(pixels) to stop neighbors being paired by mistake.")
+        if res["marker_count"] == 0:
+            res["warnings"].append("No red markers found. Check lighting, focus and that the tape is in view.")
+        if body.get("save", True):
+            import json
+
+            d, n = _next_scan_dir()
+            cv2.imwrite(str(d / "original.jpg"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(str(d / "detected.jpg"), annotated)
+            (d / "substrates.json").write_text(json.dumps({"scan_id": n, **{k2: v2 for k2, v2 in res.items() if k2 not in ("image",)}}, indent=2))
+            res["scan_id"], res["saved_to"] = n, str(d)
+        return res
+
+    try:
+        return JSONResponse(await asyncio.to_thread(work))
+    except Exception as exc:                                     # noqa: BLE001
+        return JSONResponse({"error": f"camera unavailable: {exc}"}, status_code=503)
+
 
 @app.get("/validate")
 def validate_page() -> FileResponse:

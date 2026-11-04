@@ -75,3 +75,13 @@ Sidebar, **Hold** mode: press and keep a button down and that axis keeps moving 
 ## Load cell probe: start Z, speed, step
 
 The Probe card has **Start Z**, **Descent mm/s** and **Step mm**. Order: rise to start Z if below it, travel over the cell at that height, settle onto the start Z, tare, then step down. Z never moves at travel speed. Start Z must be inside the machine's Z limits and not below the Z floor. Limits: 0.05 to 10 mm/s, 0.01 to 1 mm.
+
+## Substrate detection (Camera tab)
+
+**Detect substrates** takes one frame and runs the team's red-tape method (`substrateRecognition`), ported to `papa/vision/substrates.py`: red HSV threshold, clean up, circle each marker, pair upper-right with lower-left markers, number the pairs in rows (S1, S2, ...). The result is drawn on the picture and listed in a table in pixels.
+
+* Enter the real **marker spacing** in pixels (X and Y) to stop neighbours being paired by mistake. Without it the shortest valid pair wins, which fails when substrates sit close together.
+* Settings written for the 4056 px wide stills are rescaled to the frame being analysed.
+* **Save scan** writes `var/scans/scan_NNNN/` with `original.jpg`, `detected.jpg`, `substrates.json`, like the script does.
+* Output is pixels only. Nothing yet converts pixels to printer X/Y.
+* The load cell sampler reads at 20 samples per second by default, only while the Load cell tab is open.

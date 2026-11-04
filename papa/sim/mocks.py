@@ -190,6 +190,7 @@ class MockCamera:
     slide_slots: tuple[int, ...] = (1, 2, 3, 5, 6, 8)
     loaded_swabs: tuple[str, ...] = ()
     px_per_mm: float = 5.0
+    red_tape: bool = True
 
     def frame(self) -> np.ndarray:
         img = np.full((self.height, self.width, 3), 24, dtype=np.uint8)
@@ -200,6 +201,10 @@ class MockCamera:
             y = int(180 + r * 280)
             s = int(25 * self.px_per_mm)
             img[y:y + s, x:x + s] = (28, 92, 190)  # film blue, RGB
+            if self.red_tape:                      # tape at the upper-right and lower-left corners
+                for (cx, cy) in ((x + s + 12, y - 12), (x - 12, y + s + 12)):
+                    yy, xx = np.ogrid[:self.height, :self.width]
+                    img[(xx - cx) ** 2 + (yy - cy) ** 2 <= 49] = (220, 30, 30)
         for label in self.loaded_swabs:
             row = int(label[:-1])
             side = label[-1]

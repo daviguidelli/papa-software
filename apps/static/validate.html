@@ -331,6 +331,19 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
       </div>
       <p class="note">The stream runs only while this tab is open. The stamp burned into the bottom-left says REAL, MOCK or REMOTE, the time, and the size of the source frame, so a frozen picture or a mocked camera is obvious. Focus is the manual ring on the lens. Lower the width or frame rate if the picture lags over Wi-Fi.</p>
     </div>
+    <div class="card">
+      <p class="label">Substrate detection · red tape</p>
+      <p class="note" style="margin-top:0">Takes one frame, finds the red corner markers, pairs them into substrates (upper-right with lower-left), numbers them S1, S2, … in rows, and draws the result. Same method as the team's substrateRecognition script.</p>
+      <div class="row" style="align-items:flex-end;margin-top:10px">
+        <label>Marker spacing X px<input type="number" id="edx" min="1" step="1" placeholder="auto"></label>
+        <label>Marker spacing Y px<input type="number" id="edy" min="1" step="1" placeholder="auto"></label>
+        <label style="flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="detSave" checked> Save scan</label>
+        <button class="gold" id="detect">Detect substrates</button>
+      </div>
+      <p class="note" id="detMsg"></p>
+      <img id="detImg" alt="" style="width:100%;display:none;margin-top:10px;border:1px solid var(--line);border-radius:4px">
+      <table style="margin-top:12px" id="detTab" hidden><thead><tr><th>Substrate</th><th>Center X px</th><th>Center Y px</th><th>Pair distance px</th></tr></thead><tbody id="detRows"></tbody></table>
+    </div>
   </div>
 
   <div class="card" style="margin-top:16px">
@@ -566,7 +579,7 @@ async function liveTick(){
 }
 function setWatch(on){
   clearInterval(LC.timer);LC.timer=null;S.watching=on;
-  if(on){liveReset();LC.timer=setInterval(liveTick,120);liveTick()}
+  if(on){liveReset();LC.timer=setInterval(liveTick,250);liveTick()}
 }
 function drawLive(){
   const cv=$('#lcChart'),dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
@@ -703,6 +716,20 @@ $('#camSnap').onclick=async()=>{
 };
 document.addEventListener('visibilitychange',()=>{if(S.tab!=='cam')return;if(document.hidden)camStop();else camStart()});
 
+$('#detect').onclick=async()=>{
+  const m=$('#detMsg');m.textContent='Detecting…';m.className='note';
+  try{
+    const body={save:$('#detSave').checked};
+    if($('#edx').value)body.expected_dx_px=+$('#edx').value;if($('#edy').value)body.expected_dy_px=+$('#edy').value;
+    const r=await post('/api/camera/detect',body);
+    const img=$('#detImg');img.src=r.image;img.style.display='block';
+    $('#detTab').hidden=!r.substrates.length;
+    $('#detRows').innerHTML=r.substrates.map(s=>`<tr><td>S${s.substrate_id}</td><td>${fmt(s.center_x,1)}</td><td>${fmt(s.center_y,1)}</td><td>${fmt(s.pair_distance_px,1)}</td></tr>`).join('');
+    const w=r.warnings||[];
+    m.textContent=`${r.marker_count} red markers · ${r.substrate_count} substrates · ${r.unmatched_markers.length} unpaired · frame ${r.image_width}×${r.image_height} px`+(r.saved_to?` · saved scan ${String(r.scan_id).padStart(4,'0')}`:'')+(w.length?'. '+w.join(' '):'. Pairing is not verified against the real layout, check the picture.');
+    m.className='note '+(w.length?'warn':'good');log('substrate detection: '+r.substrate_count+' found','good');
+  }catch(e){m.textContent=String(e.message||e);m.className='note warn'}
+};
 /* ---------- start ---------- */
 setInterval(()=>{if(!S.busy)poll()},1500);
 setInterval(loadDev,15000);

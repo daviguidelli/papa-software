@@ -95,7 +95,7 @@ class LoadCellSampler:
     """
 
     def __init__(self, cell: Any, maxlen: int = 6000, idle_s: float = 1.5,
-                 min_interval_s: float = 0.0125) -> None:
+                 min_interval_s: float = 0.05) -> None:
         self.cell = cell
         self.idle_s = idle_s
         self.min_interval_s = min_interval_s
