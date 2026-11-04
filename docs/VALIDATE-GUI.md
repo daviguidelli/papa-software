@@ -85,3 +85,11 @@ The Probe card has **Start Z**, **Descent mm/s** and **Step mm**. Order: rise to
 * **Save scan** writes `var/scans/scan_NNNN/` with `original.jpg`, `detected.jpg`, `substrates.json`, like the script does.
 * Output is pixels only. Nothing yet converts pixels to printer X/Y.
 * The load cell sampler reads at 20 samples per second by default, only while the Load cell tab is open.
+
+## Z without homing: declare a reference
+
+Home Z is locked because the gripper hangs lower than the nozzle the printer expects, so the stock Z homing drives it into the bed. Klipper will not move Z until it thinks Z is homed, and an unhomed Z reads 0.
+
+**Set Z here (no motion)** (sidebar) sends `SET_KINEMATIC_POSITION` with the current X and Y and a Z you type. Nothing moves. The number is a label, not a measured height. Because the old floor belonged to the old label, declaring a new reference clears the floor and sets a **ceiling** (default 50 mm above). Jog, hold-jog and the probe all obey floor and ceiling.
+
+Order: Home XY, Set Z here, "Floor = Z − this", jog down slowly, "Floor = current Z" just above the surface. After a firmware restart Klipper forgets Z; do it again.

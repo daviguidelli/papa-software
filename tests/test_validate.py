@@ -537,3 +537,41 @@ def test_detect_with_no_red_says_so(api):
 def test_detect_remote_host_down_is_a_502(api, monkeypatch):
     monkeypatch.setenv("PAPA_CAMERA_URL", "http://127.0.0.1:9")
     assert api.post("/api/camera/detect", json={}).status_code == 502
+
+
+# ---------- Z reference without homing ----------
+
+def test_set_z_needs_xy_home_then_makes_z_jogable_and_clears_the_floor(api):
+    api.post("/api/guard/floor", json={"z": 12.0})
+    assert api.post("/api/machine/set_z", json={"z": 100}).status_code == 400      # XY not homed
+    api.post("/api/machine/home", json={"axes": "X Y"})
+    r = api.post("/api/machine/set_z", json={"z": 100, "up_mm": 30})
+    j = r.json()
+    assert r.status_code == 200 and j["z"] == 100 and j["floor"] is None and j["ceiling"] == 130
+    assert "z" in j["homed"]
+    assert api.post("/api/machine/jog", json={"dz": -1}).status_code == 400          # floor must be set again
+    api.post("/api/guard/floor", json={"z": 95})
+    assert api.post("/api/machine/jog", json={"dz": -3, "speed_mm_s": 2}).status_code == 200
+    assert api.post("/api/machine/jog", json={"dz": -3}).status_code == 400          # would pass the floor
+
+
+def test_ceiling_stops_jog_up_and_hold(api):
+    api.post("/api/machine/home", json={"axes": "X Y"})
+    api.post("/api/machine/set_z", json={"z": 100, "up_mm": 2})
+    assert api.post("/api/machine/jog", json={"dz": 1.5}).status_code == 200
+    r = api.post("/api/machine/jog", json={"dz": 1.5})
+    assert r.status_code == 400 and "ceiling" in r.json()["error"]
+    # a hold up stops at the ceiling
+    _hold_for(api, 1.0, {"dz": 1, "speed_mm_s": 5})
+    _time.sleep(0.2)
+    assert api.get("/api/machine/position").json()["z"] <= 102.0 + 1e-6
+    api.post("/api/machine/hold/stop")
+
+
+def test_ceiling_persists_with_the_floor(tmp_path):
+    g = Guard(tmp_path / "f.json")
+    g.set_floor(90)
+    g.reset_reference(130)
+    assert g.floor is None
+    g2 = Guard(tmp_path / "f.json")
+    assert g2.floor is None and g2.ceiling == 130

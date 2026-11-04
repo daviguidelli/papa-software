@@ -29,15 +29,22 @@ class Guard:
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path else STATE_DIR / "z_floor.json"
         self._floor: float | None = None
+        self._ceiling: float | None = None
         try:
-            v = json.loads(self.path.read_text()).get("z")
+            d = json.loads(self.path.read_text())
+            v, c = d.get("z"), d.get("ceiling")
             self._floor = None if v is None else float(v)
+            self._ceiling = None if c is None else float(c)
         except Exception:                                  # noqa: BLE001
-            self._floor = None
+            self._floor, self._ceiling = None, None
 
     @property
     def floor(self) -> float | None:
         return self._floor
+
+    @property
+    def ceiling(self) -> float | None:
+        return self._ceiling
 
     @property
     def allow_z_home(self) -> bool:
@@ -46,7 +53,7 @@ class Guard:
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"z": self._floor}))
+        tmp.write_text(json.dumps({"z": self._floor, "ceiling": self._ceiling}))
         os.replace(tmp, self.path)
 
     def set_floor(self, z: float) -> None:
@@ -57,8 +64,22 @@ class Guard:
         self._floor = None
         self._save()
 
+    def set_ceiling(self, z: float | None) -> None:
+        self._ceiling = None if z is None else float(z)
+        self._save()
+
+    def reset_reference(self, ceiling: float | None) -> None:
+        """A new Z reference was declared: the old floor belonged to the old one."""
+        self._floor = None
+        self._ceiling = None if ceiling is None else float(ceiling)
+        self._save()
+
     def check_target(self, target_z: float, current_z: Callable[[], float]) -> None:
-        """Raise unless this Z target is allowed. Moving up is always allowed."""
+        """Raise unless this Z target is allowed. Moving up is allowed up to the
+        ceiling, if one is set."""
+        if (self._ceiling is not None and target_z > self._ceiling + EPS
+                and target_z > current_z() + EPS):
+            raise ZFloorError(f"Z {target_z:.3f} is above the ceiling {self._ceiling:.3f}")
         if self._floor is not None and target_z >= self._floor - EPS:
             return
         if target_z >= current_z() - EPS:
@@ -82,7 +103,7 @@ class GuardedPrinter:
         self._inner.move(x=x, y=y, z=z, speed_mm_s=speed_mm_s)
 
     def move_relative(self, dx=0.0, dy=0.0, dz=0.0, speed_mm_s: float = 20.0) -> None:
-        if dz < 0:
+        if dz:
             cur = self._inner.position().z
             self.guard.check_target(cur + dz, lambda: cur)
         self._inner.move_relative(dx=dx, dy=dy, dz=dz, speed_mm_s=speed_mm_s)

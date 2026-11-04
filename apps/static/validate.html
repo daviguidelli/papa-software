@@ -122,6 +122,17 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
   </div>
 
   <div class="card">
+    <p class="label">Z reference · no homing needed</p>
+    <p class="note" id="zRefState" style="margin-top:0"></p>
+    <div class="row" style="margin-top:8px;align-items:flex-end">
+      <label>Call Z this mm<input type="number" id="zrv" value="100" step="1"></label>
+      <label>Room above mm<input type="number" id="zru" value="50" min="0" step="5"></label>
+    </div>
+    <div class="row" style="margin-top:8px"><button class="gold sm" id="setZ">Set Z here (no motion)</button></div>
+    <p class="note">Klipper will not move Z until it thinks Z is homed. This tells it "Z is the number above, right here", with no motion. The number is a label you choose, not a measured height. It clears the floor (the old one belonged to the old label) and sets a ceiling above it. Home X and Y first. Do this again after any firmware restart.</p>
+  </div>
+
+  <div class="card">
     <p class="label">Z floor · lowest allowed Z</p>
     <div class="big" id="floorv" style="font-size:26px">not set</div>
     <div class="row" style="margin-top:10px">
@@ -382,7 +393,7 @@ function setPos(p){S.pos=[p.x,p.y,p.z];S.homed=p.homed||''}
 async function poll(){
   try{
     setPos(await api('/api/machine/position'));
-    const g=await api('/api/guard');S.floor=g.floor;S.allowZHome=g.allow_z_home;
+    const g=await api('/api/guard');S.floor=g.floor;S.ceiling=g.ceiling;S.allowZHome=g.allow_z_home;
   }catch(e){S.pos=null}
   paint();
 }
@@ -404,7 +415,8 @@ function paint(){
   $('#cHome').textContent=S.pos?(homedAll?'Homed XYZ':'Homed: '+(S.homed.toUpperCase()||'none')):'Printer unreachable';
   $('#cFloor').className='chip '+(S.floor==null?'bad':'ok');
   $('#cFloor').textContent=S.floor==null?'Z floor not set':'Z floor '+fmt(S.floor,2);
-  $('#floorv').textContent=S.floor==null?'not set':fmt(S.floor,3)+' mm';
+  $('#floorv').textContent=S.floor==null?'not set':fmt(S.floor,3)+' mm'+(S.ceiling!=null?'  ·  ceiling '+fmt(S.ceiling,1):'');
+  {const zh=S.homed.includes('z'),xy=S.homed.includes('x')&&S.homed.includes('y');$('#zRefState').textContent=zh?'Z is known to Klipper'+(S.ceiling!=null?' (declared; ceiling '+fmt(S.ceiling,1)+' mm)':' (homed)')+'.':'Z is NOT known to Klipper: it shows 0 and will not move.';$('#zRefState').className='note '+(zh?'good':'warn');$('#setZ').disabled=S.busy||!S.pos||!xy}
   if(S.dev){
     const d=S.dev.devices;chipFor('#cPrinter','Printer',d.printer,d.printer.reachable===false?' (no answer)':'');
     chipFor('#cCell','Load cell',d.loadcell);chipFor('#cServo','Servo',d.gripper);
@@ -547,6 +559,10 @@ async function putFloor(z,what){
 $('#allowDown').onclick=()=>{if(!S.pos)return;const d=Math.max(.5,Math.min(50,+$('#fd').value||5));putFloor(Math.max(0,S.pos[2]-d),`${d} mm below current Z ${S.pos[2].toFixed(3)}`)};
 $('#setTyped').onclick=()=>putFloor(parseFloat($('#ft').value),'typed');
 $('#setFloor').onclick=()=>{if(S.pos)putFloor(S.pos[2],'current Z')};
+$('#setZ').onclick=()=>{
+  const z=+$('#zrv').value,up=+$('#zru').value;
+  if(!confirm(`Declare "Z = ${z} mm" at the current height, with ${up} mm of room above?\n\nNothing moves. The Z floor will be cleared and must be set again.`))return;
+  run('Z declared '+z,async()=>{const r=await post('/api/machine/set_z',{z,up_mm:up});setPos(r);S.floor=r.floor;S.ceiling=r.ceiling;say('Z declared. Now set the floor: use "Floor = Z − this", then jog down slowly.','good')})};
 $('#clrFloor').onclick=()=>run('Z floor cleared',async()=>{const g=await post('/api/guard/floor',{z:null});S.floor=g.floor;say('Z floor cleared. Z down is blocked.','warn')});
 
 /* ---------- tabs ---------- */

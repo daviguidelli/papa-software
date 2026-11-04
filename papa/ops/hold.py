@@ -96,6 +96,11 @@ class HoldJog:
                     if not lo <= target <= hi:
                         self.stopped_because = f"{name.upper()} limit reached"
                         return
+                    if axis == 2 and d[2] > 0:
+                        ce = self._guard_fn().ceiling
+                        if ce is not None and target > ce:
+                            self.stopped_because = f"Z ceiling {ce:.3f} reached"
+                            return
                     if axis == 2 and d[2] < 0:
                         fl = self._guard_fn().floor
                         if fl is None:

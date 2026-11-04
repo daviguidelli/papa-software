@@ -611,7 +611,32 @@ def _patch_calibration(updates: dict) -> None:
 
 @app.get("/api/guard")
 def guard_state() -> dict:
-    return {"floor": hub.guard.floor, "allow_z_home": hub.guard.allow_z_home}
+    return {"floor": hub.guard.floor, "ceiling": hub.guard.ceiling,
+            "allow_z_home": hub.guard.allow_z_home}
+
+
+@app.post("/api/machine/set_z")
+def set_z(payload: dict) -> dict:
+    """Tell Klipper where Z is without moving, so Z can be jogged with no Z home.
+
+    The number is a reference you choose, not a measured height, unless you
+    measured it. Because every Z limit is relative to it, declaring a new one
+    clears the floor and sets a ceiling `up_mm` above it.
+    """
+    hub.require_idle()
+    p = hub.printer.position()
+    if not all(a in p.homed for a in "xy"):
+        raise HTTPException(400, "Home X and Y first; Z is declared on top of a known X and Y")
+    z = float(payload.get("z", 100.0))
+    up = float(payload.get("up_mm", 50.0))
+    lo, hi = hub.machine.limits["z"]
+    if not lo <= z <= hi:
+        raise HTTPException(400, f"Z must be {lo} to {hi}")
+    if not 0 <= up <= hi - z:
+        raise HTTPException(400, f"the room above must be 0 to {hi - z:g} mm")
+    hub.printer.script(f"SET_KINEMATIC_POSITION X={p.x:.4f} Y={p.y:.4f} Z={z:.4f}", wait=False)
+    hub.guard.reset_reference(z + up)
+    return {**position(), **guard_state()}
 
 
 @app.post("/api/guard/floor")
@@ -834,6 +859,8 @@ def loadcell_probe(payload: dict | None = None) -> dict:
         raise HTTPException(400, "step must be 0.01 to 1 mm")
     if start_z < hub.guard.floor:
         raise HTTPException(400, "probe start Z is below the Z floor")
+    if hub.guard.ceiling is not None and start_z > hub.guard.ceiling:
+        raise HTTPException(400, "probe start Z is above the Z ceiling")
     if not hub.printer.position().is_homed:
         raise HTTPException(400, "home the machine first")
     try:

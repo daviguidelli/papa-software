@@ -45,6 +45,11 @@ class MockMoonraker:
                 relative = True
             elif up.startswith("G90"):
                 relative = False
+            elif up.startswith("SET_KINEMATIC_POSITION"):
+                for tok in up.split()[1:]:
+                    if "=" in tok and tok[0] in "XYZ":
+                        setattr(self, tok[0].lower(), float(tok.split("=")[1]))
+                self.homed = "xyz"
             elif up.startswith("G28"):
                 axes = [a for a in "XYZ" if a in up[3:]] or ["X", "Y", "Z"]
                 for a in axes:
