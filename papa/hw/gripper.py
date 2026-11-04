@@ -12,7 +12,10 @@ empty and clear of everything.
 """
 from __future__ import annotations
 
+import glob
+import os
 import time
+from pathlib import Path
 from typing import Protocol
 
 PERIOD_US = 20_000  # 50 Hz
@@ -23,6 +26,69 @@ MAX_SLEW_US_S = 2000.0
 
 class GripperNotCalibrated(RuntimeError):
     pass
+
+
+# GPIO12/18 are PWM channel 0 and GPIO13/19 are channel 1 on the Pi's PWM block.
+HW_PWM_CHANNEL = {12: 0, 18: 0, 13: 1, 19: 1}
+
+
+class SysfsPwm:
+    """The Pi's real PWM hardware through /sys/class/pwm: steady pulses with no
+    CPU timing, so the servo does not twitch. Needs this line in
+    /boot/firmware/config.txt, then a reboot:  dtoverlay=pwm,pin=13,func=4
+    """
+
+    def __init__(self, gpio: int, root: str = "/sys/class/pwm") -> None:
+        if gpio not in HW_PWM_CHANNEL:
+            raise RuntimeError(f"GPIO{gpio} has no hardware PWM")
+        chans = HW_PWM_CHANNEL[gpio]
+        chips = sorted(glob.glob(os.path.join(root, "pwmchip*")))
+        if not chips:
+            raise RuntimeError("no pwmchip: add 'dtoverlay=pwm,pin=13,func=4' to config.txt and reboot")
+        chip = Path(chips[0])
+        self.node = chip / f"pwm{chans}"
+        if not self.node.exists():
+            (chip / "export").write_text(str(chans))
+            for _ in range(50):
+                if self.node.exists():
+                    break
+                time.sleep(0.02)
+        if not self.node.exists():
+            raise RuntimeError("could not export the PWM channel")
+        self._wait_writable()
+        self._period_ns = 20_000_000
+        self._set("enable", "0")
+        self._set("period", str(self._period_ns))
+        self._set("duty_cycle", "0")
+        self._on = False
+
+    def _wait_writable(self) -> None:
+        for _ in range(50):
+            if os.access(self.node / "period", os.W_OK):
+                return
+            time.sleep(0.02)
+        raise RuntimeError("PWM channel is not writable by this user")
+
+    def _set(self, name: str, value: str) -> None:
+        (self.node / name).write_text(value)
+
+    def write(self, width_us: int) -> None:
+        self._set("duty_cycle", str(int(width_us) * 1000))
+        if not self._on:
+            self._set("enable", "1")
+            self._on = True
+
+    def off(self) -> None:
+        self._set("duty_cycle", "0")
+        self._set("enable", "0")
+        self._on = False
+
+    def close(self) -> None:
+        self.off()
+        try:
+            (self.node.parent / "unexport").write_text(self.node.name.removeprefix("pwm"))
+        except OSError:
+            pass
 
 
 class Gripper(Protocol):
@@ -51,22 +117,35 @@ def ramp_points(start: int, end: int, slew_us_s: float) -> list[tuple[int, float
 class ServoGripper:
     def __init__(self, pwm_pin: int, open_us: int, closed_us: int,
                  settle_s: float = 0.45, calibrated: bool = False) -> None:
-        import lgpio
-
-        self._lg = lgpio
-        self._h = lgpio.gpiochip_open(0)
         self.pin = pwm_pin
         self.open_us = int(open_us)
         self.closed_us = int(closed_us)
         self.settle_s = settle_s
         self.calibrated = bool(calibrated)
-        lgpio.gpio_claim_output(self._h, pwm_pin, 0)
+        self._hw: SysfsPwm | None = None
+        self._lg = None
+        self.backend_note = ""
+        try:
+            self._hw = SysfsPwm(pwm_pin)
+        except Exception as exc:                               # noqa: BLE001
+            self.backend_note = f"hardware PWM unavailable ({exc}); using software timing, which can twitch"
+            import lgpio
+
+            self._lg = lgpio
+            self._h = lgpio.gpiochip_open(0)
+            lgpio.gpio_claim_output(self._h, pwm_pin, 0)
         self._state = "unknown"
         self.pulse_us: int | None = None
 
+    @property
+    def backend(self) -> str:
+        return "hardware" if self._hw is not None else "software"
+
     def _write(self, width_us: int) -> None:
-        duty = 100.0 * width_us / PERIOD_US
-        self._lg.tx_pwm(self._h, self.pin, 50, duty)
+        if self._hw is not None:
+            self._hw.write(width_us)
+        else:
+            self._lg.tx_pwm(self._h, self.pin, 50, 100.0 * width_us / PERIOD_US)
         self.pulse_us = width_us
 
     def _pulse(self, width_us: int, slew_us_s: float | None = None,
@@ -108,8 +187,14 @@ class ServoGripper:
 
     def release(self) -> None:
         """Stop driving the servo so it is not holding torque between moves."""
-        self._lg.tx_pwm(self._h, self.pin, 50, 0)
+        if self._hw is not None:
+            self._hw.off()
+        else:
+            self._lg.tx_pwm(self._h, self.pin, 50, 0)
 
     def shutdown(self) -> None:
         self.release()
-        self._lg.gpiochip_close(self._h)
+        if self._hw is not None:
+            self._hw.close()
+        else:
+            self._lg.gpiochip_close(self._h)

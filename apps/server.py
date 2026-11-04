@@ -552,6 +552,7 @@ def _grip_info() -> dict:
         "locked": {"open_us": cal["open_us"], "closed_us": cal["closed_us"]},
         "open_set": bool(cal.get("open_set")), "closed_set": bool(cal.get("closed_set")),
         "calibrated": bool(getattr(g, "calibrated", True)),
+        "backend": getattr(g, "backend", "mock"), "backend_note": getattr(g, "backend_note", ""),
         "window": list(hub.servo_window),
         "min_us": MIN_US, "max_us": MAX_US,
     }

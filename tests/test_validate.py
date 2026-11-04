@@ -365,3 +365,39 @@ def test_moonraker_url_can_be_overridden_from_the_environment(monkeypatch):
     default = m.moonraker_url
     monkeypatch.setenv("PAPA_MOONRAKER_URL", "http://10.24.48.56:7125/")
     assert m.moonraker_url == "http://10.24.48.56:7125" != default
+
+
+# ---------- hardware PWM backend (fake sysfs) ----------
+
+def _fake_pwm(tmp_path):
+    chip = tmp_path / "pwmchip0"
+    chip.mkdir()
+    (chip / "export").write_text("")
+    (chip / "unexport").write_text("")
+    (chip / "npwm").write_text("2")
+    node = chip / "pwm1"
+    node.mkdir()
+    for f in ("period", "duty_cycle", "enable"):
+        (node / f).write_text("0")
+    return chip, node
+
+
+def test_sysfs_pwm_writes_period_and_duty_in_nanoseconds(tmp_path):
+    from papa.hw.gripper import SysfsPwm
+
+    chip, node = _fake_pwm(tmp_path)
+    pwm = SysfsPwm(13, root=str(tmp_path))
+    assert (node / "period").read_text() == "20000000"
+    pwm.write(1500)
+    assert (node / "duty_cycle").read_text() == "1500000" and (node / "enable").read_text() == "1"
+    pwm.off()
+    assert (node / "enable").read_text() == "0"
+
+
+def test_sysfs_pwm_errors_clearly_without_the_overlay(tmp_path):
+    from papa.hw.gripper import SysfsPwm
+
+    with pytest.raises(RuntimeError, match="dtoverlay=pwm"):
+        SysfsPwm(13, root=str(tmp_path))
+    with pytest.raises(RuntimeError, match="no hardware PWM"):
+        SysfsPwm(5, root=str(tmp_path))

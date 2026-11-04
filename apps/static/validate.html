@@ -386,7 +386,7 @@ function paint(){
     const d=S.dev.devices;chipFor('#cPrinter','Printer',d.printer,d.printer.reachable===false?' (no answer)':'');
     chipFor('#cCell','Load cell',d.loadcell);chipFor('#cServo','Servo',d.gripper);
     $('#cellReal').className=$('#cCell').className;$('#cellReal').textContent=d.loadcell.real?'REAL reading':'MOCK · not a real reading';
-    $('#servoReal').className=$('#cServo').className;$('#servoReal').textContent=d.gripper.real?'REAL servo':'MOCK · nothing will move';
+    $('#servoReal').className=$('#cServo').className;$('#servoReal').textContent=d.gripper.real?'REAL servo'+(S.grip&&S.grip.backend?' · '+S.grip.backend+' PWM':''):'MOCK · nothing will move';
     const cam=d.camera,cc=$('#cCam');
     if(cam.remote){cc.className='chip ok';cc.textContent='Camera · REMOTE'}else chipFor('#cCam','Camera',cam);
     $('#camReal').className=cc.className;$('#camReal').textContent=cam.remote?'REMOTE · from '+cam.remote:cam.error?'UNAVAILABLE':cam.real?'REAL camera':'MOCK · synthetic picture';
@@ -434,6 +434,7 @@ function paintServo(){
     const ok=g.open_set&&g.closed_set;
     $('#calState').textContent=ok?'Both positions locked. OPEN and CLOSED are now enabled for tests and jobs.':'Lock both OPEN and CLOSED to enable the gripper. Until then it cannot open or close on its own.';
     $('#calState').className='note '+(ok?'good':'warn');
+    if(g.backend_note){$('#servoNote').textContent=g.backend_note;$('#servoNote').className='note warn'}
     $('#testOpen').disabled=S.busy||!ok;$('#testClosed').disabled=S.busy||!ok}
 }
 function paintSlide(){
