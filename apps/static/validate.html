@@ -152,21 +152,31 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
   <!-- ============ LOAD CELL ============ -->
   <div class="panel stack" id="p-cell">
     <div class="card">
-      <p class="label">Force</p>
       <div class="row" style="justify-content:space-between;align-items:center">
-        <div><span class="big" id="grams">–</span> <span class="muted mono">g</span></div>
-        <span class="chip" id="cellReal"></span>
+        <p class="label" style="margin:0">Live force</p><span class="chip" id="cellReal"></span>
       </div>
+      <div style="margin-top:6px"><span class="big" id="grams">–</span> <span class="muted mono" id="lcUnit">g</span></div>
       <div class="bar"><i id="forceBar"></i></div>
       <p class="note mono" id="forceNote"></p>
-      <div class="row" style="margin-top:12px">
-        <button id="watch">Watch force</button>
-        <button id="tare" class="gold">Tare</button>
+      <canvas id="lcChart" style="width:100%;height:240px;display:block;margin-top:10px;border:1px solid var(--line);border-radius:4px;background:rgba(0,0,0,.25)"></canvas>
+      <div class="row" style="margin-top:10px;align-items:flex-end">
+        <label>Window<select id="lcWin"><option value="5">5 s</option><option value="10" selected>10 s</option><option value="30">30 s</option><option value="60">60 s</option></select></label>
+        <label>Smoothing<select id="lcFilt"><option value="1">none (raw)</option><option value="5">median of 5</option><option value="11" selected>median of 11</option><option value="21">median of 21</option><option value="41">median of 41</option></select></label>
+        <button id="watch">Pause</button>
+      </div>
+      <div class="kv" id="lcStats" style="margin-top:12px"></div>
+      <p class="note" id="lcVerdict"></p>
+    </div>
+
+    <div class="card">
+      <p class="label">Zero and scale</p>
+      <div class="row">
+        <button id="tare" class="gold">Tare (cell empty)</button>
         <label>Known weight g<input type="number" id="kw" value="100" min="1" step="1"></label>
         <button id="scale" class="gold">Calibrate scale</button>
         <button id="saveScale" disabled>Save tare + scale</button>
       </div>
-      <p class="note" id="scaleNote"></p>
+      <p class="note" id="scaleNote">Until the scale is calibrated the numbers above are raw counts, not grams. Order: empty cell, Tare; then place the known weight, Calibrate scale; then Save.</p>
     </div>
 
     <div class="card">
@@ -530,29 +540,86 @@ $('#clrFloor').onclick=()=>run('Z floor cleared',async()=>{const g=await post('/
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   S.tab=t.dataset.tab;document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected',x===t));
   ['cell','offset','servo','slide','cam'].forEach(n=>$('#p-'+n).hidden=n!==S.tab);
-  if(S.tab!=='cell')setWatch(false);
+  if(S.tab==='cell')setWatch(true);else setWatch(false);
   if(S.tab==='cam')camStart();else camStop();
   if(S.tab==='servo')loadGrip();if(S.tab==='slide')loadSlide();if(S.tab==='offset'){loadCal()}
 });
 
 /* ---------- load cell ---------- */
-let wt=null;
-function setWatch(on){S.watching=on;$('#watch').textContent=on?'Stop watching':'Watch force';clearInterval(wt);if(on)wt=setInterval(readForce,350)}
-async function readForce(){
-  try{const d=await api('/api/loadcell');showForce(d.grams)}catch(e){setWatch(false);$('#forceNote').textContent='Load cell unavailable: '+e.message}
+/* ---------- live force ---------- */
+const LC={seq:0,t:[],c:[],offset:0,scale:1,scaled:false,timer:null,paused:false,err:'',lastT:0};
+const colors=()=>{const cs=getComputedStyle(document.documentElement);return{ink:cs.getPropertyValue('--ink').trim()||'#EAF1FB',muted:cs.getPropertyValue('--muted').trim()||'#9FB1CC',gold:cs.getPropertyValue('--gold').trim()||'#D9B45A',line:'rgba(130,170,220,.25)',green:'#4FD08A',red:'#FF6B5E'}};
+const medianOf=a=>{const b=[...a].sort((x,y)=>x-y),n=b.length;return n?(n%2?b[(n-1)/2]:(b[n/2-1]+b[n/2])/2):NaN};
+const toUnit=c=>LC.scaled?(c-LC.offset)/LC.scale:(c-LC.offset);
+function liveReset(){LC.seq=0;LC.t=[];LC.c=[]}
+async function liveTick(){
+  if(S.busy||LC.paused||S.tab!=='cell'||document.hidden)return;
+  try{
+    const d=await api('/api/loadcell/live?since='+LC.seq);
+    if(d.seq<LC.seq){liveReset()}
+    LC.seq=d.seq;LC.offset=d.offset;LC.scale=d.scale;LC.scaled=d.scaled;LC.err=d.error||'';
+    for(const [t,c] of d.samples){LC.t.push(t);LC.c.push(c)}
+    const keep=Math.max(+$('#lcWin').value*1.2,12);
+    if(LC.t.length){LC.lastT=LC.t[LC.t.length-1];while(LC.t.length&&LC.t[0]<LC.lastT-keep){LC.t.shift();LC.c.shift()}}
+    drawLive();
+  }catch(e){LC.err=e.message;$('#lcVerdict').textContent='Load cell unavailable: '+e.message;$('#lcVerdict').className='note warn'}
 }
-function showForce(g){
-  $('#grams').textContent=fmt(g,2);const z=S.dev&&S.dev.zcal,ab=z?z.abort_force_g:20,tg=z?z.target_force_g:5;
-  const b=$('#forceBar');b.style.width=Math.max(0,Math.min(100,g/ab*100))+'%';b.style.background=g>=ab?'#FF6B5E':g>=tg?'#D9B45A':'#4FD08A';
-  $('#forceNote').textContent=`target ${tg} g · abort ${ab} g`;
+function setWatch(on){
+  clearInterval(LC.timer);LC.timer=null;S.watching=on;
+  if(on){liveReset();LC.timer=setInterval(liveTick,120);liveTick()}
 }
-$('#watch').onclick=()=>{setWatch(!S.watching);if(S.watching)readForce()};
-$('#tare').onclick=()=>run('tare',async()=>{const r=await post('/api/loadcell/tare');S.tared=r.tare_counts;$('#scaleNote').textContent='Tared at '+r.tare_counts+' counts. Unload the cell first.';$('#saveScale').disabled=S.scaled==null;await readForce()});
+function drawLive(){
+  const cv=$('#lcChart'),dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
+  if(!W)return;cv.width=W*dpr;cv.height=H*dpr;const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,W,H);
+  const C=colors(),win=+$('#lcWin').value,N=+$('#lcFilt').value,unit=LC.scaled?'g':'counts';
+  $('#lcUnit').textContent=unit+(LC.scaled?'':' (not calibrated)');
+  const t1=LC.lastT,t0=t1-win;
+  const idx=[];for(let i=0;i<LC.t.length;i++)if(LC.t[i]>=t0)idx.push(i);
+  const raw=idx.map(i=>toUnit(LC.c[i])),tt=idx.map(i=>LC.t[i]);
+  const filt=raw.map((_,i)=>medianOf(raw.slice(Math.max(0,i-N+1),i+1)));
+  if(raw.length<2){g.fillStyle=C.muted;g.font='13px IBM Plex Mono,monospace';g.fillText(LC.err||'Waiting for readings…',14,24);$('#grams').textContent='–';return}
+  let lo=Math.min(...raw),hi=Math.max(...raw);const rawPP=hi-lo;
+  const z=S.dev&&S.dev.zcal,ab=z?z.abort_force_g:20,tg=z?z.target_force_g:5;
+  if(LC.scaled){lo=Math.min(lo,0);hi=Math.max(hi,tg*1.2)}
+  const pad=(hi-lo)*0.08||1;lo-=pad;hi+=pad;
+  const L=58,R=10,T=10,B=22,pw=W-L-R,ph=H-T-B;
+  const X=t=>L+(t-t0)/win*pw,Y=v=>T+(1-(v-lo)/(hi-lo))*ph;
+  const nice=(()=>{const span=hi-lo,raw0=span/4,p=Math.pow(10,Math.floor(Math.log10(raw0))),f=raw0/p;return(f<1.5?1:f<3.5?2:f<7.5?5:10)*p})();
+  g.font='11px IBM Plex Mono,monospace';g.textBaseline='middle';
+  for(let v=Math.ceil(lo/nice)*nice;v<=hi;v+=nice){const y=Y(v);g.strokeStyle=C.line;g.beginPath();g.moveTo(L,y);g.lineTo(W-R,y);g.stroke();g.fillStyle=C.muted;g.textAlign='right';g.fillText(Math.abs(v)>=1000?v.toFixed(0):+v.toFixed(2),L-6,y)}
+  g.textAlign='center';g.textBaseline='alphabetic';for(let k=0;k<=win;k+=win>=30?10:win>=10?2:1){g.fillStyle=C.muted;g.fillText('-'+(win-k)+'s',X(t0+k),H-6)}
+  if(LC.scaled){[[tg,C.gold],[ab,C.red]].forEach(([v,col])=>{if(v>=lo&&v<=hi){g.strokeStyle=col;g.setLineDash([5,4]);g.beginPath();g.moveTo(L,Y(v));g.lineTo(W-R,Y(v));g.stroke();g.setLineDash([])}})}
+  g.lineWidth=1;g.strokeStyle='rgba(159,177,204,.55)';g.beginPath();tt.forEach((t,i)=>{i?g.lineTo(X(t),Y(raw[i])):g.moveTo(X(t),Y(raw[i]))});g.stroke();
+  if(N>1){g.lineWidth=2;g.strokeStyle=C.gold;g.beginPath();tt.forEach((t,i)=>{i?g.lineTo(X(t),Y(filt[i])):g.moveTo(X(t),Y(filt[i]))});g.stroke()}
+  g.lineWidth=1;
+  const now=N>1?filt[filt.length-1]:raw[raw.length-1];
+  $('#grams').textContent=LC.scaled?fmt(now,2):Math.round(now).toLocaleString('en-US');
+  const b=$('#forceBar');
+  if(LC.scaled){b.style.width=Math.max(0,Math.min(100,now/ab*100))+'%';b.style.background=now>=ab?'#FF6B5E':now>=tg?'#D9B45A':'#4FD08A';$('#forceNote').textContent=`target ${tg} g · abort ${ab} g`}
+  else{b.style.width='0%';$('#forceNote').textContent='raw counts relative to the tare point; calibrate the scale to get grams'}
+  // noise statistics over the window (raw samples)
+  const n=raw.length,mean=raw.reduce((a,x)=>a+x,0)/n,sd=Math.sqrt(raw.reduce((a,x)=>a+(x-mean)**2,0)/n),pp=rawPP;
+  const med=medianOf(raw),mad=medianOf(raw.map(x=>Math.abs(x-med)))*1.4826,spikes=mad>0?raw.filter(x=>Math.abs(x-med)>6*mad).length:0;
+  const sps=n/Math.max(.001,tt[n-1]-tt[0]),f=x=>LC.scaled?fmt(x,3)+' g':Math.round(x).toLocaleString('en-US')+' counts';
+  const lsb=LC.scaled?(sd/ (LC.scale||1)):sd;
+  $('#lcStats').innerHTML=`<span>Noise (std dev)</span><span>${f(sd)}</span><span>Peak to peak</span><span>${f(pp)}</span><span>Median in window</span><span>${f(med)}</span><span>Samples</span><span>${n} (${sps.toFixed(0)} per s)</span>`;
+  const rawAll=idx.map(i=>LC.c[i]);let v='',cls='note';
+  if(n<15){v='Collecting readings…'}
+  else if(rawAll.some(c=>Math.abs(c)>=8388600)){v='A reading is pinned at the 24-bit limit. That is a wiring problem: check DAT, CLK, power and the four load cell wires.';cls='note warn'}
+  else if(sd===0){v='The reading never changes. DAT may be stuck or the cell is not connected.';cls='note warn'}
+  else if(spikes/n>0.02){v=`${spikes} of ${n} samples are sharp spikes. Spikes like that are usually timing glitches or electrical noise rather than real force. The smoothing hides them; the raw grey line shows them.`;cls='note warn'}
+  else{v='Looks clean: no spikes in this window.';cls='note good'}
+  $('#lcVerdict').textContent=v;$('#lcVerdict').className=cls;
+}
+$('#lcWin').onchange=$('#lcFilt').onchange=drawLive;
+window.addEventListener('resize',()=>{if(S.tab==='cell')drawLive()});
+$('#watch').onclick=()=>{LC.paused=!LC.paused;$('#watch').textContent=LC.paused?'Resume':'Pause'};
+$('#tare').onclick=()=>run('tare',async()=>{const r=await post('/api/loadcell/tare');S.tared=r.tare_counts;$('#scaleNote').textContent='Tared at '+r.tare_counts+' counts. The cell should have been empty.';$('#saveScale').disabled=S.scaled==null;liveReset()});
 $('#scale').onclick=()=>run('scale',async()=>{
   const g=+$('#kw').value;if(!(g>0))throw new Error('Enter the known weight in grams');
   const r=await post('/api/loadcell/scale',{grams:g});S.scaled=r.scale_counts_per_g;
   $('#scaleNote').textContent=`Scale ${fmt(S.scaled,4)} counts per gram. Tare with the cell empty first, then place ${g} g on it before pressing Calibrate scale.`;
-  $('#saveScale').disabled=S.tared==null;await readForce()});
+  $('#saveScale').disabled=S.tared==null;liveReset()});
 $('#saveScale').onclick=()=>run('save tare + scale',async()=>{await post('/api/loadcell/save_scale',{tare_counts:S.tared,scale_counts_per_g:S.scaled});await loadCal();$('#scaleNote').textContent='Saved to the calibration file.'});
 $('#capXY').onclick=()=>run('load cell XY captured',async()=>{await post('/api/loadcell/position',{capture_xy:true});await loadCal()});
 $('#goXY').onclick=()=>run('go to load cell XY',async()=>{const l=lcCal();if(!l.xy_set)throw new Error('Capture the load cell XY first');setPos(await post('/api/machine/move',{x:l.x,y:l.y,speed_mm_s:+$('#fxy').value}))});
@@ -639,7 +706,7 @@ document.addEventListener('visibilitychange',()=>{if(S.tab!=='cam')return;if(doc
 /* ---------- start ---------- */
 setInterval(()=>{if(!S.busy)poll()},1500);
 setInterval(loadDev,15000);
-(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint()})();
+(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();if(S.tab==='cell')setWatch(true)})();
 </script>
 </body>
 </html>

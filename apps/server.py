@@ -27,6 +27,7 @@ from papa.ops.machine import Orchestrator, Status
 from papa.ops.swabs import Rack
 from papa.ops.zcal import GripFailed, OverForce, calibrate_z
 from papa.hw.camera import LockedCamera
+from papa.hw.loadcell import LoadCellSampler
 from papa.hw.gripper import MAX_US, MIN_US, GripperNotCalibrated
 from papa.ops.hold import HoldJog
 from papa.vision.live import encode_jpeg
@@ -99,6 +100,7 @@ class Hub:
         self.strokes: list[Any] = []
         self.dxf_name = ""
         self.lock = threading.Lock()
+        self._sampler: LoadCellSampler | None = None
         self.hold = HoldJog(lambda: self.printer, self.machine, lambda: self.guard)
         self.servo_window = [1300, 1700]
 
@@ -117,6 +119,16 @@ class Hub:
     @property
     def camera(self) -> Any:
         return self.devices["camera"].get()
+
+    @property
+    def sampler(self) -> LoadCellSampler:
+        if self._sampler is None or self._sampler.cell is not self.loadcell:
+            self._sampler = LoadCellSampler(self.loadcell)
+        return self._sampler
+
+    def stop_sampler(self) -> None:
+        if self._sampler is not None:
+            self._sampler.stop()
 
     @property
     def busy(self) -> bool:
@@ -642,18 +654,46 @@ def gripper(action: str, payload: dict | None = None) -> dict:
 
 @app.get("/api/loadcell")
 def loadcell() -> dict:
-    return {"grams": round(hub.loadcell.grams(), 3)}
+    """One filtered reading. grams is null until the scale has been calibrated."""
+    lc = hub.loadcell
+    scaled = bool(getattr(lc, "scaled", True))
+    counts = lc.read_counts()
+    off = getattr(lc, "offset", 0)
+    sc = getattr(lc, "scale", 1.0) or 1.0
+    return {"counts": counts, "offset": off, "scale": sc, "scaled": scaled,
+            "grams": round(lc.grams(), 3) if scaled else None}
+
+
+@app.get("/api/loadcell/live")
+def loadcell_live(since: int = 0, limit: int = 2000) -> dict:
+    """New raw samples since a sequence number. Calling it keeps the background
+    sampler running; the sampler stops by itself when nobody asks."""
+    lc = hub.loadcell
+    sm = hub.sampler
+    sm.touch()
+    seq, items = sm.since(int(since), max(1, min(int(limit), 4000)))
+    return {
+        "seq": seq,
+        "samples": [[round(t, 4), c] for t, c in items],
+        "offset": getattr(lc, "offset", 0),
+        "scale": getattr(lc, "scale", 1.0) or 1.0,
+        "scaled": bool(getattr(lc, "scaled", True)),
+        "error": sm.error,
+        "real": cfgmod.is_real("loadcell"),
+    }
 
 
 @app.post("/api/loadcell/tare")
 def tare() -> dict:
     hub.require_idle()
+    hub.stop_sampler()
     return {"tare_counts": hub.loadcell.tare()}
 
 
 @app.post("/api/loadcell/scale")
 def scale(payload: dict) -> dict:
     hub.require_idle()
+    hub.stop_sampler()
     g = float(payload.get("grams", 0))
     return {"scale_counts_per_g": hub.loadcell.calibrate_with_known_weight(g)}
 
@@ -700,6 +740,7 @@ def loadcell_probe(payload: dict | None = None) -> dict:
     begins), speed_mm_s (the stepped descent speed) and step_mm.
     """
     hub.require_idle()
+    hub.stop_sampler()
     body = payload or {}
     lc, z, sp = hub.cal.load_cell, hub.machine.zcal, hub.machine.speeds
     if hub.guard.floor is None:

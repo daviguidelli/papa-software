@@ -123,7 +123,8 @@ class MockLoadCell:
     has_swab: bool = True
     noise_g: float = 0.05
     offset: int = 0
-    scale: float = 1.0
+    scale: float = 1000.0     # counts per gram, so noise survives integer counts
+    scaled: bool = True
 
     def grams(self, samples: int = 5) -> float:
         if not self.has_swab:
@@ -140,7 +141,7 @@ class MockLoadCell:
         return 0
 
     def calibrate_with_known_weight(self, grams_known: float, samples: int = 20) -> float:
-        self.scale = 1.0
+        self.scale = 1000.0
         return self.scale
 
 

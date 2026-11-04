@@ -401,3 +401,91 @@ def test_sysfs_pwm_errors_clearly_without_the_overlay(tmp_path):
         SysfsPwm(13, root=str(tmp_path))
     with pytest.raises(RuntimeError, match="no hardware PWM"):
         SysfsPwm(5, root=str(tmp_path))
+
+
+# ---------- live load cell ----------
+
+def test_sampler_collects_and_only_returns_new_samples():
+    import time as t
+
+    from papa.hw.loadcell import LoadCellSampler
+    from papa.sim.mocks import MockLoadCell, MockMoonraker
+
+    sm = LoadCellSampler(MockLoadCell(printer=MockMoonraker()), idle_s=0.5, min_interval_s=0.005)
+    sm.touch()
+    t.sleep(0.3)
+    seq, first = sm.since(0)
+    assert seq > 10 and len(first) == seq
+    t.sleep(0.15)
+    seq2, new = sm.since(seq)
+    assert seq2 > seq and len(new) == seq2 - seq
+    assert all(b[0] >= a[0] for a, b in zip(first, first[1:]))
+    t.sleep(0.8)                                      # nobody asked: it stops by itself
+    assert not sm.running
+
+
+def test_sampler_stop_is_immediate_and_survives_read_errors():
+    import time as t
+
+    from papa.hw.loadcell import LoadCellSampler
+
+    class Flaky:
+        n = 0
+
+        def read_counts(self):
+            Flaky.n += 1
+            if Flaky.n < 3:
+                raise TimeoutError("HX711 not ready")
+            return 1234
+
+    sm = LoadCellSampler(Flaky(), idle_s=5, min_interval_s=0.005)
+    sm.touch()
+    t.sleep(0.9)
+    assert sm.since(0)[1] and sm.since(0)[1][-1][1] == 1234
+    sm.stop()
+    assert not sm.running
+
+
+def test_live_endpoint_streams_counts_and_says_whether_scaled(api):
+    import time as t
+
+    r1 = api.get("/api/loadcell/live?since=0")
+    assert r1.status_code == 200
+    t.sleep(0.4)
+    r2 = api.get(f"/api/loadcell/live?since={r1.json()['seq']}")
+    j = r2.json()
+    assert j["seq"] > r1.json()["seq"] and j["samples"] and j["scaled"] is True
+    assert api.get("/api/loadcell").json()["grams"] is not None
+
+
+def test_unscaled_cell_reports_null_grams_and_live_says_not_scaled(api):
+    class Raw:
+        scaled = False
+        offset = 8_000_000
+        scale = 1.0
+
+        def read_counts(self):
+            return 8_000_100
+
+        def grams(self, samples=5):
+            return 100.0                                  # would be a lie: really counts
+
+    fake = Raw()
+    api.server.hub.devices["loadcell"] = api.server.Device("loadcell", lambda: fake)
+    r = api.get("/api/loadcell").json()
+    assert r["grams"] is None and r["scaled"] is False and r["counts"] == 8_000_100
+    import time as _t
+    api.get("/api/loadcell/live?since=0")
+    _t.sleep(0.2)
+    j = api.get("/api/loadcell/live?since=0").json()
+    assert j["scaled"] is False and j["offset"] == 8_000_000 and j["samples"][-1][1] == 8_000_100
+
+
+def test_tare_and_probe_stop_the_sampler(api):
+    import time as t
+
+    api.get("/api/loadcell/live?since=0")
+    t.sleep(0.2)
+    assert api.server.hub.sampler.running
+    api.post("/api/loadcell/tare")
+    assert not api.server.hub.sampler.running
