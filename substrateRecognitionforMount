@@ -1,1 +1,90 @@
 
+# ==========================================
+# 4. PAIR DIAGONAL MARKERS
+#    UPPER-LEFT TO LOWER-RIGHT
+# ==========================================
+
+def pair_markers(markers):
+    candidates = []
+
+    for i in range(len(markers)):
+        for j in range(len(markers)):
+
+            if i == j:
+                continue
+
+            a = markers[i]
+            b = markers[j]
+
+            # a must be the upper-left marker
+            # b must be the lower-right marker
+            dx = b["x"] - a["x"]
+            dy = b["y"] - a["y"]
+
+            if dx < MIN_DIAGONAL_DX:
+                continue
+
+            if dy < MIN_DIAGONAL_DY:
+                continue
+
+            distance = float(np.hypot(dx, dy))
+
+            if distance > MAX_PAIR_DISTANCE:
+                continue
+
+            # Check expected marker spacing, if provided
+            if EXPECTED_DX is not None:
+                if abs(dx - EXPECTED_DX) > EXPECTED_DX * PAIR_TOLERANCE:
+                    continue
+
+            if EXPECTED_DY is not None:
+                if abs(dy - EXPECTED_DY) > EXPECTED_DY * PAIR_TOLERANCE:
+                    continue
+
+            if EXPECTED_DX is not None and EXPECTED_DY is not None:
+                score = (
+                    abs(dx - EXPECTED_DX) / EXPECTED_DX
+                    + abs(dy - EXPECTED_DY) / EXPECTED_DY
+                )
+            else:
+                score = distance
+
+            candidates.append({
+                "i": i,
+                "j": j,
+                "distance": distance,
+                "score": score
+            })
+
+    candidates.sort(key=lambda c: c["score"])
+
+    used = set()
+    substrates = []
+
+    for candidate in candidates:
+        i = candidate["i"]
+        j = candidate["j"]
+
+        if i in used or j in used:
+            continue
+
+        a = markers[i]
+        b = markers[j]
+
+        substrates.append({
+            "marker_1": a,
+            "marker_2": b,
+            "center_x": round((a["x"] + b["x"]) / 2, 2),
+            "center_y": round((a["y"] + b["y"]) / 2, 2),
+            "pair_distance_px": round(candidate["distance"], 2)
+        })
+
+        used.add(i)
+        used.add(j)
+
+    unmatched = [
+        i for i in range(len(markers))
+        if i not in used
+    ]
+
+    return substrates, unmatched
