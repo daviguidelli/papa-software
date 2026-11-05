@@ -146,8 +146,28 @@ class Hub:
     def reload_calibration(self) -> None:
         self.cal = cfgmod.load_calibration()
 
+    IDLE_TIMEOUT_S = 14400
+
+    def _keepalive(self) -> None:
+        """Klipper turns the motors off after its idle timeout, which also makes it
+        forget Z. Raise the timeout and note the Z while it is known."""
+        while True:
+            try:
+                p = self.printer.position()
+                if "z" in p.homed:
+                    self.guard.remember_z(p.z)
+                    self.printer.script(f"SET_IDLE_TIMEOUT TIMEOUT={self.IDLE_TIMEOUT_S}", wait=False)
+            except Exception:                              # noqa: BLE001
+                pass
+            time.sleep(45)
+
 
 hub = Hub()
+
+
+@app.on_event("startup")
+def _start_keepalive() -> None:
+    threading.Thread(target=hub._keepalive, daemon=True, name="keepalive").start()
 
 
 # ---------- pages ----------
@@ -917,7 +937,9 @@ def get_calibration() -> dict:
 def put_calibration(payload: dict) -> dict:
     """Stage and write calibration.yaml, then reload it in place."""
     hub.require_idle()
-    path = cfgmod.save_calibration(payload)
+    merged = dict(hub.cal.raw)
+    merged.update(payload)
+    path = cfgmod.save_calibration(merged)
     hub.reload_calibration()
     return {"written": str(path)}
 

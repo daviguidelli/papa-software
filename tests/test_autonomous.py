@@ -173,3 +173,16 @@ def test_restore_z_keeps_taught_positions_valid(taught):
 def test_restore_z_refuses_when_z_is_already_set(taught):
     r = taught.post("/api/machine/restore_z")
     assert r.status_code == 400 and "already set" in r.json()["error"]
+
+
+def test_calibration_save_keeps_autonomous_data(taught):
+    cal = taught.get("/api/calibration").json()
+    cal.pop("autonomous", None)
+    assert taught.post("/api/calibration", json=cal).status_code == 200
+    assert taught.get("/api/auto").json()["ready"]["grip"] is True
+
+
+def test_settings_persist(taught):
+    taught.post("/api/auto/settings", json={"xy_speed_mm_s": 35, "z_speed_mm_s": 3})
+    s = taught.get("/api/auto").json()["settings"]
+    assert s["xy_speed_mm_s"] == 35 and s["z_speed_mm_s"] == 3

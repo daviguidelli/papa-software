@@ -747,7 +747,7 @@ function paintAuto(){
     return `<div class="trow"><div><b>${name}</b><div class="mono val">${val}</div></div><div class="row"><button class="gold sm" data-save="${k}"${dis}>Save here</button>${v==null?'':`<button class="sm" data-clear="${k}"${dis}>Clear</button>`}</div></div>`;
   }).join('');
   if(th!==autoCache.t){$('#taught').innerHTML=th;autoCache.t=th}
-  [['sLift','lift_mm'],['sGrip','grip_wait_s'],['sRel','release_wait_s'],['sXY','xy_speed_mm_s'],['sZ','z_speed_mm_s']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el)el.value=st[k]});
+  [['sLift','lift_mm'],['sGrip','grip_wait_s'],['sRel','release_wait_s'],['sXY','xy_speed_mm_s'],['sZ','z_speed_mm_s']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el&&!el.dataset.dirty)el.value=st[k]});
   $('#sCentre').textContent=`X ${fmt(a.centre.x,1)} · Y ${fmt(a.centre.y,1)}`;
   const lock=run||S.busy||!S.pos||!homedXY();
   const why=k=>!homedXY()?'Home X and Y first':(a.problems[k][0]||'');
@@ -794,8 +794,9 @@ $('#taught').onclick=e=>{
   if(b.dataset.save)run('Saved '+b.dataset.save,async()=>{S.auto=await post('/api/auto/teach',{target:b.dataset.save});paintAuto()});
   if(b.dataset.clear)run('Cleared '+b.dataset.clear,async()=>{S.auto=await post('/api/auto/clear',{target:b.dataset.clear});paintAuto()});
 };
+['sLift','sGrip','sRel','sXY','sZ'].forEach(id=>$('#'+id).addEventListener('input',e=>{e.target.dataset.dirty='1'}));
 $('#sSave').onclick=()=>run('Saved motion settings',async()=>{
-  S.auto=await post('/api/auto/settings',{lift_mm:+$('#sLift').value,grip_wait_s:+$('#sGrip').value,release_wait_s:+$('#sRel').value,xy_speed_mm_s:+$('#sXY').value,z_speed_mm_s:+$('#sZ').value});paintAuto()});
+  S.auto=await post('/api/auto/settings',{lift_mm:+$('#sLift').value,grip_wait_s:+$('#sGrip').value,release_wait_s:+$('#sRel').value,xy_speed_mm_s:+$('#sXY').value,z_speed_mm_s:+$('#sZ').value});['sLift','sGrip','sRel','sXY','sZ'].forEach(id=>delete $('#'+id).dataset.dirty);paintAuto()});
 
 {const _paint=paint;paint=function(){_paint();if(S.mode==='auto')paintAuto()}}
 function setMode(m){
