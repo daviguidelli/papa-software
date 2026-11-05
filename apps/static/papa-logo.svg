@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 958 209" role="img" aria-label="PAPA">
+<defs>
+<path id="p" fill-rule="evenodd" d="M0 0H120.5A72.5 72.5 0 0 1 120.5 145H39V209H0ZM39 39V106H120.5A33.5 33.5 0 0 0 120.5 39Z"/>
+<path id="a" d="M0 209L118 0L236 209H193L118 76L43 209Z"/>
+</defs>
+<g fill="#fff"><use href="#p"/><use href="#a" x="221"/><use href="#p" x="513"/><use href="#a" x="722"/></g>
+</svg>
