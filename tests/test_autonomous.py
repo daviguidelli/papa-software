@@ -157,3 +157,19 @@ def test_no_rise_when_already_over_the_target(taught):
     new = moves(taught)[before:]
     assert not any("Z90" in m for m in new[:3])
     assert any("Z40" in m for m in new[:3])
+
+
+def test_restore_z_keeps_taught_positions_valid(taught):
+    taught.get("/api/machine/position")
+    last = taught.get("/api/guard").json()["last_z"]
+    assert last is not None
+    printer = taught.server.hub.printer._inner
+    printer.homed = "xy"                                   # Klipper forgot Z
+    assert taught.post("/api/machine/restore_z").status_code == 200
+    assert taught.get("/api/guard").json()["floor"] == 20.0
+    assert taught.get("/api/auto").json()["ready"]["grip"] is True
+
+
+def test_restore_z_refuses_when_z_is_already_set(taught):
+    r = taught.post("/api/machine/restore_z")
+    assert r.status_code == 400 and "already set" in r.json()["error"]

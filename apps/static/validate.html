@@ -58,7 +58,7 @@
       <label>Call Z this mm<input type="number" id="zrv" value="100" step="1"></label>
       <label>Room above mm<input type="number" id="zru" value="50" min="0" step="5"></label>
     </div>
-    <div class="row" style="margin-top:8px"><button class="gold sm" id="setZ">Set Z here (no motion)</button></div>
+    <div class="row" style="margin-top:8px"><button class="gold sm" id="setZ">Set Z here (no motion)</button><button class="sm" id="restoreZ">Restore last Z</button></div>
     <details class="more"><summary>More info</summary><p class="note">Klipper will not move Z until it thinks Z is homed. This tells it "Z is the number above, right here", with no motion. The number is a label you choose, not a measured height. It clears the floor (the old one belonged to the old label) and sets a ceiling above it. Home X and Y first. Do this again after any firmware restart.</p></details>
   </div></details>
 
@@ -371,7 +371,7 @@ function setPos(p){S.pos=[p.x,p.y,p.z];S.homed=p.homed||''}
 async function poll(){
   try{
     setPos(await api('/api/machine/position'));
-    const g=await api('/api/guard');S.floor=g.floor;S.ceiling=g.ceiling;S.allowZHome=g.allow_z_home;
+    const g=await api('/api/guard');S.floor=g.floor;S.ceiling=g.ceiling;S.allowZHome=g.allow_z_home;S.lastZ=g.last_z;
   }catch(e){S.pos=null}
   paint();
 }
@@ -541,6 +541,9 @@ $('#setZ').onclick=()=>{
   const z=+$('#zrv').value,up=+$('#zru').value;
   if(!confirm(`Declare "Z = ${z} mm" at the current height, with ${up} mm of room above?\n\nNothing moves. The Z floor will be cleared and must be set again.`))return;
   run('Z declared '+z,async()=>{const r=await post('/api/machine/set_z',{z,up_mm:up});setPos(r);S.floor=r.floor;S.ceiling=r.ceiling;say('Z declared. Now set the floor: use "Floor = Z − this", then jog down slowly.','good')})};
+$('#restoreZ').onclick=()=>{
+  if(!confirm(`Restore Z to the last saved value (${S.lastZ==null?'none saved':S.lastZ.toFixed(3)+' mm'})?\n\nNothing moves. Only do this if the head has not moved since Klipper forgot Z. The floor and taught positions are kept.`))return;
+  run('Z restored',async()=>{const r=await post('/api/machine/restore_z',{});setPos(r);S.floor=r.floor;S.lastZ=r.last_z;say('Z restored. Floor and taught positions kept.','good')})};
 $('#clrFloor').onclick=()=>run('Z floor cleared',async()=>{const g=await post('/api/guard/floor',{z:null});S.floor=g.floor;say('Z floor cleared. Z down is blocked.','warn')});
 
 /* ---------- tabs ---------- */

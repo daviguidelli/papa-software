@@ -498,6 +498,8 @@ def control(action: str) -> dict:
 @app.get("/api/machine/position")
 def position() -> dict:
     p = hub.printer.position()
+    if "z" in p.homed:
+        hub.guard.remember_z(p.z)
     return {"x": p.x, "y": p.y, "z": p.z, "homed": p.homed, "is_homed": p.is_homed}
 
 
@@ -615,7 +617,7 @@ def _patch_calibration(updates: dict) -> None:
 @app.get("/api/guard")
 def guard_state() -> dict:
     return {"floor": hub.guard.floor, "ceiling": hub.guard.ceiling,
-            "allow_z_home": hub.guard.allow_z_home}
+            "allow_z_home": hub.guard.allow_z_home, "last_z": hub.guard.last_z}
 
 
 @app.post("/api/machine/set_z")
@@ -639,6 +641,27 @@ def set_z(payload: dict) -> dict:
         raise HTTPException(400, f"the room above must be 0 to {hi - z:g} mm")
     hub.printer.script(f"SET_KINEMATIC_POSITION X={p.x:.4f} Y={p.y:.4f} Z={z:.4f}", wait=False)
     hub.guard.reset_reference(z + up)
+    return {**position(), **guard_state()}
+
+
+@app.post("/api/machine/restore_z")
+def restore_z() -> dict:
+    """Re-declare the last known Z after Klipper forgot it. Keeps the floor and
+    the taught positions, because the reference itself is unchanged.
+
+    Only right if the head has not moved since: if the motors were off and the
+    gantry sagged, jog Z to a known height and use Set Z instead.
+    """
+    hub.require_idle()
+    p = hub.printer.position()
+    if not all(a in p.homed for a in "xy"):
+        raise HTTPException(400, "Home X and Y first")
+    if "z" in p.homed:
+        raise HTTPException(400, "Z is already set; nothing to restore")
+    z = hub.guard.last_z
+    if z is None:
+        raise HTTPException(400, "No saved Z yet. Use Set Z here once.")
+    hub.printer.script(f"SET_KINEMATIC_POSITION X={p.x:.4f} Y={p.y:.4f} Z={z:.4f}", wait=False)
     return {**position(), **guard_state()}
 
 

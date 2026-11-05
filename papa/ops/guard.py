@@ -32,14 +32,17 @@ class Guard:
         self._floor: float | None = None
         self._ceiling: float | None = None
         self._ref: str | None = None
+        self._last_z: float | None = None
         try:
             d = json.loads(self.path.read_text())
             v, c = d.get("z"), d.get("ceiling")
             self._floor = None if v is None else float(v)
             self._ceiling = None if c is None else float(c)
             self._ref = d.get("ref")
+            lz = d.get("last_z")
+            self._last_z = None if lz is None else float(lz)
         except Exception:                                  # noqa: BLE001
-            self._floor, self._ceiling, self._ref = None, None, None
+            self._floor, self._ceiling, self._ref, self._last_z = None, None, None, None
 
     @property
     def floor(self) -> float | None:
@@ -55,13 +58,23 @@ class Guard:
         return self._ref
 
     @property
+    def last_z(self) -> float | None:
+        """The last Z the machine reported while Z was set; survives restarts."""
+        return self._last_z
+
+    def remember_z(self, z: float) -> None:
+        if self._last_z is None or abs(self._last_z - z) > 0.005:
+            self._last_z = float(z)
+            self._save()
+
+    @property
     def allow_z_home(self) -> bool:
         return os.environ.get("PAPA_ALLOW_Z_HOME", "") not in ("", "0", "false", "False")
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"z": self._floor, "ceiling": self._ceiling, "ref": self._ref}))
+        tmp.write_text(json.dumps({"z": self._floor, "ceiling": self._ceiling, "ref": self._ref, "last_z": self._last_z}))
         os.replace(tmp, self.path)
 
     def set_floor(self, z: float) -> None:
