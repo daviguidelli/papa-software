@@ -4,87 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PAPA — System validation</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root{--ground:#060E1C;--ink:#EAF1FB;--muted:#9FB1CC;--gold:#D9B45A;--blue:#4C9BE8;--green:#4FD08A;--red:#D2382C;--line:rgba(130,170,220,.22);--panel:rgba(255,255,255,.03)}
-*{box-sizing:border-box}
-body{margin:0;background:var(--ground);color:var(--ink);font:15px/1.45 'IBM Plex Sans',system-ui,sans-serif}
-.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
-.muted{color:var(--muted)}
-.bg{position:fixed;inset:0;pointer-events:none;z-index:0;background:radial-gradient(900px 520px at 12% -8%,rgba(76,155,232,.22),transparent 62%),radial-gradient(760px 520px at 100% 6%,rgba(217,180,90,.10),transparent 60%),linear-gradient(rgba(130,170,220,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(130,170,220,.05) 1px,transparent 1px);background-size:auto,auto,48px 48px,48px 48px}
-.page{position:relative;z-index:1}
-.wrap{max-width:1240px;margin:0 auto;padding:0 20px}
-header{background:rgba(6,14,28,.78);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-.hrow{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;padding:12px 0}
-.title{font-size:20px;font-weight:600;letter-spacing:-.01em;margin-right:auto}
-.chip{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:3px;font-size:12.5px;font-weight:500;border:1px solid var(--line);background:var(--panel);white-space:nowrap}
-.chip.ok{background:rgba(79,208,138,.10);border-color:rgba(79,208,138,.35);color:#C4F2DA}
-.chip.warn{background:rgba(232,200,115,.12);border-color:#E8C873;color:#F6E2A8}
-.chip.bad{background:rgba(210,56,44,.16);border-color:#FF6B5E;color:#FFD9D5}
-button{font:inherit;color:var(--ink);cursor:pointer;border:1px solid rgba(130,170,220,.32);background:rgba(255,255,255,.035);border-radius:3px;padding:9px 14px;transition:filter .2s,background .2s}
-button:hover:not(:disabled){filter:brightness(1.35)}
-button:disabled{opacity:.35;cursor:not-allowed}
-button.primary{background:var(--gold);border-color:var(--gold);color:#07101F;font-weight:600}
-button.gold{border-color:rgba(217,180,90,.6);background:rgba(217,180,90,.10)}
-button.danger{background:rgba(210,56,44,.25);border-color:#FF6B5E;font-weight:700;letter-spacing:.04em}
-button.sm{padding:6px 10px;font-size:13px}
-layout,.layout{display:grid;grid-template-columns:340px 1fr;gap:20px;padding:20px 0 60px;align-items:start}
-@media(max-width:960px){.layout{grid-template-columns:1fr}}
-.side{position:sticky;top:76px;display:flex;flex-direction:column;gap:16px}
-@media(max-width:960px){.side{position:static}}
-.card{padding:18px;border-radius:6px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(20,38,68,.80),rgba(10,22,42,.80))}
-.label{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
-h2{font-size:17px;margin:0 0 4px;font-weight:600}
-.note{color:var(--muted);font-size:13px;line-height:1.5;margin:8px 0 0}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
-.row label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
-input[type=number],select{width:100px;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:3px;padding:8px;color:var(--ink);font:14px 'IBM Plex Mono',monospace}
-select option{background:#0b1730}
-input[type=range]{width:100%;accent-color:var(--gold)}
-.pos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.pos div{border:1px solid var(--line);border-radius:4px;padding:7px 9px}
-.pos b{display:block;font-size:11px;font-weight:500;color:var(--muted)}
-.pos span{font:20px 'IBM Plex Mono',monospace}
-.steps{display:flex;flex-wrap:wrap;gap:6px}
-.steps button{padding:8px 11px;font:13px 'IBM Plex Mono',monospace}
-.steps button.on{background:var(--gold);border-color:var(--gold);color:#07101F}
-.pad{display:grid;grid-template-columns:repeat(3,62px);grid-template-rows:repeat(3,62px);gap:6px;justify-content:center;margin:4px 0 10px}
-.pad button{font:22px 'IBM Plex Mono',monospace;padding:0}
-.zpad{display:flex;gap:6px;justify-content:center}
-.zpad button{width:94px;height:50px;font:15px 'IBM Plex Mono',monospace;padding:0}
-#msg{min-height:20px;font:12.5px 'IBM Plex Mono',monospace;margin-top:10px;word-break:break-word}
-.good{color:var(--green)}.warn{color:var(--gold)}.err{color:#FF8A80}
-nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
-.tab{min-height:44px;padding:10px 20px;font:600 13px/1 'IBM Plex Sans',sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:rgba(255,255,255,.02)}
-.tab[aria-selected=true]{background:rgba(217,180,90,.14);color:#fff;border-color:var(--gold);box-shadow:0 0 22px rgba(217,180,90,.25)}
-.panel[hidden]{display:none}
-.stack{display:flex;flex-direction:column;gap:16px}
-.big{font:500 42px 'IBM Plex Mono',monospace;letter-spacing:-.02em}
-.bar{height:8px;border-radius:4px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:8px}
-.bar i{display:block;height:100%;width:0;background:var(--green);transition:width .15s,background .15s}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font:13.5px 'IBM Plex Mono',monospace}
-.kv span:nth-child(odd){color:var(--muted)}
-.steplist{counter-reset:s;list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px}
-.steplist>li{counter-increment:s;padding-left:38px;position:relative}
-.steplist>li:before{content:counter(s);position:absolute;left:0;top:0;width:26px;height:26px;border-radius:50%;border:1px solid var(--gold);color:var(--gold);display:flex;align-items:center;justify-content:center;font:600 13px 'IBM Plex Mono',monospace}
-.ready{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
-table{width:100%;border-collapse:collapse;font:13px 'IBM Plex Mono',monospace}
-th,td{padding:5px 8px;text-align:right;border-bottom:1px solid rgba(130,170,220,.12)}
-th{color:var(--muted);font-weight:500;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
-th:first-child,td:first-child{text-align:left}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-@media(max-width:760px){.two{grid-template-columns:1fr}}
-#log{max-height:160px;overflow:auto;font:12px 'IBM Plex Mono',monospace;color:var(--muted)}
-#log div{padding:2px 0;border-bottom:1px solid rgba(130,170,220,.08)}
-svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
-</style>
+<link rel="icon" href="/static/papa-logo.png">
+<link rel="stylesheet" href="/static/papa.css">
 </head>
 <body>
 <div class="bg"></div>
 <div class="page">
 <header><div class="wrap"><div class="hrow">
-  <div class="title">PAPA · System validation</div>
+  <div class="brand"><img src="/static/papa-logo.png" alt="PAPA"><div class="sub"><b>System validation</b>Bring-up checks for every device</div></div>
   <span class="chip" id="cPrinter">Printer</span>
   <span class="chip" id="cCell">Load cell</span>
   <span class="chip" id="cServo">Servo</span>
@@ -330,7 +257,7 @@ svg text{font-family:'IBM Plex Mono',monospace;fill:#9FB1CC}
       </div>
       <div style="position:relative;margin-top:12px;background:#000;border:1px solid var(--line);border-radius:4px;min-height:260px">
         <img id="live" alt="Live camera view" style="width:100%;display:block">
-        <svg id="camGridOv" hidden viewBox="0 0 3 3" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"><path d="M1 0V3M2 0V3M0 1H3M0 2H3" stroke="rgba(217,180,90,.45)" stroke-width="1" vector-effect="non-scaling-stroke" fill="none"/><path d="M1.5 0V3M0 1.5H3" stroke="rgba(255,255,255,.7)" stroke-width="1" vector-effect="non-scaling-stroke" fill="none"/></svg>
+        <svg id="camGridOv" hidden viewBox="0 0 3 3" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"><path d="M1 0V3M2 0V3M0 1H3M0 2H3" stroke="rgba(246,246,243,.38)" stroke-width="1" vector-effect="non-scaling-stroke" fill="none"/><path d="M1.5 0V3M0 1.5H3" stroke="rgba(255,255,255,.7)" stroke-width="1" vector-effect="non-scaling-stroke" fill="none"/></svg>
         <div id="camMsg" class="muted mono" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;font-size:13px"></div>
       </div>
       <div class="row" style="margin-top:12px;align-items:flex-end">
@@ -489,13 +416,13 @@ function paintSlide(){
   $('#sizeNote').className='note '+(sl.fits?'':'err');
   const W=sub.width_mm,L=sub.length_mm,P=sub.pattern_size_mm,pad=Math.max(W,L)*.18,fs=Math.max(W,L)*.055;
   $('#svg').setAttribute('viewBox',`${-pad} ${-pad} ${W+pad*2} ${L+pad*1.6}`);
-  $('#svg').innerHTML=`<rect x="0" y="0" width="${W}" height="${L}" rx="1" fill="rgba(76,155,232,.10)" stroke="#4C9BE8" stroke-width="${fs*.12}"/>
-  <rect x="0" y="0" width="${P}" height="${P}" fill="rgba(217,180,90,.22)" stroke="#D9B45A" stroke-width="${fs*.1}" stroke-dasharray="${fs*.4} ${fs*.25}"/>
-  <circle cx="0" cy="0" r="${fs*.35}" fill="#D9B45A"/>
+  $('#svg').innerHTML=`<rect x="0" y="0" width="${W}" height="${L}" rx="1" fill="rgba(135,153,163,.10)" stroke="#8799a3" stroke-width="${fs*.12}"/>
+  <rect x="0" y="0" width="${P}" height="${P}" fill="rgba(246,246,243,.10)" stroke="#f6f6f3" stroke-width="${fs*.1}" stroke-dasharray="${fs*.4} ${fs*.25}"/>
+  <circle cx="0" cy="0" r="${fs*.35}" fill="#f6f6f3"/>
   <text x="${fs*.7}" y="${-fs*.5}" font-size="${fs}">top-left corner (0, 0)</text>
   <text x="${W/2}" y="${L+fs*1.4}" font-size="${fs}" text-anchor="middle">${fmt(W,1)} mm</text>
   <text x="${W+fs*.5}" y="${L/2}" font-size="${fs}" transform="rotate(90 ${W+fs*.5} ${L/2})" text-anchor="middle">${fmt(L,1)} mm</text>
-  <text x="${P/2}" y="${P/2+fs*.3}" font-size="${fs}" text-anchor="middle" style="fill:#D9B45A">${fmt(P,1)} mm</text>`;
+  <text x="${P/2}" y="${P/2+fs*.3}" font-size="${fs}" text-anchor="middle" style="fill:#f6f6f3">${fmt(P,1)} mm</text>`;
   const o=sl.slot;
   $('#coords').innerHTML=o?['top-left','top-right','bottom-right','bottom-left'].map((n,i)=>`<tr><td>${n}</td><td>${fmt(o.pattern[i][0],2)}</td><td>${fmt(o.pattern[i][1],2)}</td><td>${fmt(o.outline[i][0],2)}</td><td>${fmt(o.outline[i][1],2)}</td></tr>`).join(''):'<tr><td colspan="5" class="muted">Capture the corner to see machine coordinates.</td></tr>';
 }
@@ -577,7 +504,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
 /* ---------- load cell ---------- */
 /* ---------- live force ---------- */
 const LC={seq:0,t:[],c:[],offset:0,scale:1,scaled:false,timer:null,paused:false,err:'',lastT:0};
-const colors=()=>{const cs=getComputedStyle(document.documentElement);return{ink:cs.getPropertyValue('--ink').trim()||'#EAF1FB',muted:cs.getPropertyValue('--muted').trim()||'#9FB1CC',gold:cs.getPropertyValue('--gold').trim()||'#D9B45A',line:'rgba(130,170,220,.25)',green:'#4FD08A',red:'#FF6B5E'}};
+const colors=()=>{const cs=getComputedStyle(document.documentElement);return{ink:cs.getPropertyValue('--ink').trim()||'#f6f6f3',muted:cs.getPropertyValue('--muted').trim()||'#8e989d',gold:cs.getPropertyValue('--gold').trim()||'#f6f6f3',line:'rgba(255,255,255,.12)',green:'#93d5b1',red:'#ff8f86'}};
 const medianOf=a=>{const b=[...a].sort((x,y)=>x-y),n=b.length;return n?(n%2?b[(n-1)/2]:(b[n/2-1]+b[n/2])/2):NaN};
 const toUnit=c=>LC.scaled?(c-LC.offset)/LC.scale:(c-LC.offset);
 function liveReset(){LC.seq=0;LC.t=[];LC.c=[]}
@@ -618,13 +545,13 @@ function drawLive(){
   for(let v=Math.ceil(lo/nice)*nice;v<=hi;v+=nice){const y=Y(v);g.strokeStyle=C.line;g.beginPath();g.moveTo(L,y);g.lineTo(W-R,y);g.stroke();g.fillStyle=C.muted;g.textAlign='right';g.fillText(Math.abs(v)>=1000?v.toFixed(0):+v.toFixed(2),L-6,y)}
   g.textAlign='center';g.textBaseline='alphabetic';for(let k=0;k<=win;k+=win>=30?10:win>=10?2:1){g.fillStyle=C.muted;g.fillText('-'+(win-k)+'s',X(t0+k),H-6)}
   if(LC.scaled){[[tg,C.gold],[ab,C.red]].forEach(([v,col])=>{if(v>=lo&&v<=hi){g.strokeStyle=col;g.setLineDash([5,4]);g.beginPath();g.moveTo(L,Y(v));g.lineTo(W-R,Y(v));g.stroke();g.setLineDash([])}})}
-  g.lineWidth=1;g.strokeStyle='rgba(159,177,204,.55)';g.beginPath();tt.forEach((t,i)=>{i?g.lineTo(X(t),Y(raw[i])):g.moveTo(X(t),Y(raw[i]))});g.stroke();
+  g.lineWidth=1;g.strokeStyle='rgba(142,152,157,.55)';g.beginPath();tt.forEach((t,i)=>{i?g.lineTo(X(t),Y(raw[i])):g.moveTo(X(t),Y(raw[i]))});g.stroke();
   if(N>1){g.lineWidth=2;g.strokeStyle=C.gold;g.beginPath();tt.forEach((t,i)=>{i?g.lineTo(X(t),Y(filt[i])):g.moveTo(X(t),Y(filt[i]))});g.stroke()}
   g.lineWidth=1;
   const now=N>1?filt[filt.length-1]:raw[raw.length-1];
   $('#grams').textContent=LC.scaled?fmt(now,2):Math.round(now).toLocaleString('en-US');
   const b=$('#forceBar');
-  if(LC.scaled){b.style.width=Math.max(0,Math.min(100,now/ab*100))+'%';b.style.background=now>=ab?'#FF6B5E':now>=tg?'#D9B45A':'#4FD08A';$('#forceNote').textContent=`target ${tg} g · abort ${ab} g`}
+  if(LC.scaled){b.style.width=Math.max(0,Math.min(100,now/ab*100))+'%';b.style.background=now>=ab?'#ff8f86':now>=tg?'#e6cb8f':'#93d5b1';$('#forceNote').textContent=`target ${tg} g · abort ${ab} g`}
   else{b.style.width='0%';$('#forceNote').textContent='raw counts relative to the tare point; calibrate the scale to get grams'}
   // noise statistics over the window (raw samples)
   const n=raw.length,mean=raw.reduce((a,x)=>a+x,0)/n,sd=Math.sqrt(raw.reduce((a,x)=>a+(x-mean)**2,0)/n),pp=rawPP;
