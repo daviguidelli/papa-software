@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -30,13 +31,15 @@ class Guard:
         self.path = Path(path) if path else STATE_DIR / "z_floor.json"
         self._floor: float | None = None
         self._ceiling: float | None = None
+        self._ref: str | None = None
         try:
             d = json.loads(self.path.read_text())
             v, c = d.get("z"), d.get("ceiling")
             self._floor = None if v is None else float(v)
             self._ceiling = None if c is None else float(c)
+            self._ref = d.get("ref")
         except Exception:                                  # noqa: BLE001
-            self._floor, self._ceiling = None, None
+            self._floor, self._ceiling, self._ref = None, None, None
 
     @property
     def floor(self) -> float | None:
@@ -47,13 +50,18 @@ class Guard:
         return self._ceiling
 
     @property
+    def ref(self) -> str | None:
+        """Identifies the current hand-declared Z reference; changes every time one is declared."""
+        return self._ref
+
+    @property
     def allow_z_home(self) -> bool:
         return os.environ.get("PAPA_ALLOW_Z_HOME", "") not in ("", "0", "false", "False")
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"z": self._floor, "ceiling": self._ceiling}))
+        tmp.write_text(json.dumps({"z": self._floor, "ceiling": self._ceiling, "ref": self._ref}))
         os.replace(tmp, self.path)
 
     def set_floor(self, z: float) -> None:
@@ -72,6 +80,7 @@ class Guard:
         """A new Z reference was declared: the old floor belonged to the old one."""
         self._floor = None
         self._ceiling = None if ceiling is None else float(ceiling)
+        self._ref = str(time.time_ns())
         self._save()
 
     def check_target(self, target_z: float, current_z: Callable[[], float]) -> None:

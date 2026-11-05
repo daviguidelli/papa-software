@@ -24,6 +24,8 @@ DEFAULTS: dict[str, Any] = {
     "release_wait_s": 0.6,   # time allowed for the jaws to open over the bin
     "xy_speed_mm_s": 60.0,
     "z_speed_mm_s": 8.0,
+    "skip_rise_xy_mm": 2.0,  # no rise to safe Z when already this close to the target in XY
+    "refs": {},              # which Z reference each taught Z was saved under
 }
 
 TARGETS = ("pickup", "bin", "safe_z")
@@ -50,23 +52,30 @@ def centre(machine: Any) -> dict[str, float]:
     return {"x": round((lo_x + hi_x) / 2, 3), "y": round((lo_y + hi_y) / 2, 3)}
 
 
-def describe(settings: dict[str, Any], machine: Any) -> dict[str, Any]:
+def describe(settings: dict[str, Any], machine: Any, ref: str | None = None) -> dict[str, Any]:
     return {
         "settings": settings,
         "centre": centre(machine),
         "ready": {
-            "grip": not problems(settings, machine, "grip"),
-            "dispose": not problems(settings, machine, "dispose"),
+            "grip": not problems(settings, machine, "grip", ref),
+            "dispose": not problems(settings, machine, "dispose", ref),
         },
         "problems": {
-            "grip": problems(settings, machine, "grip"),
-            "dispose": problems(settings, machine, "dispose"),
+            "grip": problems(settings, machine, "grip", ref),
+            "dispose": problems(settings, machine, "dispose", ref),
         },
     }
 
 
-def problems(settings: dict[str, Any], machine: Any, action: str) -> list[str]:
+def problems(settings: dict[str, Any], machine: Any, action: str, ref: str | None = None) -> list[str]:
     out: list[str] = []
+    if ref is not None:
+        refs = settings.get("refs") or {}
+        used = ("safe_z", "pickup" if action == "grip" else "bin")
+        for name in used:
+            if settings.get(name) is not None and refs.get(name) != ref:
+                label = "safe Z" if name == "safe_z" else name
+                out.append(f"The Z reference changed after you saved the {label}. Save it again.")
     safe = settings.get("safe_z")
     if safe is None:
         out.append("Save the safe Z first.")
@@ -143,14 +152,21 @@ class AutoRunner:
     def _xy_to(self, x: float, y: float, st: dict) -> None:
         self._printer().move(x=x, y=y, speed_mm_s=float(st["xy_speed_mm_s"]))
 
-    def _lift_to_safe(self, st: dict) -> None:
-        if self._printer().position().z < float(st["safe_z"]) - 1e-6:
+    def _lift_to_safe(self, st: dict, target: dict | None = None) -> None:
+        p = self._printer().position()
+        if target is not None:
+            near = float(st.get("skip_rise_xy_mm", 0.0))
+            if abs(p.x - float(target["x"])) <= near and abs(p.y - float(target["y"])) <= near:
+                return
+        if p.z < float(st["safe_z"]) - 1e-6:
             self._z_to(float(st["safe_z"]), st)
 
     def _homed_xy(self) -> None:
         p = self._printer().position()
         if not all(a in p.homed for a in "xy"):
             raise AutoError("Home X and Y first.")
+        if "z" not in p.homed:
+            raise AutoError("Z is not set. Set the Z reference first, then save the positions again.")
 
     # ---- the two actions ----
     def grip_steps(self, st: dict) -> list[tuple[str, Callable[[], None]]]:
@@ -159,7 +175,7 @@ class AutoRunner:
         return [
             ("Check X and Y are homed", self._homed_xy),
             ("Open the jaws", lambda: self._gripper().open()),
-            ("Rise to safe Z", lambda: self._lift_to_safe(st)),
+            ("Rise to safe Z", lambda: self._lift_to_safe(st, t)),
             ("Move to the pickup in XY", lambda: self._xy_to(float(t["x"]), float(t["y"]), st)),
             ("Lower onto the swab", lambda: self._z_to(float(t["z"]), st)),
             ("Close the jaws", lambda: self._gripper().close()),
@@ -172,7 +188,7 @@ class AutoRunner:
         t = st["bin"]
         return [
             ("Check X and Y are homed", self._homed_xy),
-            ("Rise to safe Z", lambda: self._lift_to_safe(st)),
+            ("Rise to safe Z", lambda: self._lift_to_safe(st, t)),
             ("Move over the bin in XY", lambda: self._xy_to(float(t["x"]), float(t["y"]), st)),
             ("Lower into the bin", lambda: self._z_to(float(t["z"]), st)),
             ("Open the jaws", lambda: self._gripper().open()),
@@ -181,10 +197,10 @@ class AutoRunner:
         ]
 
     # ---- run control ----
-    def start(self, action: str, settings: dict[str, Any]) -> threading.Thread:
+    def start(self, action: str, settings: dict[str, Any], ref: str | None = None) -> threading.Thread:
         if action not in ("grip", "dispose"):
             raise AutoError(f"unknown action {action}")
-        bad = problems(settings, self.machine, action)
+        bad = problems(settings, self.machine, action, ref)
         if bad:
             raise AutoError(" ".join(bad))
         steps = (self.grip_steps if action == "grip" else self.dispose_steps)(settings)

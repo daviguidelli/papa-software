@@ -1010,7 +1010,7 @@ def _auto_settings() -> dict:
 
 
 def _auto_info() -> dict:
-    return {**automod.describe(_auto_settings(), hub.machine), "status": hub.auto.status.as_dict()}
+    return {**automod.describe(_auto_settings(), hub.machine, hub.guard.ref), "status": hub.auto.status.as_dict()}
 
 
 @app.get("/api/auto")
@@ -1035,7 +1035,9 @@ def auto_teach(payload: dict) -> dict:
         raise HTTPException(400, "Home X and Y first; a taught position means nothing without them")
     value: Any = round(p.z, 3) if target == "safe_z" else {
         "x": round(p.x, 3), "y": round(p.y, 3), "z": round(p.z, 3)}
-    _patch_calibration({"autonomous": {target: value}})
+    refs = dict(_auto_settings().get("refs") or {})
+    refs[target] = hub.guard.ref
+    _patch_calibration({"autonomous": {target: value, "refs": refs}})
     return _auto_info()
 
 
@@ -1051,7 +1053,7 @@ def auto_clear(payload: dict) -> dict:
 
 _AUTO_RANGES = {
     "lift_mm": (0.0, 200.0), "grip_wait_s": (0.0, 10.0), "release_wait_s": (0.0, 10.0),
-    "xy_speed_mm_s": (1.0, 150.0), "z_speed_mm_s": (0.5, 20.0),
+    "xy_speed_mm_s": (1.0, 150.0), "z_speed_mm_s": (0.5, 20.0), "skip_rise_xy_mm": (0.0, 50.0),
 }
 
 
@@ -1073,7 +1075,7 @@ def auto_settings(payload: dict) -> dict:
 def _auto_start(action: str) -> dict:
     hub.require_idle()
     try:
-        hub.thread = hub.auto.start(action, _auto_settings())
+        hub.thread = hub.auto.start(action, _auto_settings(), hub.guard.ref)
     except automod.AutoError as exc:
         raise HTTPException(400, str(exc)) from exc
     return hub.auto.status.as_dict()

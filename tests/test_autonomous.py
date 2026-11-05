@@ -128,3 +128,32 @@ def test_safe_z_below_target_is_refused(taught):
 def test_settings_are_range_checked(taught):
     assert taught.post("/api/auto/settings", json={"lift_mm": 5000}).status_code == 400
     assert taught.post("/api/auto/settings", json={"lift_mm": 25}).json()["settings"]["lift_mm"] == 25.0
+
+
+def test_redeclaring_z_makes_taught_positions_stale(taught):
+    assert taught.get("/api/auto").json()["ready"]["grip"] is True
+    taught.post("/api/machine/set_z", json={"z": 50.0, "up_mm": 100.0})
+    info = taught.get("/api/auto").json()
+    assert info["ready"] == {"grip": False, "dispose": False}
+    r = taught.post("/api/auto/grip")
+    assert r.status_code == 400 and "Z reference changed" in r.json()["error"]
+
+
+def test_reteaching_after_a_new_z_reference_works_again(taught):
+    taught.post("/api/machine/set_z", json={"z": 50.0, "up_mm": 100.0})
+    taught.post("/api/guard/floor", json={"z": 10.0})
+    taught.post("/api/machine/move", json={"x": 40, "y": 60, "z": 30, "speed_mm_s": 100})
+    taught.post("/api/auto/teach", json={"target": "pickup"})
+    taught.post("/api/machine/move", json={"z": 45, "speed_mm_s": 100})
+    taught.post("/api/auto/teach", json={"target": "safe_z"})
+    assert taught.get("/api/auto").json()["ready"]["grip"] is True
+
+
+def test_no_rise_when_already_over_the_target(taught):
+    taught.post("/api/machine/move", json={"x": 40, "y": 60, "z": 41, "speed_mm_s": 100})
+    before = len(moves(taught))
+    taught.post("/api/auto/grip")
+    wait_done(taught)
+    new = moves(taught)[before:]
+    assert not any("Z90" in m for m in new[:3])
+    assert any("Z40" in m for m in new[:3])
