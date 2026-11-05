@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from papa import config as cfgmod
 from papa.hw import make_camera, make_gripper, make_loadcell, make_printer
 from papa.ops.geometry import square, to_machine
+from papa.ops import autonomous as automod
 from papa.ops.guard import Guard, GuardedPrinter, ZFloorError
 from papa.ops.jobs import STATE_DIR, Job
 from papa.ops.machine import Orchestrator, Status
@@ -104,6 +105,7 @@ class Hub:
         self._sampler: LoadCellSampler | None = None
         self.hold = HoldJog(lambda: self.printer, self.machine, lambda: self.guard)
         self.servo_window = [1300, 1700]
+        self.auto = automod.AutoRunner(lambda: self.printer, lambda: self.gripper, self.machine)
 
     @property
     def printer(self) -> Any:
@@ -578,6 +580,7 @@ def hold_state() -> dict:
 @app.post("/api/machine/estop")
 def estop() -> dict:
     hub.hold.stop("emergency stop")
+    hub.auto.stop()
     hub.printer.emergency_stop()
     return {"ok": True}
 
@@ -998,6 +1001,98 @@ def slide_trace(payload: dict) -> dict:
     for x, y in pts + [pts[0]]:
         hub.printer.move(x=x, y=y, speed_mm_s=speed)
     return position()
+
+
+# ---------- autonomous: one-button grip and dispose ----------
+
+def _auto_settings() -> dict:
+    return automod.merged(hub.cal.raw.get("autonomous"))
+
+
+def _auto_info() -> dict:
+    return {**automod.describe(_auto_settings(), hub.machine), "status": hub.auto.status.as_dict()}
+
+
+@app.get("/api/auto")
+def auto_info() -> dict:
+    return _auto_info()
+
+
+@app.get("/api/auto/status")
+def auto_status() -> dict:
+    return hub.auto.status.as_dict()
+
+
+@app.post("/api/auto/teach")
+def auto_teach(payload: dict) -> dict:
+    """Save where the tool is now as the pickup, the bin, or the safe Z."""
+    hub.require_idle()
+    target = payload.get("target")
+    if target not in automod.TARGETS:
+        raise HTTPException(400, f"target must be one of {', '.join(automod.TARGETS)}")
+    p = hub.printer.position()
+    if not all(a in p.homed for a in "xy"):
+        raise HTTPException(400, "Home X and Y first; a taught position means nothing without them")
+    value: Any = round(p.z, 3) if target == "safe_z" else {
+        "x": round(p.x, 3), "y": round(p.y, 3), "z": round(p.z, 3)}
+    _patch_calibration({"autonomous": {target: value}})
+    return _auto_info()
+
+
+@app.post("/api/auto/clear")
+def auto_clear(payload: dict) -> dict:
+    hub.require_idle()
+    target = payload.get("target")
+    if target not in automod.TARGETS:
+        raise HTTPException(400, f"target must be one of {', '.join(automod.TARGETS)}")
+    _patch_calibration({"autonomous": {target: None}})
+    return _auto_info()
+
+
+_AUTO_RANGES = {
+    "lift_mm": (0.0, 200.0), "grip_wait_s": (0.0, 10.0), "release_wait_s": (0.0, 10.0),
+    "xy_speed_mm_s": (1.0, 150.0), "z_speed_mm_s": (0.5, 20.0),
+}
+
+
+@app.post("/api/auto/settings")
+def auto_settings(payload: dict) -> dict:
+    hub.require_idle()
+    updates: dict[str, float] = {}
+    for key, (lo, hi) in _AUTO_RANGES.items():
+        if key in payload:
+            v = float(payload[key])
+            if not lo <= v <= hi:
+                raise HTTPException(400, f"{key} must be {lo:g} to {hi:g}")
+            updates[key] = v
+    if updates:
+        _patch_calibration({"autonomous": updates})
+    return _auto_info()
+
+
+def _auto_start(action: str) -> dict:
+    hub.require_idle()
+    try:
+        hub.thread = hub.auto.start(action, _auto_settings())
+    except automod.AutoError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return hub.auto.status.as_dict()
+
+
+@app.post("/api/auto/grip")
+def auto_grip() -> dict:
+    return _auto_start("grip")
+
+
+@app.post("/api/auto/dispose")
+def auto_dispose() -> dict:
+    return _auto_start("dispose")
+
+
+@app.post("/api/auto/stop")
+def auto_stop() -> dict:
+    hub.auto.stop()
+    return hub.auto.status.as_dict()
 
 
 if STATIC.exists():

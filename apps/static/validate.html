@@ -11,15 +11,18 @@
 <div class="bg"></div>
 <div class="page">
 <header><div class="wrap"><div class="hrow">
-  <div class="brand"><img src="/static/papa-logo.png" alt="PAPA"><div class="sub"><b>System validation</b>Bring-up checks for every device</div></div>
+  <div class="brand"><img src="/static/papa-logo.png" alt="PAPA"><div class="sub"><b>Test bench</b>Checks, calibration and one-button actions</div></div>
   <span class="chip" id="cPrinter">Printer</span>
   <span class="chip" id="cCell">Load cell</span>
   <span class="chip" id="cServo">Servo</span>
   <span class="chip" id="cCam">Camera</span>
   <span class="chip bad" id="cHome">Not homed</span>
   <span class="chip bad" id="cFloor">Z floor not set</span>
-  <button class="danger" id="estop">E-STOP</button>
-</div></div></header>
+</div>
+<div class="modebar"><nav class="modes" id="modes" role="tablist" aria-label="Mode">
+  <button class="mode" role="tab" data-mode="manual" aria-selected="true">Manual test &amp; calibration</button>
+  <button class="mode" role="tab" data-mode="auto" aria-selected="false">Autonomous</button>
+</nav><button class="danger" id="estop">E-STOP</button></div></div></header>
 
 <div class="wrap"><div class="layout">
 
@@ -48,19 +51,19 @@
     <div id="msg"></div>
   </div>
 
-  <div class="card">
-    <p class="label">Z reference · no homing needed</p>
+  <details class="card fold" id="f-zref"><summary><span class="label">Z reference · no homing needed</span></summary><div class="fold-body">
+    
     <p class="note" id="zRefState" style="margin-top:0"></p>
     <div class="row" style="margin-top:8px;align-items:flex-end">
       <label>Call Z this mm<input type="number" id="zrv" value="100" step="1"></label>
       <label>Room above mm<input type="number" id="zru" value="50" min="0" step="5"></label>
     </div>
     <div class="row" style="margin-top:8px"><button class="gold sm" id="setZ">Set Z here (no motion)</button></div>
-    <p class="note">Klipper will not move Z until it thinks Z is homed. This tells it "Z is the number above, right here", with no motion. The number is a label you choose, not a measured height. It clears the floor (the old one belonged to the old label) and sets a ceiling above it. Home X and Y first. Do this again after any firmware restart.</p>
-  </div>
+    <details class="more"><summary>More info</summary><p class="note">Klipper will not move Z until it thinks Z is homed. This tells it "Z is the number above, right here", with no motion. The number is a label you choose, not a measured height. It clears the floor (the old one belonged to the old label) and sets a ceiling above it. Home X and Y first. Do this again after any firmware restart.</p></details>
+  </div></details>
 
-  <div class="card">
-    <p class="label">Z floor · lowest allowed Z</p>
+  <details class="card fold" id="f-zfloor"><summary><span class="label">Z floor · lowest allowed Z</span></summary><div class="fold-body">
+    
     <div class="big" id="floorv" style="font-size:26px">not set</div>
     <div class="row" style="margin-top:10px">
       <label>Allow down mm<input type="number" id="fd" value="5" min="0.5" max="50" step="0.5"></label>
@@ -74,11 +77,12 @@
       <button class="gold sm" id="setFloor">Floor = current Z</button>
       <button class="sm" id="clrFloor">Clear</button>
     </div>
-    <p class="note">Z cannot move down until a floor exists, then never below it. Start with "Floor = Z − this", jog down to just above the surface, then "Floor = current Z" to lock it tight. Jobs obey it too.</p>
-  </div>
+    <details class="more"><summary>More info</summary><p class="note">Z cannot move down until a floor exists, then never below it. Start with "Floor = Z − this", jog down to just above the surface, then "Floor = current Z" to lock it tight. Jobs obey it too.</p></details>
+  </div></details>
 </aside>
 
 <section>
+  <div id="modeManual">
   <nav role="tablist" id="tabs">
     <button class="tab" role="tab" data-tab="cell" aria-selected="true">Load cell</button>
     <button class="tab" role="tab" data-tab="offset" aria-selected="false">Glass offset</button>
@@ -106,8 +110,8 @@
       <p class="note" id="lcVerdict"></p>
     </div>
 
-    <div class="card">
-      <p class="label">Zero and scale</p>
+    <details class="card fold" id="f-zero"><summary><span class="label">Zero and scale</span></summary><div class="fold-body">
+      
       <div class="row">
         <button id="tare" class="gold">Tare (cell empty)</button>
         <label>Known weight g<input type="number" id="kw" value="100" min="1" step="1"></label>
@@ -115,10 +119,10 @@
         <button id="saveScale" disabled>Save tare + scale</button>
       </div>
       <p class="note" id="scaleNote">Until the scale is calibrated the numbers above are raw counts, not grams. Order: empty cell, Tare; then place the known weight, Calibrate scale; then Save.</p>
-    </div>
+    </div></details>
 
-    <div class="card">
-      <p class="label">Where is the load cell</p>
+    <details class="card fold" id="f-where"><summary><span class="label">Where is the load cell</span></summary><div class="fold-body">
+      
       <div class="kv" id="lcPos"></div>
       <div class="row" style="margin-top:12px">
         <button class="gold" id="capXY">Capture XY from current position</button>
@@ -129,11 +133,11 @@
         <button class="sm" id="capZ">Use current Z</button>
         <button class="gold sm" id="saveZ">Save</button>
       </div>
-      <p class="note">Jog the swab tip over the middle of the cell and capture. "Go to" moves X and Y only, at whatever Z you are at. The start Z only needs to be a few mm above the cell: the probe finds the real height itself by stepping down until the force reads the target.</p>
-    </div>
+      <details class="more"><summary>More info</summary><p class="note">Jog the swab tip over the middle of the cell and capture. "Go to" moves X and Y only, at whatever Z you are at. The start Z only needs to be a few mm above the cell: the probe finds the real height itself by stepping down until the force reads the target.</p></details>
+    </div></details>
 
-    <div class="card">
-      <p class="label">Probe test</p>
+    <details class="card fold" id="f-probe"><summary><span class="label">Probe test</span></summary><div class="fold-body">
+      
       <div class="ready" id="probeReady"></div>
       <div class="row" style="align-items:flex-end;margin-bottom:12px">
         <label>Start Z mm<input type="number" id="pz0" step="0.5"></label>
@@ -146,15 +150,15 @@
       </div>
       <div class="kv" id="probeOut" style="margin-top:12px"></div>
       <p class="note" id="probeNote"></p>
-      <p class="note">Order: rise to the start Z if below it, move over the cell at that height, settle onto the start Z, tare, then step down at the descent speed. Z never moves at travel speed. Each step waits for the move to finish and a force reading, so the average speed is a little below the setting, most visibly with small steps.</p>
-    </div>
+      <details class="more"><summary>More info</summary><p class="note">Order: rise to the start Z if below it, move over the cell at that height, settle onto the start Z, tare, then step down at the descent speed. Z never moves at travel speed. Each step waits for the move to finish and a force reading, so the average speed is a little below the setting, most visibly with small steps.</p></details>
+    </div></details>
   </div>
 
   <!-- ============ GLASS OFFSET ============ -->
   <div class="panel stack" id="p-offset" hidden>
     <div class="card">
       <h2>Load cell to glass offset</h2>
-      <p class="note" style="margin-top:0">The load cell sits above the glass. A job finds the swab's contact height on the cell, then adds this offset to get the scribe height on the slide. Use the same swab for both touches.</p>
+      <details class="more"><summary>More info</summary><p class="note" style="margin-top:0">The load cell sits above the glass. A job finds the swab's contact height on the cell, then adds this offset to get the scribe height on the slide. Use the same swab for both touches.</p></details>
       <ol class="steplist" style="margin-top:16px">
         <li>
           <b>Contact on the load cell</b>
@@ -166,7 +170,7 @@
           <b>Contact on the glass</b>
           <div class="kv" style="margin:6px 0"><span>Glass contact Z</span><span id="ogZ">not set</span></div>
           <div class="row"><button class="gold sm" id="useGlassNow">Use current Z</button></div>
-          <p class="note">Jog over the slide, lower in 0.05 to 0.1 mm steps until the swab just touches the glass, then capture. Stay above the Z floor.</p>
+          <details class="more"><summary>More info</summary><p class="note">Jog over the slide, lower in 0.05 to 0.1 mm steps until the swab just touches the glass, then capture. Stay above the Z floor.</p></details>
         </li>
         <li>
           <b>Offset</b>
@@ -195,7 +199,7 @@
         <button class="sm" id="setWin">Set window</button>
         <label>Speed µs/s<select id="slew"><option value="20">20 (slowest)</option><option value="50" selected>50</option><option value="100">100</option><option value="250">250</option><option value="0">jump (job speed)</option></select></label>
       </div>
-      <p class="label" style="margin-top:14px">Nudge · µs</p>
+      <p class="label" style="margin-top:14px">Nudge · <span style="text-transform:none">µs</span></p>
       <div class="row" id="nudges"></div>
       <div class="row" style="margin-top:12px"><button class="gold" id="sendPulse">Move servo to this value</button><button id="relTorque">Release torque</button></div>
     </div>
@@ -206,7 +210,7 @@
         <div><div class="kv"><span>CLOSED locked</span><span id="lkClosed">–</span></div><div class="row" style="margin-top:10px"><button class="primary" id="lockClosed">Lock current as CLOSED</button></div></div>
       </div>
       <p class="note" id="calState"></p>
-      <p class="note">Find the value where the jaws are fully open, lock it. Then find where they grip a swab firmly without crushing it, lock that. Locked values are saved to the calibration file and used by every job.</p>
+      <details class="more"><summary>More info</summary><p class="note">Find the value where the jaws are fully open, lock it. Then find where they grip a swab firmly without crushing it, lock that. Locked values are saved to the calibration file and used by every job.</p></details>
       <div class="row" style="margin-top:12px"><button id="testOpen" disabled>Test OPEN</button><button id="testClosed" disabled>Test CLOSED</button></div>
       <p class="note" id="servoNote"></p>
     </div>
@@ -216,7 +220,7 @@
   <div class="panel stack" id="p-slide" hidden>
     <div class="card">
       <h2>Slide corner and size</h2>
-      <p class="note" style="margin-top:0">Jog the tip to the top-left corner of the glass as closely as you can, capture it, then trace the square to check it by eye.</p>
+      <details class="more"><summary>More info</summary><p class="note" style="margin-top:0">Jog the tip to the top-left corner of the glass as closely as you can, capture it, then trace the square to check it by eye.</p></details>
       <div class="two" style="margin-top:14px">
         <div>
           <div class="row"><label>Slot<select id="slot"></select></label><span class="chip" id="slotChip"></span></div>
@@ -236,17 +240,17 @@
         <div><svg id="svg" viewBox="0 0 100 100" style="width:100%;height:300px"></svg></div>
       </div>
     </div>
-    <div class="card">
-      <p class="label">Trace it · XY only, Z stays where it is</p>
+    <details class="card fold" id="f-trace"><summary><span class="label">Trace it · XY only, Z stays where it is</span></summary><div class="fold-body">
+      
       <div class="row" style="align-items:flex-end">
         <label>Speed mm/s<input type="number" id="ts" value="15" min="1" max="100"></label>
         <button class="gold" id="trPat">Trace pattern square</button>
         <button class="gold" id="trOut">Trace slide outline</button>
       </div>
-      <p class="note">Raise Z so the tip hovers just above the glass first. The tip walks the four corners and returns to the start. E-STOP cancels.</p>
+      <details class="more"><summary>More info</summary><p class="note">Raise Z so the tip hovers just above the glass first. The tip walks the four corners and returns to the start. E-STOP cancels.</p></details>
       <table style="margin-top:12px"><thead><tr><th>Corner</th><th>Pattern X</th><th>Pattern Y</th><th>Slide X</th><th>Slide Y</th></tr></thead><tbody id="coords"></tbody></table>
       <p class="note" id="mapNote"></p>
-    </div>
+    </div></details>
   </div>
 
   <!-- ============ CAMERA ============ -->
@@ -267,11 +271,11 @@
         <button id="camToggle">Pause</button>
         <button class="gold" id="camSnap">Save snapshot</button>
       </div>
-      <p class="note">The stream runs only while this tab is open. The stamp burned into the bottom-left says REAL, MOCK or REMOTE, the time, and the size of the source frame, so a frozen picture or a mocked camera is obvious. Focus is the manual ring on the lens. Lower the width or frame rate if the picture lags over Wi-Fi.</p>
+      <details class="more"><summary>More info</summary><p class="note">The stream runs only while this tab is open. The stamp burned into the bottom-left says REAL, MOCK or REMOTE, the time, and the size of the source frame, so a frozen picture or a mocked camera is obvious. Focus is the manual ring on the lens. Lower the width or frame rate if the picture lags over Wi-Fi.</p></details>
     </div>
-    <div class="card">
-      <p class="label">Substrate detection · red tape</p>
-      <p class="note" style="margin-top:0">Takes one frame, finds the red corner markers, pairs them into substrates (upper-right with lower-left), numbers them S1, S2, … in rows, and draws the result. Same method as the team's substrateRecognition script.</p>
+    <details class="card fold" id="f-detect"><summary><span class="label">Substrate detection · red tape</span></summary><div class="fold-body">
+      
+      <details class="more"><summary>More info</summary><p class="note" style="margin-top:0">Takes one frame, finds the red corner markers, pairs them into substrates (upper-right with lower-left), numbers them S1, S2, … in rows, and draws the result. Same method as the team's substrateRecognition script.</p></details>
       <div class="row" style="align-items:flex-end;margin-top:10px">
         <label>Marker spacing X px<input type="number" id="edx" min="1" step="1" placeholder="auto"></label>
         <label>Marker spacing Y px<input type="number" id="edy" min="1" step="1" placeholder="auto"></label>
@@ -281,13 +285,60 @@
       <p class="note" id="detMsg"></p>
       <img id="detImg" alt="" style="width:100%;display:none;margin-top:10px;border:1px solid var(--line);border-radius:4px">
       <table style="margin-top:12px" id="detTab" hidden><thead><tr><th>Substrate</th><th>Center X px</th><th>Center Y px</th><th>Pair distance px</th></tr></thead><tbody id="detRows"></tbody></table>
-    </div>
+    </div></details>
   </div>
 
-  <div class="card" style="margin-top:16px">
-    <p class="label">Activity</p>
-    <div id="log"></div>
+    </div>
+
+  <!-- ============ AUTONOMOUS ============ -->
+  <div id="modeAuto" class="stack" hidden>
+    <div class="card" id="autoMain">
+      <p class="label">One-button actions</p>
+      <h2>Grip and <em>dispose</em></h2>
+      <p class="note" style="margin-top:0">Each button works from wherever the gantry is. Z rises to the safe height, then XY travels, then Z lowers onto the target.</p>
+      <div class="auto-actions">
+        <button class="bigbtn primary" id="aGrip"><b>Grip swab</b><small id="aGripSub">Save the positions below first</small></button>
+        <button class="bigbtn" id="aDispose"><b>Dispose</b><small id="aDisposeSub">Save the positions below first</small></button>
+      </div>
+      <div class="row" style="margin-top:14px;align-items:center">
+        <button class="danger sm" id="aStop" disabled>Stop after this move</button>
+        <span class="muted" style="font-size:12.5px">E-STOP in the header halts a move already under way.</span>
+      </div>
+      <ol class="runsteps" id="aSteps" hidden></ol>
+      <p class="note" id="aMsg"></p>
+    </div>
+
+    <details class="card fold" id="f-teach" open>
+      <summary><span class="label">Taught positions</span></summary>
+      <div class="fold-body">
+        <p class="note" style="margin-top:0">Jog there with the controls on the left, then press Save here. Home X and Y first.</p>
+        <div class="taught" id="taught"></div>
+        <details class="more"><summary>More info</summary><p class="note">Pickup is where the open jaws close around a swab. Bin is the centre of the bin, where the jaws open. Safe Z is the height XY moves at: it must be at or above both of those Z values and clear of everything on the bed. After a grip the swab rises by the lift below, then moves to the centre of the gantry.</p></details>
+      </div>
+    </details>
+
+    <details class="card fold" id="f-autoset">
+      <summary><span class="label">Motion settings</span></summary>
+      <div class="fold-body">
+        <div class="row">
+          <label>Lift after grip mm<input type="number" id="sLift" min="0" max="200" step="1"></label>
+          <label>Grip wait s<input type="number" id="sGrip" min="0" max="10" step="0.1"></label>
+          <label>Release wait s<input type="number" id="sRel" min="0" max="10" step="0.1"></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label>XY speed mm/s<input type="number" id="sXY" min="1" max="150" step="5"></label>
+          <label>Z speed mm/s<input type="number" id="sZ" min="0.5" max="20" step="0.5"></label>
+          <button class="gold sm" id="sSave">Save settings</button>
+        </div>
+        <div class="kv" style="margin-top:14px"><span>Centre of gantry</span><span id="sCentre">–</span></div>
+      </div>
+    </details>
   </div>
+
+  <details class="card fold" id="f-activity" style="margin-top:16px"><summary><span class="label">Activity</span></summary><div class="fold-body">
+    
+    <div id="log"></div>
+  </div></details>
 </section>
 </div></div>
 </div>
@@ -353,7 +404,7 @@ function paint(){
     if(cam.remote){cc.className='chip ok';cc.textContent='Camera · REMOTE'}else chipFor('#cCam','Camera',cam);
     $('#camReal').className=cc.className;$('#camReal').textContent=cam.remote?'REMOTE · from '+cam.remote:cam.error?'UNAVAILABLE':cam.real?'REAL camera':'MOCK · synthetic picture';
   }
-  const off=S.busy||!S.pos;
+  const off=S.busy||S.autoRun||!S.pos;
   document.querySelectorAll('.jogbtn').forEach(b=>b.disabled=off);
   $('#zdn').disabled=off||S.floor==null;
   $('#hXY').disabled=off;$('#hZ').disabled=off||!S.allowZHome;
@@ -673,10 +724,90 @@ $('#detect').onclick=async()=>{
     m.className='note '+(w.length?'warn':'good');log('substrate detection: '+r.substrate_count+' found','good');
   }catch(e){m.textContent=String(e.message||e);m.className='note warn'}
 };
+/* ---------- folds remember their state ---------- */
+document.querySelectorAll('details.fold[id]').forEach(d=>{
+  const v=LS.get('fold.'+d.id,null);if(v!==null)d.open=!!v;
+  d.addEventListener('toggle',()=>LS.set('fold.'+d.id,d.open));
+});
+
+/* ---------- autonomous ---------- */
+const TAUGHT=[['pickup','Pickup','xyz'],['bin','Bin','xyz'],['safe_z','Safe Z','z']];
+let autoTimer=null,prevTab='cell',autoCache={t:'',s:''};
+const homedXY=()=>S.homed.includes('x')&&S.homed.includes('y');
+function paintAuto(){
+  const a=S.auto;if(!a)return;
+  const st=a.settings,run=!!(a.status&&a.status.running);
+  const th=TAUGHT.map(([k,name,kind])=>{
+    const v=st[k];
+    const val=v==null?'<span class="muted">not saved</span>':kind==='z'?fmt(v,2)+' mm':`X ${fmt(v.x,2)} · Y ${fmt(v.y,2)} · Z ${fmt(v.z,2)}`;
+    const dis=(run||S.busy||!homedXY())?' disabled':'';
+    return `<div class="trow"><div><b>${name}</b><div class="mono val">${val}</div></div><div class="row"><button class="gold sm" data-save="${k}"${dis}>Save here</button>${v==null?'':`<button class="sm" data-clear="${k}"${dis}>Clear</button>`}</div></div>`;
+  }).join('');
+  if(th!==autoCache.t){$('#taught').innerHTML=th;autoCache.t=th}
+  [['sLift','lift_mm'],['sGrip','grip_wait_s'],['sRel','release_wait_s'],['sXY','xy_speed_mm_s'],['sZ','z_speed_mm_s']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el)el.value=st[k]});
+  $('#sCentre').textContent=`X ${fmt(a.centre.x,1)} · Y ${fmt(a.centre.y,1)}`;
+  const lock=run||S.busy||!S.pos||!homedXY();
+  const why=k=>!homedXY()?'Home X and Y first':(a.problems[k][0]||'');
+  $('#aGrip').disabled=lock||!a.ready.grip;$('#aDispose').disabled=lock||!a.ready.dispose;
+  $('#aGripSub').textContent=why('grip')||`Opens the jaws, takes the swab, lifts ${fmt(st.lift_mm,0)} mm, moves to the centre`;
+  $('#aDisposeSub').textContent=why('dispose')||'Moves over the bin, lowers, opens the jaws';
+  $('#aStop').disabled=!run;
+  const steps=(a.status&&a.status.steps)||[];
+  const sh=steps.map(x=>`<li class="${x.state}">${x.name}</li>`).join('');
+  $('#aSteps').hidden=!steps.length;
+  if(sh!==autoCache.s){$('#aSteps').innerHTML=sh;autoCache.s=sh}
+  const m=$('#aMsg');
+  if(run){m.textContent=(a.status.action==='grip'?'Gripping':'Disposing')+'…';m.className='note'}
+  else if(a.status&&a.status.error){m.textContent=a.status.error;m.className='note err'}
+  else if(a.status&&a.status.finished){m.textContent=(a.status.action==='grip'?'Swab gripped and lifted.':'Swab disposed.');m.className='note good'}
+  else{m.textContent='';m.className='note'}
+}
+async function loadAuto(){
+  try{S.auto=await api('/api/auto');if(S.auto.status.running&&!autoTimer)autoWatch()}catch(e){S.auto=null;$('#aMsg').textContent='Autonomous unavailable: '+e.message;$('#aMsg').className='note err'}
+  paintAuto();
+}
+function autoWatch(){
+  S.autoRun=true;paint();
+  autoTimer=setInterval(async()=>{
+    try{
+      const s=await api('/api/auto/status');if(S.auto)S.auto.status=s;paintAuto();
+      setPos(await api('/api/machine/position'));paint();
+      if(!s.running){
+        clearInterval(autoTimer);autoTimer=null;S.autoRun=false;
+        log(s.error?(s.action+' stopped: '+s.error):(s.action+' finished'),s.error?'err':'good');
+        await loadAuto();paint();
+      }
+    }catch(e){}
+  },400);
+}
+async function autoStart(kind,label){
+  await run(label,async()=>{await post('/api/auto/'+kind);S.auto=await api('/api/auto');autoCache.s='';paintAuto();autoWatch()});
+}
+$('#aGrip').onclick=()=>autoStart('grip','Grip swab');
+$('#aDispose').onclick=()=>autoStart('dispose','Dispose');
+$('#aStop').onclick=async()=>{try{await post('/api/auto/stop');log('stop requested: it ends after the current move')}catch(e){say(String(e.message||e),'err')}};
+$('#taught').onclick=e=>{
+  const b=e.target.closest('button');if(!b)return;
+  if(b.dataset.save)run('Saved '+b.dataset.save,async()=>{S.auto=await post('/api/auto/teach',{target:b.dataset.save});paintAuto()});
+  if(b.dataset.clear)run('Cleared '+b.dataset.clear,async()=>{S.auto=await post('/api/auto/clear',{target:b.dataset.clear});paintAuto()});
+};
+$('#sSave').onclick=()=>run('Saved motion settings',async()=>{
+  S.auto=await post('/api/auto/settings',{lift_mm:+$('#sLift').value,grip_wait_s:+$('#sGrip').value,release_wait_s:+$('#sRel').value,xy_speed_mm_s:+$('#sXY').value,z_speed_mm_s:+$('#sZ').value});paintAuto()});
+
+{const _paint=paint;paint=function(){_paint();if(S.mode==='auto')paintAuto()}}
+function setMode(m){
+  S.mode=m;LS.set('mode',m);
+  document.querySelectorAll('.mode').forEach(b=>b.setAttribute('aria-selected',b.dataset.mode===m));
+  $('#modeManual').hidden=m!=='manual';$('#modeAuto').hidden=m!=='auto';
+  if(m==='auto'){if(S.tab!=='auto')prevTab=S.tab;S.tab='auto';setWatch(false);camStop();loadAuto()}
+  else{const t=document.querySelector('.tab[data-tab="'+prevTab+'"]');S.tab='';if(t)t.click()}
+}
+document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{if(S.mode!==b.dataset.mode)setMode(b.dataset.mode)});
+
 /* ---------- start ---------- */
 setInterval(()=>{if(!S.busy)poll()},1500);
 setInterval(loadDev,15000);
-(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();if(S.tab==='cell')setWatch(true)})();
+(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();if(LS.get('mode','manual')==='auto')setMode('auto');else if(S.tab==='cell')setWatch(true)})();
 </script>
 </body>
 </html>
