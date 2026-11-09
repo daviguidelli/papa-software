@@ -1,0 +1,150 @@
+"""Lens distortion and tilt correction for the plate camera.
+
+Turns a 1920 x 1080 photo from this camera into a straight-down view of the
+plate, where equal distances on the plate are equal distances in the image.
+It also converts point coordinates between the original photo and the
+corrected view, so features found in the original photo (such as AprilTag
+corners) can be located on the plate without warping the whole image.
+
+Requires numpy and opencv-python.
+
+Command line:
+    python camera_correction.py photo1.jpg photo2.jpg ...
+    -> saves photo1_corrected.png, photo2_corrected.png, ...
+
+In code:
+    import cv2
+    from camera_correction import correct_image, to_corrected, to_original
+
+    corrected = correct_image(cv2.imread("photo.jpg"))
+    plate_xy = to_corrected([[812.4, 433.0]])   # original pixel -> corrected pixel
+    photo_xy = to_original(plate_xy)            # corrected pixel -> original pixel
+
+Valid while:
+    - the camera, its focus and aperture, and its zoom stay as they were when
+      calibrated, and the photo is 1920 x 1080
+    - the plate stays at the same height and tilt (sliding it within its own
+      plane is fine)
+    - the point is on the plate surface; anything raised above the plate
+      looks larger and leans outward in the corrected view
+
+Accuracy, measured on held-out calibration data: about 1 pixel (1% of a
+checkerboard square) over the plate. In the outer corners of the frame,
+beyond the plate, the correction is extrapolated and may be off by up to
+about 10 pixels.
+"""
+
+from pathlib import Path
+import sys
+
+import cv2
+import numpy as np
+
+# ---- Calibration --------------------------------------------------------------
+IMAGE_SIZE = (1920, 1080)  # (width, height) of photos this applies to
+
+# Lens model: radial distortion around an optical center, in pixels.
+FOCAL = 1000.0  # normalizing scale for K1 and K2 (not a measured focal length)
+CENTER = np.array([969.9285797659654, 501.59325852544356])
+K1 = -0.11903475041983075
+K2 = 0.012247249151286724
+
+# Corrected-view pixel -> straightened original pixel (removes camera tilt).
+TOPDOWN_MATRIX = np.array([
+    [1.0040645145924654, -0.0244083509270049, -196.84154759218328],
+    [0.022885544720503925, 0.9995164011316575, -148.81978016596764],
+    [-4.829675708607278e-06, 1.884413385863845e-06, 1.0],
+])
+TOPDOWN_SIZE = (2323, 1362)  # (width, height) of the corrected view
+
+# Scale of the corrected view on the plate surface.
+PIXELS_PER_SQUARE = 135.0
+SQUARE_SIZE_MM = None  # set to your measured checkerboard square size in mm
+# -------------------------------------------------------------------------------
+
+_INVERSE_TOPDOWN = np.linalg.inv(TOPDOWN_MATRIX)
+_maps = None
+
+
+def _distort(points):
+    """Straightened pixel -> pixel in the original photo."""
+    normalized = (points - CENTER) / FOCAL
+    r2 = (normalized ** 2).sum(axis=1, keepdims=True)
+    return CENTER + FOCAL * normalized * (1 + K1 * r2 + K2 * r2 ** 2)
+
+
+def _undistort(points):
+    """Pixel in the original photo -> straightened pixel."""
+    normalized = (points - CENTER) / FOCAL
+    straight = normalized.copy()
+    for _ in range(30):
+        r2 = (straight ** 2).sum(axis=1, keepdims=True)
+        straight = normalized / (1 + K1 * r2 + K2 * r2 ** 2)
+    return CENTER + FOCAL * straight
+
+
+def _apply(matrix, points):
+    homogeneous = np.c_[points, np.ones(len(points))] @ matrix.T
+    return homogeneous[:, :2] / homogeneous[:, 2:]
+
+
+def to_corrected(points):
+    """Convert original-photo pixel coordinates to corrected-view pixels.
+
+    points: (x, y) pairs, shape (N, 2). Returns an (N, 2) float array.
+    """
+    points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    return _apply(_INVERSE_TOPDOWN, _undistort(points))
+
+
+def to_original(points):
+    """Convert corrected-view pixel coordinates back to original-photo pixels."""
+    points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    return _distort(_apply(TOPDOWN_MATRIX, points))
+
+
+def pixels_to_mm(pixels):
+    """Convert a distance in corrected-view pixels to millimeters on the plate."""
+    if SQUARE_SIZE_MM is None:
+        raise ValueError("Set SQUARE_SIZE_MM to your measured square size first.")
+    return np.asarray(pixels, dtype=np.float64) * SQUARE_SIZE_MM / PIXELS_PER_SQUARE
+
+
+def _build_maps():
+    width, height = TOPDOWN_SIZE
+    xs, ys = np.meshgrid(np.arange(width, dtype=np.float64), np.arange(height, dtype=np.float64))
+    source = to_original(np.c_[xs.ravel(), ys.ravel()])
+    map_x = source[:, 0].reshape(height, width).astype(np.float32)
+    map_y = source[:, 1].reshape(height, width).astype(np.float32)
+    return map_x, map_y
+
+
+def correct_image(image):
+    """Return the corrected, straight-down view of a photo from this camera.
+
+    Areas the camera did not see are black.
+    """
+    global _maps
+    if image.shape[1::-1] != IMAGE_SIZE:
+        raise ValueError(f"Expected a {IMAGE_SIZE[0]} x {IMAGE_SIZE[1]} photo, got "
+                         f"{image.shape[1]} x {image.shape[0]}.")
+    if _maps is None:
+        _maps = _build_maps()
+    return cv2.remap(image, _maps[0], _maps[1], cv2.INTER_CUBIC,
+                     borderMode=cv2.BORDER_CONSTANT)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        raise SystemExit("Usage: python camera_correction.py photo.jpg [more photos ...]")
+    for name in sys.argv[1:]:
+        source = Path(name)
+        if source.stem.endswith("_corrected"):
+            continue
+        image = cv2.imread(str(source))
+        if image is None:
+            print(f"Skipped {source}: could not open it")
+            continue
+        target = source.with_name(f"{source.stem}_corrected.png")
+        cv2.imwrite(str(target), correct_image(image))
+        print(f"Saved {target}")
