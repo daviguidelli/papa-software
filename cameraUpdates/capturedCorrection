@@ -1,0 +1,77 @@
+"""Take a full-resolution photo with the HQ Camera and save the corrected view.
+
+Keep this file next to camera_correction.py.
+
+    python3 capture_and_correct.py              # capture, save original + corrected
+    python3 capture_and_correct.py --check      # also measure the 5 x 5 checkerboard
+    python3 capture_and_correct.py --file a.jpg # correct an existing photo instead
+
+Photos are saved in a "captures" folder next to this script. --check measures
+the checkerboard squares in the corrected view; at full resolution they should
+all be close to 270 pixels.
+"""
+
+import argparse
+from datetime import datetime
+from pathlib import Path
+import subprocess
+
+import cv2
+
+import camera_correction as cc
+
+PHOTO_SIZE = cc.SENSOR_SIZE  # 4056 x 3040, the HQ Camera's full resolution
+PREVIEW_TIME = 2000          # ms of preview before the photo, so exposure settles
+
+
+def capture(path):
+    subprocess.run(
+        ["rpicam-still", "-t", str(PREVIEW_TIME),
+         "--width", str(PHOTO_SIZE[0]), "--height", str(PHOTO_SIZE[1]),
+         "-o", str(path)],
+        check=True,
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--check", action="store_true", help="measure the checkerboard")
+    parser.add_argument("--file", help="correct an existing photo instead of capturing")
+    args = parser.parse_args()
+
+    folder = Path(__file__).resolve().parent / "captures"
+    folder.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    original_path = folder / f"{stamp}_original.jpg"
+
+    if args.file:
+        frame = cv2.imread(args.file)
+        if frame is None:
+            raise SystemExit(f"Could not open {args.file}")
+        cv2.imwrite(str(original_path), frame)
+    else:
+        capture(original_path)
+        frame = cv2.imread(str(original_path))
+
+    correction = cc.get_correction(frame.shape[1::-1])
+    corrected_path = folder / f"{stamp}_corrected.jpg"
+    cv2.imwrite(str(corrected_path), correction.correct_image(frame))
+    print(f"Saved captures/{original_path.name} and captures/{corrected_path.name}")
+
+    if args.check:
+        result = cc.check_checkerboard(frame)
+        if result is None:
+            print("Check: checkerboard not found. Make sure the whole board is visible.")
+            return
+        low, high, mean, target = result
+        print(f"Check: squares measure {low:.1f} to {high:.1f} px "
+              f"(average {mean:.1f}, target {target:.0f}).")
+        if abs(mean / target - 1) < 0.02 and high / low < 1.04:
+            print("Check: this setup matches the calibration.")
+        else:
+            print("Check: this setup does NOT match the calibration. The lens focus, zoom, "
+                  "or camera position may have changed, or the board is not flat on the plate.")
+
+
+if __name__ == "__main__":
+    main()
