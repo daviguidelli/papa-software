@@ -1,0 +1,201 @@
+"""One photo of the plate -> a 25 x 25 mm snapshot of every substrate.
+
+Keep this file in cameraUpdates/, next to camera_correction. It also uses the
+red-marker functions from substrateRecognition in the repo root.
+
+    python3 substrate_snapshots.py                # capture a new photo
+    python3 substrate_snapshots.py --file a.jpg   # use an existing photo
+
+Steps
+    1. Take one full-resolution photo of all 9 substrates (or load --file).
+    2. Correct lens distortion and tilt, so pixels are the same size everywhere
+       on the plate and the image axes are square to the plate.
+    3. Find the red corner markers, pair them per substrate and number them
+       S1..S9 (same algorithm as substrateRecognition).
+    4. Convert SNAPSHOT_MM to pixels with the checkerboard scale and save an
+       axis-aligned square crop around each substrate.
+
+The crops are deliberately NOT rotated: a substrate sitting at an angle shows
+up at that angle inside its crop, which is what the alpha measurement needs.
+
+Output, in scans/snap_NNNN/ next to this script:
+    original.jpg        the photo as taken
+    corrected.png       the straightened view the crops come from
+    overview.jpg        corrected view with markers, labels and crop boxes
+    S1.png ... S9.png   the 25 x 25 mm snapshots
+    snapshots.json      scale, and each crop's position in pixels and mm
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+
+# ---- Settings ------------------------------------------------------------------
+SQUARE_SIZE_MM = 1.17 * 25.4  # checkerboard square side: 1.17 in = 29.718 mm
+SNAPSHOT_MM = 25.0            # side of each substrate snapshot
+EXPECTED_SUBSTRATES = 9
+
+# Where the snapshot is centred, measured from the midpoint of the two red
+# markers, in mm (+x right, +y down in the corrected view). Leave at 0, 0 if
+# the markers sit on the diagonal of the 25 x 25 mm area you want.
+CENTER_OFFSET_MM = (0.0, 0.0)
+
+PHOTO_SIZE = (4056, 3040)
+PREVIEW_TIME = 2000  # ms of preview so exposure settles
+# --------------------------------------------------------------------------------
+
+
+def _load_module(name, *paths):
+    """Import a sibling script whether or not it has a .py extension."""
+    for path in paths:
+        if path.exists():
+            loader = importlib.machinery.SourceFileLoader(name, str(path))
+            spec = importlib.util.spec_from_loader(name, loader)
+            module = importlib.util.module_from_spec(spec)
+            loader.exec_module(module)
+            return module
+    raise SystemExit(f"Could not find {name} (looked for: {', '.join(map(str, paths))})")
+
+
+cc = _load_module("camera_correction", HERE / "camera_correction.py", HERE / "camera_correction")
+sr = _load_module("substrate_recognition", REPO / "substrateRecognition.py",
+                  REPO / "substrateRecognition", HERE / "substrateRecognition")
+cc.SQUARE_SIZE_MM = SQUARE_SIZE_MM
+
+
+def new_scan_folder():
+    root = HERE / "scans"
+    root.mkdir(exist_ok=True)
+    ids = [int(p.name.split("_")[-1]) for p in root.glob("snap_*")
+           if p.is_dir() and p.name.split("_")[-1].isdigit()]
+    scan_id = max(ids, default=0) + 1
+    folder = root / f"snap_{scan_id:04d}"
+    folder.mkdir()
+    return folder, scan_id
+
+
+def capture(path):
+    subprocess.run(
+        ["rpicam-still", "-t", str(PREVIEW_TIME),
+         "--width", str(PHOTO_SIZE[0]), "--height", str(PHOTO_SIZE[1]),
+         "-o", str(path)],
+        check=True,
+    )
+
+
+def crop_square(image, center_px, side_px):
+    """Axis-aligned square crop. Parts outside the image are filled black, so
+    every snapshot has the same size even near the frame edge."""
+    half = side_px / 2.0
+    x0 = int(round(center_px[0] - half))
+    y0 = int(round(center_px[1] - half))
+    h, w = image.shape[:2]
+    out = np.zeros((side_px, side_px) + image.shape[2:], dtype=image.dtype)
+    sx0, sy0 = max(0, x0), max(0, y0)
+    sx1, sy1 = min(w, x0 + side_px), min(h, y0 + side_px)
+    clipped = sx0 != x0 or sy0 != y0 or sx1 != x0 + side_px or sy1 != y0 + side_px
+    if sx1 > sx0 and sy1 > sy0:
+        out[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = image[sy0:sy1, sx0:sx1]
+    return out, (x0, y0), clipped
+
+
+def make_snapshots(photo, folder):
+    """Everything after the photo is taken. Returns the results dict."""
+    correction = cc.get_correction(photo.shape[1::-1])
+    corrected = correction.correct_image(photo)
+    px_per_mm = correction.pixels_per_square / SQUARE_SIZE_MM
+    side_px = int(round(SNAPSHOT_MM * px_per_mm))
+
+    markers = sr.detect_red_markers(corrected)
+    substrates, unmatched = sr.pair_markers(markers)
+    substrates = sr.number_substrates(substrates)
+
+    overview = sr.annotate_image(corrected, markers, substrates)
+    results = []
+    for s in substrates:
+        cx = s["center_x"] + CENTER_OFFSET_MM[0] * px_per_mm
+        cy = s["center_y"] + CENTER_OFFSET_MM[1] * px_per_mm
+        snap, (x0, y0), clipped = crop_square(corrected, (cx, cy), side_px)
+        name = f"S{s['substrate_id']}.png"
+        if not cv2.imwrite(str(folder / name), snap):
+            raise RuntimeError(f"Could not save {name}")
+        cv2.rectangle(overview, (x0, y0), (x0 + side_px, y0 + side_px), (255, 0, 0), 4)
+        results.append({
+            "substrate_id": s["substrate_id"],
+            "file": name,
+            "center_px": [round(cx, 2), round(cy, 2)],
+            "crop_origin_px": [x0, y0],          # top-left of the snapshot in corrected.png
+            "crop_size_px": side_px,
+            "center_mm": [round(cx / px_per_mm, 3), round(cy / px_per_mm, 3)],
+            "clipped_by_frame": clipped,
+            "markers_px": [[s["marker_1"]["x"], s["marker_1"]["y"]],
+                           [s["marker_2"]["x"], s["marker_2"]["y"]]],
+        })
+
+    cv2.imwrite(str(folder / "corrected.png"), corrected)
+    cv2.imwrite(str(folder / "overview.jpg"), overview)
+
+    data = {
+        "photo_size_px": list(photo.shape[1::-1]),
+        "corrected_size_px": list(corrected.shape[1::-1]),
+        "square_size_mm": round(SQUARE_SIZE_MM, 4),
+        "pixels_per_square": correction.pixels_per_square,
+        "pixels_per_mm": round(px_per_mm, 4),
+        "snapshot_mm": SNAPSHOT_MM,
+        "marker_count": len(markers),
+        "substrate_count": len(substrates),
+        "unmatched_markers": [markers[i] for i in unmatched],
+        "substrates": results,
+    }
+    with open(folder / "snapshots.json", "w") as f:
+        json.dump(data, f, indent=2)
+    return data
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--file", help="use an existing photo instead of capturing")
+    args = parser.parse_args()
+
+    folder, scan_id = new_scan_folder()
+    original = folder / "original.jpg"
+    if args.file:
+        photo = cv2.imread(args.file)
+        if photo is None:
+            raise SystemExit(f"Could not open {args.file}")
+        cv2.imwrite(str(original), photo)
+    else:
+        print("Taking photo...")
+        capture(original)
+        photo = cv2.imread(str(original))
+        if photo is None:
+            raise SystemExit("Could not read the photo the camera saved")
+
+    data = make_snapshots(photo, folder)
+    print(f"Scan {scan_id:04d}: {data['marker_count']} markers, "
+          f"{data['substrate_count']} substrates, {data['pixels_per_mm']:.3f} px/mm, "
+          f"{data['substrates'][0]['crop_size_px'] if data['substrates'] else '-'} px snapshots")
+    for s in data["substrates"]:
+        note = "  (partly outside the photo)" if s["clipped_by_frame"] else ""
+        print(f"  S{s['substrate_id']}: centre {s['center_mm'][0]:.2f}, "
+              f"{s['center_mm'][1]:.2f} mm -> {s['file']}{note}")
+    if data["substrate_count"] != EXPECTED_SUBSTRATES:
+        print(f"WARNING: expected {EXPECTED_SUBSTRATES} substrates, found "
+              f"{data['substrate_count']}. Check overview.jpg and the red markers.")
+    if data["unmatched_markers"]:
+        print(f"WARNING: {len(data['unmatched_markers'])} red marker(s) not paired.")
+    print(f"Saved to {folder}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
