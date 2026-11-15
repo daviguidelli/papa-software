@@ -123,9 +123,21 @@ class GuardedPrinter:
         if z is not None:
             self.guard.check_target(float(z), lambda: self._inner.position().z)
         self._inner.move(x=x, y=y, z=z, speed_mm_s=speed_mm_s)
+        if z is not None:
+            self._note_z()
 
     def move_relative(self, dx=0.0, dy=0.0, dz=0.0, speed_mm_s: float = 20.0) -> None:
         if dz:
             cur = self._inner.position().z
             self.guard.check_target(cur + dz, lambda: cur)
         self._inner.move_relative(dx=dx, dy=dy, dz=dz, speed_mm_s=speed_mm_s)
+        if dz:
+            self._note_z()
+
+    def _note_z(self) -> None:
+        try:
+            p = self._inner.position()
+            if "z" in p.homed:
+                self.guard.remember_z(p.z)
+        except Exception:                                  # noqa: BLE001
+            pass

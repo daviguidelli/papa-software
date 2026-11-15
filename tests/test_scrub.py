@@ -96,3 +96,14 @@ def test_run_blocked_while_busy_and_stop(api):
         time.sleep(0.05)
     s = api.get("/api/scrub/status").json()
     assert s["error"] and not s["finished"]
+
+
+def test_last_z_is_saved_after_every_z_move(tmp_path):
+    from papa.ops.guard import Guard, GuardedPrinter
+    from papa.sim.mocks import MockMoonraker
+    g = Guard(tmp_path / "f.json")
+    p = GuardedPrinter(MockMoonraker(z=50.0, homed="xyz"), g)
+    p.move(z=60.0)
+    assert Guard(tmp_path / "f.json").last_z == 60.0
+    p.move_relative(dz=2.5)
+    assert Guard(tmp_path / "f.json").last_z == 62.5
