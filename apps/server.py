@@ -1103,7 +1103,7 @@ def auto_clear(payload: dict) -> dict:
 
 
 _AUTO_RANGES = {
-    "lift_mm": (0.0, 200.0), "grip_wait_s": (0.0, 10.0), "release_wait_s": (0.0, 10.0),
+    "lift_mm": (0.0, 200.0), "grip_shift_mm": (-10.0, 10.0), "grip_close_s": (0.2, 10.0), "grip_wait_s": (0.0, 10.0), "release_wait_s": (0.0, 10.0),
     "xy_speed_mm_s": (1.0, 150.0), "z_speed_mm_s": (0.5, 20.0), "skip_rise_xy_mm": (0.0, 50.0),
 }
 

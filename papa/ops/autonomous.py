@@ -20,6 +20,8 @@ DEFAULTS: dict[str, Any] = {
     "bin": None,             # {"x": , "y": , "z": } centre of the bin, where the jaws open
     "safe_z": None,          # XY only ever moves at or above this Z
     "lift_mm": 30.0,         # after the grip, rise this far above the pickup Z
+    "grip_shift_mm": 0.0,    # gantry moves this far in +X while the jaws close, to meet the swab at the centre
+    "grip_close_s": 1.5,     # how long the jaws take to close when the shift is used
     "grip_wait_s": 1.0,      # time allowed for the jaws to close before lifting
     "release_wait_s": 0.6,   # time allowed for the jaws to open over the bin
     "xy_speed_mm_s": 60.0,
@@ -91,6 +93,9 @@ def problems(settings: dict[str, Any], machine: Any, action: str, ref: str | Non
     if safe is not None and not machine.limits["z"][0] <= float(safe) <= machine.limits["z"][1]:
         out.append("Safe Z is outside the machine limits.")
     if action == "grip" and t is not None:
+        sx = float(t["x"]) + float(settings.get("grip_shift_mm") or 0.0)
+        if not machine.in_limits(sx, float(t["y"]), float(t["z"])):
+            out.append("The grip shift would move X outside the machine limits.")
         top = float(t["z"]) + float(settings["lift_mm"])
         if top > machine.limits["z"][1]:
             out.append("The carry lift would go above the Z limit; lower the lift.")
@@ -168,6 +173,33 @@ class AutoRunner:
         if "z" not in p.homed:
             raise AutoError("Z is not set. Set the Z reference first, then save the positions again.")
 
+    def _close_jaws(self, st: dict, t: dict) -> None:
+        shift = float(st.get("grip_shift_mm") or 0.0)
+        g = self._gripper()
+        if abs(shift) < 1e-9:
+            g.close()
+            return
+        dur = max(0.2, float(st["grip_close_s"]))
+        stroke = abs(getattr(g, "closed_us", 0) - getattr(g, "open_us", 0))
+        slew = stroke / dur if stroke else None
+        err: list[BaseException] = []
+
+        def close() -> None:
+            try:
+                g.close(slew_us_s=slew)
+            except BaseException as exc:                       # noqa: BLE001
+                err.append(exc)
+
+        th = threading.Thread(target=close, daemon=True)
+        th.start()
+        try:
+            self._printer().move(x=float(t["x"]) + shift, y=float(t["y"]),
+                                 speed_mm_s=max(0.1, abs(shift) / dur))
+        finally:
+            th.join()
+        if err:
+            raise err[0]
+
     # ---- the two actions ----
     def grip_steps(self, st: dict) -> list[tuple[str, Callable[[], None]]]:
         t = st["pickup"]
@@ -178,7 +210,7 @@ class AutoRunner:
             ("Rise to safe Z", lambda: self._lift_to_safe(st, t)),
             ("Move to the pickup in XY", lambda: self._xy_to(float(t["x"]), float(t["y"]), st)),
             ("Lower onto the swab", lambda: self._z_to(float(t["z"]), st)),
-            ("Close the jaws", lambda: self._gripper().close()),
+            ("Close the jaws", lambda: self._close_jaws(st, t)),
             ("Wait for the grip", lambda: self._sleep(float(st["grip_wait_s"]))),
             ("Lift the swab", lambda: self._z_to(float(t["z"]) + float(st["lift_mm"]), st)),
             ("Move to the centre of the gantry", lambda: self._xy_to(c["x"], c["y"], st)),

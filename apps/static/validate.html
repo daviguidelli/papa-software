@@ -340,6 +340,11 @@
           <label>Release wait s<input type="number" id="sRel" min="0" max="10" step="0.1"></label>
         </div>
         <div class="row" style="margin-top:10px">
+          <label>Grip shift mm (+X)<input type="number" id="sShift" min="-10" max="10" step="0.1"></label>
+          <label>Close time s<input type="number" id="sCloseT" min="0.2" max="10" step="0.1"></label>
+        </div>
+        <p class="note">While the jaws close, the gantry moves this far in +X so the swab meets the jaw at the centre. 0 turns it off. Negative moves −X.</p>
+        <div class="row" style="margin-top:10px">
           <label>XY speed mm/s<input type="number" id="sXY" min="1" max="150" step="5"></label>
           <label>Z speed mm/s<input type="number" id="sZ" min="0.5" max="20" step="0.5"></label>
           <button class="gold sm" id="sSave">Save settings</button>
@@ -412,7 +417,8 @@
 <script>
 const $=s=>document.querySelector(s);
 const fmt=(v,d=3)=>v==null||Number.isNaN(+v)?'–':(+v).toFixed(d);
-const S={pos:null,homed:'',busy:false,floor:null,allowZHome:false,dev:null,step:1,tab:'cell',cal:null,grip:null,pulse:1500,slide:null,slot:1,tared:null,scaled:null,watching:false,probe:null,hold:false};
+const LS_HOLD=(()=>{try{const v=localStorage.getItem('papa.hold');return v==null?true:JSON.parse(v)}catch(e){return true}})();
+const S={pos:null,homed:'',busy:false,floor:null,allowZHome:false,dev:null,step:1,tab:'cell',cal:null,grip:null,pulse:1500,slide:null,slot:1,tared:null,scaled:null,watching:false,probe:null,hold:LS_HOLD};
 const LS={get(k,d){try{const v=localStorage.getItem('papa.'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem('papa.'+k,JSON.stringify(v))}catch(e){}}};
 
 async function api(path,body){
@@ -559,7 +565,7 @@ function paintMode(){
   $('#steps').style.display=S.hold?'none':'flex';
   $('#jogNote').textContent=S.hold?'Hold a button and it keeps moving at the speed above; let go and it stops (within about a quarter second of travel). Axes move one at a time.':'Arrows are machine axes: ↑ is Y+, → is X+. This is the only jog control; every tab uses it.';
 }
-$('#mStep').onclick=()=>{S.hold=false;paintMode()};$('#mHold').onclick=()=>{S.hold=true;paintMode()};
+$('#mStep').onclick=()=>{S.hold=false;LS.set('hold',false);paintMode()};$('#mHold').onclick=()=>{S.hold=true;LS.set('hold',true);paintMode()};
 async function holdStart(dx,dy,dz){
   if(S.busy||holdTimer)return;
   const speed=dz?+$('#fz').value:+$('#fxy').value;
@@ -813,7 +819,7 @@ function paintAuto(){
     return `<div class="trow"><div><b>${name}</b><div class="mono val">${val}</div></div><div class="row"><button class="gold sm" data-save="${k}"${dis}>Save here</button>${v==null?'':`<button class="sm" data-clear="${k}"${dis}>Clear</button>`}</div></div>`;
   }).join('');
   if(th!==autoCache.t){$('#taught').innerHTML=th;autoCache.t=th}
-  [['sLift','lift_mm'],['sGrip','grip_wait_s'],['sRel','release_wait_s'],['sXY','xy_speed_mm_s'],['sZ','z_speed_mm_s']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el&&!el.dataset.dirty)el.value=st[k]});
+  [['sLift','lift_mm'],['sGrip','grip_wait_s'],['sRel','release_wait_s'],['sShift','grip_shift_mm'],['sCloseT','grip_close_s'],['sXY','xy_speed_mm_s'],['sZ','z_speed_mm_s']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el&&!el.dataset.dirty)el.value=st[k]});
   $('#sCentre').textContent=`X ${fmt(a.centre.x,1)} · Y ${fmt(a.centre.y,1)}`;
   const lock=run||S.busy||!S.pos||!homedXY();
   const why=k=>!homedXY()?'Home X and Y first':(a.problems[k][0]||'');
@@ -860,9 +866,9 @@ $('#taught').onclick=e=>{
   if(b.dataset.save)run('Saved '+b.dataset.save,async()=>{S.auto=await post('/api/auto/teach',{target:b.dataset.save});paintAuto()});
   if(b.dataset.clear)run('Cleared '+b.dataset.clear,async()=>{S.auto=await post('/api/auto/clear',{target:b.dataset.clear});paintAuto()});
 };
-['sLift','sGrip','sRel','sXY','sZ'].forEach(id=>$('#'+id).addEventListener('input',e=>{e.target.dataset.dirty='1'}));
+['sLift','sGrip','sRel','sShift','sCloseT','sXY','sZ'].forEach(id=>$('#'+id).addEventListener('input',e=>{e.target.dataset.dirty='1'}));
 $('#sSave').onclick=()=>run('Saved motion settings',async()=>{
-  S.auto=await post('/api/auto/settings',{lift_mm:+$('#sLift').value,grip_wait_s:+$('#sGrip').value,release_wait_s:+$('#sRel').value,xy_speed_mm_s:+$('#sXY').value,z_speed_mm_s:+$('#sZ').value});['sLift','sGrip','sRel','sXY','sZ'].forEach(id=>delete $('#'+id).dataset.dirty);paintAuto()});
+  S.auto=await post('/api/auto/settings',{lift_mm:+$('#sLift').value,grip_wait_s:+$('#sGrip').value,release_wait_s:+$('#sRel').value,grip_shift_mm:+$('#sShift').value,grip_close_s:+$('#sCloseT').value,xy_speed_mm_s:+$('#sXY').value,z_speed_mm_s:+$('#sZ').value});['sLift','sGrip','sRel','sShift','sCloseT','sXY','sZ'].forEach(id=>delete $('#'+id).dataset.dirty);paintAuto()});
 
 {const _paint=paint;paint=function(){_paint();if(S.mode==='auto')paintAuto()}}
 /* ---------- scrub ---------- */
