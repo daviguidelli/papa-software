@@ -23,6 +23,7 @@ from papa.hw import make_camera, make_gripper, make_loadcell, make_printer
 from papa.ops.geometry import square, to_machine
 from papa.ops import autonomous as automod
 from papa.ops import scrub as scrubmod
+from papa.ops import routine as routinemod
 from papa.ops.guard import Guard, GuardedPrinter, ZFloorError
 from papa.ops.jobs import STATE_DIR, Job
 from papa.ops.machine import Orchestrator, Status
@@ -108,6 +109,7 @@ class Hub:
         self.servo_window = [1300, 1700]
         self.auto = automod.AutoRunner(lambda: self.printer, lambda: self.gripper, self.machine)
         self.scrub = scrubmod.ScrubRunner(lambda: self.printer, self.machine)
+        self.routine = routinemod.RoutineRunner(self.auto, self.scrub, self.machine)
 
     @property
     def printer(self) -> Any:
@@ -606,6 +608,7 @@ def estop() -> dict:
     hub.hold.stop("emergency stop")
     hub.auto.stop()
     hub.scrub.stop()
+    hub.routine.stop()
     hub.printer.emergency_stop()
     return {"ok": True}
 
@@ -1237,6 +1240,38 @@ def scrub_run() -> dict:
 def scrub_stop() -> dict:
     hub.scrub.stop()
     return hub.scrub.status.as_dict()
+
+
+def _routine_info() -> dict:
+    info = routinemod.describe(_auto_settings(), _scrub_settings(), hub.machine, hub.guard.ref, hub.guard.floor)
+    info["status"] = hub.routine.status.as_dict()
+    return info
+
+
+@app.get("/api/routine1")
+def routine_info() -> dict:
+    return _routine_info()
+
+
+@app.get("/api/routine1/status")
+def routine_status() -> dict:
+    return hub.routine.status.as_dict()
+
+
+@app.post("/api/routine1/run")
+def routine_run() -> dict:
+    hub.require_idle()
+    try:
+        hub.thread = hub.routine.start(_auto_settings(), _scrub_settings(), hub.guard.ref, hub.guard.floor)
+    except (routinemod.RoutineError, scrubmod.ScrubError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return hub.routine.status.as_dict()
+
+
+@app.post("/api/routine1/stop")
+def routine_stop() -> dict:
+    hub.routine.stop()
+    return hub.routine.status.as_dict()
 
 
 if STATIC.exists():

@@ -309,6 +309,19 @@
       <p class="note" id="aMsg"></p>
     </div>
 
+    <div class="card" id="r1Main">
+      <p class="label">Full cycle</p>
+      <h2>Routine <em>1</em></h2>
+      <p class="note" style="margin-top:0">Grips a swab, scrubs the sketch from the Scrub tab, then disposes of the swab. Needs the taught positions below and a Scrub start, sketch and floor. Contact Z for the scrub start should be set with a swab in the jaws.</p>
+      <div class="auto-actions"><button class="bigbtn primary" id="r1Run"><b>Run routine 1</b><small id="r1Sub">Checking…</small></button></div>
+      <div class="row" style="margin-top:14px;align-items:center">
+        <button class="danger sm" id="r1Stop" disabled>Stop after this move</button>
+        <span class="muted" style="font-size:12.5px">A stop or fault during the scrub lifts the swab clear and keeps it in the jaws. It does not go to the bin.</span>
+      </div>
+      <ol class="runsteps" id="r1Steps" hidden></ol>
+      <p class="note" id="r1Msg"></p>
+    </div>
+
     <details class="card fold" id="f-teach" open>
       <summary><span class="label">Taught positions</span></summary>
       <div class="fold-body">
@@ -942,12 +955,49 @@ $('#scFile').onchange=e=>{
 };
 
 {const _paint2=paint;paint=function(){_paint2();if(S.mode==='scrub')paintScrub()}}
+/* ---------- routine 1 ---------- */
+let r1Timer=null,r1Cache='';
+function paintR1(){
+  const a=S.r1;if(!a)return;
+  const run=!!(a.status&&a.status.running);
+  const lock=run||S.busy||!S.pos||!homedXY();
+  $('#r1Run').disabled=lock||!a.ready;
+  $('#r1Sub').textContent=!homedXY()?'Home X and Y first':(a.problems[0]||'Grip, scrub, dispose');
+  $('#r1Stop').disabled=!run;
+  const steps=(a.status&&a.status.steps)||[];
+  const sh=steps.map(x=>`<li class="${x.state}">${x.name}</li>`).join('');
+  $('#r1Steps').hidden=!steps.length;
+  if(sh!==r1Cache){$('#r1Steps').innerHTML=sh;r1Cache=sh}
+  const m=$('#r1Msg'),t=a.status||{};
+  if(run){m.textContent='Running routine 1…';m.className='note'}
+  else if(t.error){m.textContent=t.error;m.className='note err'}
+  else if(t.finished){m.textContent='Routine 1 finished. Swab disposed.';m.className='note good'}
+  else{m.textContent='';m.className='note'}
+}
+async function loadR1(){
+  try{S.r1=await api('/api/routine1');if(S.r1.status.running&&!r1Timer)r1Watch()}catch(e){S.r1=null}
+  paintR1();
+}
+function r1Watch(){
+  paint();
+  r1Timer=setInterval(async()=>{
+    try{
+      const s=await api('/api/routine1/status');if(S.r1)S.r1.status=s;paintR1();
+      setPos(await api('/api/machine/position'));paint();
+      if(!s.running){clearInterval(r1Timer);r1Timer=null;log(s.error?('routine 1 stopped: '+s.error):'routine 1 finished',s.error?'err':'good');await loadR1();paint()}
+    }catch(e){}
+  },400);
+}
+$('#r1Run').onclick=()=>run('Routine 1',async()=>{r1Cache='';await post('/api/routine1/run');S.r1=await api('/api/routine1');paintR1();r1Watch()});
+$('#r1Stop').onclick=async()=>{try{await post('/api/routine1/stop');log('stop requested: it ends after the current move')}catch(e){say(String(e.message||e),'err')}};
+{const _paint3=paint;paint=function(){_paint3();if(S.mode==='auto')paintR1()}}
+
 
 function setMode(m){
   S.mode=m;LS.set('mode',m);
   document.querySelectorAll('.mode').forEach(b=>b.setAttribute('aria-selected',b.dataset.mode===m));
   $('#modeManual').hidden=m!=='manual';$('#modeAuto').hidden=m!=='auto';$('#modeScrub').hidden=m!=='scrub';
-  if(m==='auto'||m==='scrub'){if(S.tab!=='auto'&&S.tab!=='scrub')prevTab=S.tab;S.tab=m;setWatch(false);camStop();m==='auto'?loadAuto():loadScrub()}
+  if(m==='auto'||m==='scrub'){if(S.tab!=='auto'&&S.tab!=='scrub')prevTab=S.tab;S.tab=m;setWatch(false);camStop();m==='auto'?(loadAuto(),loadR1()):loadScrub()}
   else{const t=document.querySelector('.tab[data-tab="'+prevTab+'"]');S.tab='';if(t)t.click()}
 }
 document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{if(S.mode!==b.dataset.mode)setMode(b.dataset.mode)});

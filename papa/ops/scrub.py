@@ -269,68 +269,82 @@ class ScrubRunner:
     def stop(self) -> None:
         self._abort.set()
 
-    def _run(self, st: dict[str, Any], p: dict[str, Any]) -> None:
-        s = self.status
+    def execute(self, st: dict[str, Any], p: dict[str, Any], check: Callable[[], None],
+                on_move: Callable[[int, int, int], None] | None = None,
+                safe_z: float | None = None) -> None:
+        """Run the plan on the calling thread. With safe_z, Z rises there before
+        any XY travel, which is how a routine arrives holding a swab."""
         pr = self._printer
         sx, sy, cz = float(st["start"]["x"]), float(st["start"]["y"]), float(st["start"]["z"])
         tz = cz + float(st["lift_mm"])
         zs, ts, cs = float(st["z_mm_s"]), float(st["travel_mm_s"]), float(st["scrub_mm_s"])
         axes = self.machine.axes
-        lifted = False
+        self._lifted = False
+        self._tz, self._zs = tz, zs
 
         def xy(lx: float, ly: float, speed: float) -> None:
             mx, my = to_machine(axes, sx, sy, lx, ly)
             pr().move(x=mx, y=my, speed_mm_s=speed)
 
-        def up() -> None:
-            nonlocal lifted
-            pr().move(z=tz, speed_mm_s=zs)
-            lifted = True
+        def z_to(z: float, lifted: bool) -> None:
+            pr().move(z=z, speed_mm_s=zs)
+            self._lifted = lifted
 
-        def down() -> None:
-            nonlocal lifted
-            pr().move(z=cz, speed_mm_s=zs)
-            lifted = False
+        pos = pr().position()
+        if not all(a in pos.homed for a in "xyz"):
+            raise ScrubError("Home X and Y and set Z first.")
+        check()
+        if safe_z is not None and pos.z < safe_z - 1e-6:
+            z_to(safe_z, True)
+            check()
+        elif safe_z is None:
+            z_to(tz, True)
+            check()
+        xy(0.0, 0.0, ts)
+        check()
+        if safe_z is not None:
+            z_to(tz, True)
+            check()
+        z_to(cz, False)
+        cur_row_y, row = 0.0, 1
+        for i, seg in enumerate(p["segments"]):
+            check()
+            if seg["kind"] == "hop":
+                z_to(tz, True)
+                xy(seg["x1"], seg["y1"], ts)
+                check()
+                z_to(cz, False)
+            else:
+                xy(seg["x1"], seg["y1"], cs)
+            if seg["kind"] == "scrub" and seg["y1"] > cur_row_y + 1e-6:
+                row += 1
+                cur_row_y = seg["y1"]
+            if on_move:
+                on_move(row, i + 1, len(p["segments"]))
+        z_to(tz, True)
+
+    def _run(self, st: dict[str, Any], p: dict[str, Any]) -> None:
+        s = self.status
+
+        def mv(row: int, done: int, total: int) -> None:
+            s.row, s.done = row, done
 
         try:
-            pos = pr().position()
-            if not all(a in pos.homed for a in "xyz"):
-                raise ScrubError("Home X and Y and set Z first.")
-            self._check()
-            up()
-            self._check()
-            xy(0.0, 0.0, ts)
-            self._check()
-            down()
-            cur_row_y = 0.0
-            row = 1
-            for i, seg in enumerate(p["segments"]):
-                self._check()
-                if seg["kind"] == "hop":
-                    up()
-                    xy(seg["x1"], seg["y1"], ts)
-                    self._check()
-                    down()
-                else:
-                    xy(seg["x1"], seg["y1"], cs)
-                if seg["kind"] == "scrub" and seg["y1"] > cur_row_y + 1e-6:
-                    row += 1
-                    cur_row_y = seg["y1"]
-                s.row, s.done = row, i + 1
-            up()
+            self.execute(st, p, self._check, mv)
             s.finished = True
         except Aborted as exc:
             s.error = str(exc)
-            self._safe_lift(tz, zs, lifted)
+            self.lift_after_stop()
         except Exception as exc:                          # noqa: BLE001
             s.error = str(exc) or type(exc).__name__
         finally:
             s.running = False
 
-    def _safe_lift(self, tz: float, zs: float, lifted: bool) -> None:
-        if lifted:
+    def lift_after_stop(self) -> None:
+        if getattr(self, "_lifted", True):
             return
         try:
-            self._printer().move(z=tz, speed_mm_s=zs)
+            self._printer().move(z=self._tz, speed_mm_s=self._zs)
         except Exception:                                  # noqa: BLE001
             pass
+
