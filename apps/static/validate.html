@@ -22,6 +22,7 @@
 <div class="modebar"><nav class="modes" id="modes" role="tablist" aria-label="Mode">
   <button class="mode" role="tab" data-mode="manual" aria-selected="true">Manual test &amp; calibration</button>
   <button class="mode" role="tab" data-mode="auto" aria-selected="false">Autonomous</button>
+  <button class="mode" role="tab" data-mode="scrub" aria-selected="false">Scrub</button>
 </nav><button class="danger" id="estop">E-STOP</button></div></div></header>
 
 <div class="wrap"><div class="layout">
@@ -331,6 +332,58 @@
           <button class="gold sm" id="sSave">Save settings</button>
         </div>
         <div class="kv" style="margin-top:14px"><span>Centre of gantry</span><span id="sCentre">–</span></div>
+      </div>
+    </details>
+  </div>
+
+  <!-- ============ SCRUB ============ -->
+  <div id="modeScrub" class="stack" hidden>
+    <div class="card" id="scMain">
+      <p class="label">Pattern scrub</p>
+      <h2>Run the <em>sketch</em></h2>
+      <p class="note" style="margin-top:0">Jog the swab onto the slide at the top-left of the pattern area, Z at contact height, then press Set start here. Run scrubs a serpentine to the bottom-right, lifting over the bridges.</p>
+      <div class="trow"><div><b>Start</b><div class="mono val" id="scStart"><span class="muted">not set</span></div></div>
+        <div class="row"><button class="gold sm" id="scSet">Set start here</button><button class="sm" id="scClear">Clear</button></div></div>
+      <div class="auto-actions"><button class="bigbtn primary" id="scRun"><b>Run</b><small id="scRunSub">Set the start first</small></button></div>
+      <div class="row" style="margin-top:14px"><button class="danger sm" id="scStop" disabled>Stop after this move</button></div>
+      <p class="muted" style="font-size:12.5px">E-STOP in the header halts a move already under way. Z floor must sit at or below the contact Z.</p>
+      <div class="kv"><span>Progress</span><span id="scProg">–</span></div>
+      <p class="note" id="scMsg"></p>
+    </div>
+
+    <div class="card" id="scPrev">
+      <p class="label">Preview · substrate frame, top-left origin</p>
+      <canvas id="scCanvas" width="520" height="520" style="width:100%;max-width:520px;background:#000;border:1px solid var(--line)"></canvas>
+      <div class="kv" style="margin-top:10px"><span>Rows · hops</span><span id="scRows">–</span></div>
+      <div class="kv"><span>Scrub length · time</span><span id="scLen">–</span></div>
+      <div class="kv"><span>Missed outside bridges</span><span id="scMiss">–</span></div>
+      <p class="note">White: scrubbing. Grey: dragging down a row in contact. Gold dashed: lifted hop. Dashed outline: bridge plus swab radius plus margin. Red: area the swab cannot reach.</p>
+    </div>
+
+    <details class="card fold" id="f-scsketch" open>
+      <summary><span class="label">Sketch</span></summary>
+      <div class="fold-body">
+        <p class="note" style="margin-top:0">Load the JSON exported by the bridge sketcher. Bridge length runs along x, width along y.</p>
+        <div class="row"><input type="file" id="scFile" accept=".json,application/json"><a class="btn sm" style="flex:0 0 auto;display:inline-flex;align-items:center" href="/static/bridge_sketcher.html" target="_blank">Open sketcher</a></div>
+        <div class="kv" style="margin-top:12px"><span>Loaded</span><span id="scSk">–</span></div>
+      </div>
+    </details>
+
+    <details class="card fold" id="f-scset">
+      <summary><span class="label">Scrub settings</span></summary>
+      <div class="fold-body">
+        <div class="row">
+          <label>Swab width mm<input type="number" id="cSwab" min="0.1" max="10" step="0.1"></label>
+          <label>Margin mm<input type="number" id="cMargin" min="0" max="5" step="0.05"></label>
+          <label>Row pitch (× width)<input type="number" id="cPitch" min="0.2" max="1" step="0.05"></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label>Scrub speed mm/s<input type="number" id="cScrub" min="0.1" max="30" step="0.5"></label>
+          <label>Travel speed mm/s<input type="number" id="cTravel" min="1" max="150" step="5"></label>
+          <label>Z speed mm/s<input type="number" id="cZ" min="0.1" max="10" step="0.5"></label>
+          <label>Lift mm<input type="number" id="cLift" min="0.5" max="50" step="0.5"></label>
+        </div>
+        <div class="row" style="margin-top:10px"><button class="gold sm" id="cSave">Save settings</button></div>
       </div>
     </details>
   </div>
@@ -799,11 +852,102 @@ $('#sSave').onclick=()=>run('Saved motion settings',async()=>{
   S.auto=await post('/api/auto/settings',{lift_mm:+$('#sLift').value,grip_wait_s:+$('#sGrip').value,release_wait_s:+$('#sRel').value,xy_speed_mm_s:+$('#sXY').value,z_speed_mm_s:+$('#sZ').value});['sLift','sGrip','sRel','sXY','sZ'].forEach(id=>delete $('#'+id).dataset.dirty);paintAuto()});
 
 {const _paint=paint;paint=function(){_paint();if(S.mode==='auto')paintAuto()}}
+/* ---------- scrub ---------- */
+let scTimer=null,scPlan=null;
+const SC_IDS=[['cSwab','swab_mm'],['cMargin','margin_mm'],['cPitch','pitch_frac'],['cScrub','scrub_mm_s'],['cTravel','travel_mm_s'],['cZ','z_mm_s'],['cLift','lift_mm']];
+function drawScrub(){
+  const c=$('#scCanvas'),g=c.getContext('2d');g.clearRect(0,0,c.width,c.height);
+  const a=S.scrub;if(!a)return;
+  const A=a.settings.area,pad=14,k=Math.min((c.width-2*pad)/A.w,(c.height-2*pad)/A.h);
+  const X=x=>pad+x*k,Y=y=>pad+y*k;
+  g.strokeStyle='#444';g.lineWidth=1;g.strokeRect(X(0),Y(0),A.w*k,A.h*k);
+  const p=scPlan;if(!p)return;
+  const m=p.uncovered_mask;g.fillStyle='rgba(255,70,70,.55)';
+  m.forEach((row,j)=>{for(let i=0;i<row.length;i++)if(row[i]==='x')g.fillRect(X(i*.5),Y(j*.5),.5*k,.5*k)});
+  const r=p.radius_mm;
+  (p.bridges||[]).forEach(b=>{
+    g.fillStyle='#2a2a2a';g.fillRect(X(b.cx-b.l/2),Y(b.cy-b.w/2),b.l*k,b.w*k);
+    g.setLineDash([4,3]);g.strokeStyle='#888';g.beginPath();
+    g.roundRect(X(b.cx-b.l/2-r),Y(b.cy-b.w/2-r),(b.l+2*r)*k,(b.w+2*r)*k,r*k);g.stroke();g.setLineDash([]);
+  });
+  p.segments.forEach(s=>{
+    g.beginPath();g.moveTo(X(s.x0),Y(s.y0));g.lineTo(X(s.x1),Y(s.y1));
+    if(s.kind==='hop'){g.setLineDash([5,4]);g.strokeStyle='#d9b24a';g.lineWidth=1.2}
+    else if(s.kind==='drag'){g.setLineDash([]);g.strokeStyle='#777';g.lineWidth=1}
+    else{g.setLineDash([]);g.strokeStyle='#fff';g.lineWidth=Math.max(1,a.settings.swab_mm*k*.2)}
+    g.stroke();
+  });
+  g.setLineDash([]);g.fillStyle='#4ade80';g.beginPath();g.arc(X(0),Y(0),5,0,7);g.fill();
+  g.fillStyle='#f87171';g.beginPath();g.arc(X(p.end[0]),Y(p.end[1]),5,0,7);g.fill();
+}
+function paintScrub(){
+  const a=S.scrub;if(!a)return;
+  const st=a.settings,run=!!(a.status&&a.status.running);
+  $('#scStart').innerHTML=a.start?`X ${fmt(a.start.x,2)} · Y ${fmt(a.start.y,2)} · Z ${fmt(a.start.z,2)}`:'<span class="muted">not set</span>';
+  SC_IDS.forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el&&!el.dataset.dirty)el.value=st[k]});
+  const lock=run||S.busy||!S.pos||!homedXY();
+  $('#scSet').disabled=lock||!S.homed.includes('z');$('#scClear').disabled=lock||!a.start;
+  $('#scRun').disabled=lock||!a.ready;
+  $('#scRunSub').textContent=!homedXY()?'Home X and Y first':(a.problems[0]||'Lift, move to the start, scrub, finish lifted at bottom-right');
+  $('#scStop').disabled=!run;
+  $('#scSk').textContent=a.bridges+' bridge'+(a.bridges===1?'':'s')+' · '+fmt(st.area.w,1)+' × '+fmt(st.area.h,1)+' mm';
+  if(a.plan){
+    $('#scRows').textContent=a.plan.rows+' · '+a.plan.hops;
+    $('#scLen').textContent=fmt(a.plan.scrub_mm,1)+' mm · ~'+fmt(a.plan.est_s/60,1)+' min';
+    $('#scMiss').textContent=fmt(a.plan.uncovered_pct,1)+' %';
+  }
+  const t=a.status||{},m=$('#scMsg');
+  $('#scProg').textContent=t.total?`${t.done} / ${t.total} moves · row ${t.row} / ${t.rows}`:'–';
+  if(run){m.textContent='Scrubbing…';m.className='note'}
+  else if(t.error){m.textContent=t.error;m.className='note err'}
+  else if(t.finished){m.textContent='Done. Swab lifted at the bottom-right of the area.';m.className='note good'}
+  else{m.textContent='';m.className='note'}
+}
+async function loadScrub(){
+  try{
+    S.scrub=await api('/api/scrub');
+    try{scPlan=await api('/api/scrub/plan')}catch(e){scPlan=null}
+    if(S.scrub.status.running&&!scTimer)scWatch();
+  }catch(e){S.scrub=null;$('#scMsg').textContent='Scrub unavailable: '+e.message;$('#scMsg').className='note err'}
+  paintScrub();drawScrub();
+}
+function scWatch(){
+  paint();
+  scTimer=setInterval(async()=>{
+    try{
+      const s=await api('/api/scrub/status');if(S.scrub)S.scrub.status=s;paintScrub();
+      setPos(await api('/api/machine/position'));paint();
+      if(!s.running){clearInterval(scTimer);scTimer=null;log(s.error?('scrub stopped: '+s.error):'scrub finished',s.error?'err':'good');await loadScrub();paint()}
+    }catch(e){}
+  },400);
+}
+$('#scSet').onclick=()=>run('Scrub start set',async()=>{S.scrub=await post('/api/scrub/start-here');scPlan=await api('/api/scrub/plan');paintScrub();drawScrub()});
+$('#scClear').onclick=()=>run('Scrub start cleared',async()=>{S.scrub=await post('/api/scrub/clear-start');paintScrub()});
+$('#scRun').onclick=()=>run('Scrub',async()=>{await post('/api/scrub/run');S.scrub=await api('/api/scrub');paintScrub();scWatch()});
+$('#scStop').onclick=async()=>{try{await post('/api/scrub/stop');log('stop requested: it ends after the current move')}catch(e){say(String(e.message||e),'err')}};
+SC_IDS.forEach(([id])=>$('#'+id).addEventListener('input',e=>{e.target.dataset.dirty='1'}));
+$('#cSave').onclick=()=>run('Saved scrub settings',async()=>{
+  const b={};SC_IDS.forEach(([id,k])=>b[k]=+$('#'+id).value);
+  S.scrub=await post('/api/scrub/settings',b);SC_IDS.forEach(([id])=>delete $('#'+id).dataset.dirty);
+  scPlan=await api('/api/scrub/plan');paintScrub();drawScrub()});
+$('#scFile').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  const rd=new FileReader();
+  rd.onload=()=>run('Sketch loaded',async()=>{
+    const j=JSON.parse(rd.result);
+    if(!Array.isArray(j.bridges))throw new Error('This file has no bridges list. Use the sketcher export.');
+    S.scrub=await post('/api/scrub/sketch',{substrate:{w:j.substrate&&j.substrate.w,h:j.substrate&&j.substrate.h},bridges:j.bridges});
+    scPlan=await api('/api/scrub/plan');paintScrub();drawScrub()});
+  rd.readAsText(f);e.target.value='';
+};
+
+{const _paint2=paint;paint=function(){_paint2();if(S.mode==='scrub')paintScrub()}}
+
 function setMode(m){
   S.mode=m;LS.set('mode',m);
   document.querySelectorAll('.mode').forEach(b=>b.setAttribute('aria-selected',b.dataset.mode===m));
-  $('#modeManual').hidden=m!=='manual';$('#modeAuto').hidden=m!=='auto';
-  if(m==='auto'){if(S.tab!=='auto')prevTab=S.tab;S.tab='auto';setWatch(false);camStop();loadAuto()}
+  $('#modeManual').hidden=m!=='manual';$('#modeAuto').hidden=m!=='auto';$('#modeScrub').hidden=m!=='scrub';
+  if(m==='auto'||m==='scrub'){if(S.tab!=='auto'&&S.tab!=='scrub')prevTab=S.tab;S.tab=m;setWatch(false);camStop();m==='auto'?loadAuto():loadScrub()}
   else{const t=document.querySelector('.tab[data-tab="'+prevTab+'"]');S.tab='';if(t)t.click()}
 }
 document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{if(S.mode!==b.dataset.mode)setMode(b.dataset.mode)});
@@ -811,7 +955,7 @@ document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{if(S.mode!==b.datas
 /* ---------- start ---------- */
 setInterval(()=>{if(!S.busy)poll()},1500);
 setInterval(loadDev,15000);
-(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();if(LS.get('mode','manual')==='auto')setMode('auto');else if(S.tab==='cell')setWatch(true)})();
+(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();if(['auto','scrub'].includes(LS.get('mode','manual')))setMode(LS.get('mode'));else if(S.tab==='cell')setWatch(true)})();
 </script>
 </body>
 </html>

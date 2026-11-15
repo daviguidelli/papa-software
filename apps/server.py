@@ -22,6 +22,7 @@ from papa import config as cfgmod
 from papa.hw import make_camera, make_gripper, make_loadcell, make_printer
 from papa.ops.geometry import square, to_machine
 from papa.ops import autonomous as automod
+from papa.ops import scrub as scrubmod
 from papa.ops.guard import Guard, GuardedPrinter, ZFloorError
 from papa.ops.jobs import STATE_DIR, Job
 from papa.ops.machine import Orchestrator, Status
@@ -106,6 +107,7 @@ class Hub:
         self.hold = HoldJog(lambda: self.printer, self.machine, lambda: self.guard)
         self.servo_window = [1300, 1700]
         self.auto = automod.AutoRunner(lambda: self.printer, lambda: self.gripper, self.machine)
+        self.scrub = scrubmod.ScrubRunner(lambda: self.printer, self.machine)
 
     @property
     def printer(self) -> Any:
@@ -603,6 +605,7 @@ def hold_state() -> dict:
 def estop() -> dict:
     hub.hold.stop("emergency stop")
     hub.auto.stop()
+    hub.scrub.stop()
     hub.printer.emergency_stop()
     return {"ok": True}
 
@@ -1140,6 +1143,100 @@ def auto_dispose() -> dict:
 def auto_stop() -> dict:
     hub.auto.stop()
     return hub.auto.status.as_dict()
+
+
+def _scrub_settings() -> dict:
+    return scrubmod.merged(hub.cal.raw.get("scrub"))
+
+
+def _scrub_info() -> dict:
+    st = _scrub_settings()
+    info = scrubmod.describe(st, hub.machine, hub.guard.ref, hub.guard.floor)
+    info["start"] = st["start"]
+    info["status"] = hub.scrub.status.as_dict()
+    return info
+
+
+@app.get("/api/scrub")
+def scrub_info() -> dict:
+    return _scrub_info()
+
+
+@app.get("/api/scrub/status")
+def scrub_status() -> dict:
+    return hub.scrub.status.as_dict()
+
+
+@app.get("/api/scrub/plan")
+def scrub_plan() -> dict:
+    try:
+        return scrubmod.plan(_scrub_settings())
+    except scrubmod.ScrubError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/scrub/settings")
+def scrub_settings(payload: dict) -> dict:
+    hub.require_idle()
+    updates: dict[str, float] = {}
+    for key, (lo, hi) in scrubmod.RANGES.items():
+        if key in payload:
+            v = float(payload[key])
+            if not lo <= v <= hi:
+                raise HTTPException(400, f"{key} must be {lo:g} to {hi:g}")
+            updates[key] = v
+    if updates:
+        _patch_calibration({"scrub": updates})
+    return _scrub_info()
+
+
+@app.post("/api/scrub/sketch")
+def scrub_sketch(payload: dict) -> dict:
+    hub.require_idle()
+    sub = payload.get("substrate") or {}
+    try:
+        w, h = float(sub.get("w", 25.0)), float(sub.get("h", 25.0))
+        bridges = scrubmod.clean_bridges(payload.get("bridges"))
+    except (scrubmod.ScrubError, TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not (1.0 <= w <= 100.0 and 1.0 <= h <= 100.0):
+        raise HTTPException(400, "the pattern area must be 1 to 100 mm on each side")
+    _patch_calibration({"scrub": {"area": {"w": w, "h": h}, "bridges": bridges}})
+    return _scrub_info()
+
+
+@app.post("/api/scrub/start-here")
+def scrub_start_here() -> dict:
+    hub.require_idle()
+    p = hub.printer.position()
+    if not all(a in p.homed for a in "xyz"):
+        raise HTTPException(400, "Home X and Y and set Z first.")
+    start = {"x": round(p.x, 3), "y": round(p.y, 3), "z": round(p.z, 3), "ref": hub.guard.ref}
+    _patch_calibration({"scrub": {"start": start}})
+    return _scrub_info()
+
+
+@app.post("/api/scrub/clear-start")
+def scrub_clear_start() -> dict:
+    hub.require_idle()
+    _patch_calibration({"scrub": {"start": None}})
+    return _scrub_info()
+
+
+@app.post("/api/scrub/run")
+def scrub_run() -> dict:
+    hub.require_idle()
+    try:
+        hub.thread = hub.scrub.start(_scrub_settings(), hub.guard.ref, hub.guard.floor)
+    except scrubmod.ScrubError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return hub.scrub.status.as_dict()
+
+
+@app.post("/api/scrub/stop")
+def scrub_stop() -> dict:
+    hub.scrub.stop()
+    return hub.scrub.status.as_dict()
 
 
 if STATIC.exists():
