@@ -172,3 +172,17 @@ def test_sketcher_gets_each_substrate_straightened(aligned):
     j = aligned.get("/api/align/substrate/S2/sketch").json()
     assert (j["w"], j["h"]) == (12.0, 10.0) and len(j["bridges"]) == 1
     assert aligned.get("/api/align/substrate/S9/sketch").status_code == 404
+
+
+def test_teaching_on_the_corrected_view_stores_photo_pixels(api):
+    api.post("/api/align/camera/delete", json={"all": True})
+    c = corr.get_correction((1920, 1080))
+    photo = [700.0, 400.0]
+    view = c.to_corrected([photo])[0].tolist()
+    mock = api.server.hub.printer._inner
+    mock.homed, mock.x, mock.y = "xyz", 100.0, 120.0
+    j = api.post("/api/align/camera/teach", json={"px": view, "view": "corrected",
+                                                  "image_size": list(c.output_size)}).json()
+    p = j["camera"]["points"][0]
+    assert p["px"] == pytest.approx(photo, abs=0.01) and p["px_view"] == pytest.approx(view, abs=0.01)
+    assert saved(api)["detection"]["camera_to_machine"]["photo_size"] == [1920, 1080]

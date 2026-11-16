@@ -1422,7 +1422,10 @@ def _align_info() -> dict:
         "patterns": {k: {"name": v.get("name", ""), "area": v["area"], "bridges": len(v.get("bridges") or [])}
                      for k, v in st["patterns"].items()},
         "scrub_tab": {"area": _scrub_settings()["area"], "bridges": len(_scrub_settings()["bridges"])},
-        "camera": {"points": [{"px": px, "mm": mm} for px, mm in zip(pts["points_px"], pts["points_mm"])],
+        "camera": {"points": [{"px": px, "mm": mm,
+                               "px_view": (corrmod.get_correction(pts["photo_size"]).to_corrected([px])[0].round(2).tolist()
+                                           if corrmod.supported(pts["photo_size"]) else None)}
+                              for px, mm in zip(pts["points_px"], pts["points_mm"])],
                    "photo_size": pts["photo_size"],
                    "fit": axes.report() if axes else None, "error": axes_err},
         "scan": None,
@@ -1454,8 +1457,8 @@ def _align_info() -> dict:
 def _draw_alignment(img: Any, result: alignmod.ScanResult, axes_fit: corrmod.PrinterAxes,
                     only: str | None = None, offset: tuple[float, float] = (0.0, 0.0),
                     scale: float = 1.0, overview: bool = True) -> Any:
-    """Draw on a BGR image (the camera frame, or a crop of it moved by `offset`
-    and enlarged by `scale`): each array as measured (green, red if it does not
+    """Draw on a BGR image of the corrected (straight-down) view, or a crop of
+    it moved by `offset` and enlarged by `scale`: each array as measured (green, red if it does not
     match its pattern), its placed toolpath (white scrub, gold hops), its
     bridges (red), and in the overview the labels and printer +X / +Y arrows."""
     import cv2
@@ -1464,12 +1467,17 @@ def _draw_alignment(img: Any, result: alignmod.ScanResult, axes_fit: corrmod.Pri
     from papa.ops.geometry import to_machine
 
     size = result.photo_size
-    t = max(1, round(size[0] * scale / 1500)) if overview else 1
+    t = max(1, round(img.shape[1] / 1500)) if overview else 1
     off = np.asarray(offset, dtype=np.float64)
     st_patterns = _align_settings()["patterns"]
 
+    cview = corrmod.get_correction(size)
+
+    def at(photo_pts: Any) -> Any:                  # photo px -> px of the image drawn on
+        return (cview.to_corrected(np.asarray(photo_pts, dtype=np.float64).reshape(-1, 2)) - off) * scale
+
     def view(photo_pts: Any) -> Any:
-        return np.round((np.asarray(photo_pts) - off) * scale * 8).astype(np.int32)   # 3 bits subpixel
+        return np.round(at(photo_pts) * 8).astype(np.int32)                         # 3 bits subpixel
 
     def photo(local_pts: list[tuple[float, float]], p: alignmod.Placement) -> Any:
         mm = [to_machine(hub.machine.axes, p.origin_mm[0], p.origin_mm[1], x, y, p.rotation_deg)
@@ -1500,19 +1508,19 @@ def _draw_alignment(img: Any, result: alignmod.ScanResult, axes_fit: corrmod.Pri
             pass
         colour = (80, 220, 80) if not p.warnings else (60, 60, 255)
         cv2.polylines(img, [view(px)], True, colour, t, cv2.LINE_AA, shift=3)
-        o = (np.asarray(px[0]) - off) * scale
+        o = at(px[0])[0]
         cv2.circle(img, (int(o[0]), int(o[1])), 3 * t, colour, -1, cv2.LINE_AA)     # local origin
         if overview:
-            q = (np.asarray(px) - off) * scale
+            q = at(px)
             cv2.putText(img, f"{p.id} {p.rotation_deg:+.2f} deg", (int(q[:, 0].min()), int(q[:, 1].min()) - 6 * t),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45 * t, colour, t, cv2.LINE_AA)
     if overview:   # printer axes at the image centre
         c = corrmod.photo_to_mm([[size[0] / 2, size[1] / 2]], size, axes_fit)[0]
-        length = 0.12 * size[0] * corrmod.get_correction(size)._step * axes_fit.mm_per_plate_px
+        length = 0.12 * cview.output_size[0] * cview._step * axes_fit.mm_per_plate_px
         p0, ex, ey = corrmod.mm_to_photo([c, c + [length, 0], c + [0, length]], size, axes_fit)
-        p0 = (p0 - off) * scale
+        p0 = at(p0)[0]
         for end, colour, label in ((ex, (0, 0, 255), "+X"), (ey, (0, 200, 0), "+Y")):
-            e = (end - off) * scale
+            e = at(end)[0]
             cv2.arrowedLine(img, tuple(map(int, p0)), tuple(map(int, e)), colour, t + 1, tipLength=0.12)
             cv2.putText(img, label, tuple(map(int, e + 5 * t)), cv2.FONT_HERSHEY_SIMPLEX,
                         0.6 * t, colour, t, cv2.LINE_AA)
@@ -1527,9 +1535,11 @@ def _closeups(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.PrinterAx
     import numpy as np
 
     out = {}
-    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    c = corrmod.get_correction(rgb.shape[1::-1])
+    bgr = cv2.cvtColor(c.correct_image(rgb), cv2.COLOR_RGB2BGR)
     for p, px in zip(result.placements, result.arrays_px):
-        (x0, y0), (x1, y1) = np.asarray(px).min(0), np.asarray(px).max(0)
+        q = c.to_corrected(np.asarray(px))
+        (x0, y0), (x1, y1) = q.min(0), q.max(0)
         m = 0.3 * max(x1 - x0, y1 - y0)
         x0, y0 = int(max(0, x0 - m)), int(max(0, y0 - m))
         x1, y1 = int(min(bgr.shape[1], x1 + m)), int(min(bgr.shape[0], y1 + m))
@@ -1555,7 +1565,10 @@ def _detect_preview(rgb: Any) -> dict:
         found = alignmod.detect_only(rgb, params)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    cview = corrmod.get_correction(rgb.shape[1::-1])
+    img = cv2.cvtColor(cview.correct_image(rgb), cv2.COLOR_RGB2BGR)
+    found_px = found
+    found = [cview.to_corrected(px) for px in found]
     t = max(1, img.shape[1] // 900)
     for i, px in enumerate(found, 1):
         cv2.polylines(img, [np.round(px * 8).astype(np.int32)], True, (80, 220, 80), t, cv2.LINE_AA, shift=3)
@@ -1567,7 +1580,8 @@ def _detect_preview(rgb: Any) -> dict:
     small = cv2.resize(img, (out_w, round(img.shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
     ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])
     sizes = [[round(float(np.linalg.norm(px[1] - px[0])), 1), round(float(np.linalg.norm(px[2] - px[1])), 1)]
-             for px in found]
+             for px in found]               # in corrected-view pixels
+    del found_px
     return {"count": len(found), "sizes_px": sizes, "time": time.strftime("%H:%M:%S"),
             "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()}
 
@@ -1618,7 +1632,8 @@ async def align_scan(payload: dict | None = None) -> dict:
                                    _scrub_tab_pattern(), params)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        drawn = _draw_alignment(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), result, axes_fit)
+        straight = corrmod.get_correction(rgb.shape[1::-1]).correct_image(rgb)   # straight-down view
+        drawn = _draw_alignment(cv2.cvtColor(straight, cv2.COLOR_RGB2BGR), result, axes_fit)
         crops = {}
         for sid, crop in _closeups(rgb, result, axes_fit).items():
             ok, cb = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
@@ -1745,7 +1760,16 @@ def align_teach(payload: dict) -> dict:
     hub.require_idle()
     try:
         px = [float(payload["px"][0]), float(payload["px"][1])]
-        size = [int(payload["photo_size"][0]), int(payload["photo_size"][1])]
+        if payload.get("view") == "corrected":
+            # clicked on the corrected view: find which photo size makes a view that big
+            want = (int(payload["image_size"][0]), int(payload["image_size"][1]))
+            size = next((list(sz) for sz in corrmod.PHOTO_MODES
+                         if corrmod.get_correction(sz).output_size == want), None)
+            if size is None:
+                raise HTTPException(400, f"no camera frame size gives a {want[0]} x {want[1]} corrected view")
+            px = corrmod.get_correction(size).to_original([px])[0].tolist()
+        else:
+            size = [int(payload["photo_size"][0]), int(payload["photo_size"][1])]
     except (KeyError, TypeError, ValueError, IndexError) as exc:
         raise HTTPException(400, "send px [x, y] and photo_size [w, h]") from exc
     if not corrmod.supported(size):
