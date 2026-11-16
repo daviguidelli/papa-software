@@ -33,7 +33,7 @@ from papa.ops.jobs import STATE_DIR, Job
 from papa.ops.machine import Orchestrator, Status
 from papa.ops.swabs import Rack
 from papa.ops.zcal import GripFailed, OverForce, calibrate_z
-from papa.hw.camera import LockedCamera
+from papa.hw.camera import CameraStuck, LockedCamera
 from papa.hw.loadcell import LoadCellSampler
 from papa.hw.gripper import MAX_US, MIN_US, GripperNotCalibrated
 from papa.ops.hold import HoldJog
@@ -88,10 +88,12 @@ class Device:
         return self._obj
 
     def describe(self) -> dict:
+        stuck = getattr(self._obj, "stuck", None) if self._obj is not None else None
         return {
             "real": cfgmod.is_real(self.name),
             "built": self.built,
-            "error": self.error,
+            "error": self.error or stuck,
+            "stuck": bool(stuck),
         }
 
 
@@ -412,6 +414,15 @@ def software_info() -> dict:
 def software_check() -> dict:
     """Ask GitHub what is new on this branch (nothing is changed)."""
     return _software_info(fetch=True)
+
+
+@app.post("/api/software/restart")
+def software_restart() -> dict:
+    """Restart the GUI server (clears a stuck camera or any device that hung)."""
+    hub.require_idle()
+    if not _restart_soon():
+        raise HTTPException(400, "This server is not running as the papa service, so it cannot restart itself.")
+    return {"restarting": True, "message": "Restarting, the page reconnects by itself."}
 
 
 @app.post("/api/software/update")
@@ -2587,6 +2598,35 @@ if STATIC.exists():
 @app.exception_handler(HTTPException)
 async def http_error(_req: Any, exc: HTTPException) -> JSONResponse:
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+
+def _restart_soon(delay: float = 1.5) -> bool:
+    """Exit with an error code so systemd (Restart=on-failure) starts the
+    server again. Only under systemd; returns whether a restart is coming."""
+    if not os.environ.get("INVOCATION_ID"):
+        return False
+    threading.Timer(delay, lambda: os._exit(3)).start()
+    return True
+
+
+@app.exception_handler(CameraStuck)
+async def camera_stuck(_req: Any, exc: CameraStuck) -> JSONResponse:
+    # A hung capture can only be cleared by a fresh process. Restart by itself
+    # when nothing is running; otherwise say so and leave the job alone.
+    mark = STATE_DIR / "camera_auto_restart"
+    recent = mark.exists() and time.time() - mark.stat().st_mtime < 120
+    restarting = not hub.busy and not recent and _restart_soon()
+    if restarting:
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.touch()
+    elif recent:
+        exc = CameraStuck(f"{exc} (again right after a restart, so it was not restarted automatically: "
+                          "check the camera ribbon cable at both ends, then press Restart server)")
+    msg = f"Camera: {exc}. " + ("Restarting the server to reset it; the page reconnects in about 10 s."
+                                if restarting else
+                                "Restart the server (Software panel) once the job has stopped. "
+                                "If it keeps happening, check the camera ribbon cable.")
+    return JSONResponse({"error": msg, "restarting": restarting}, status_code=503)
 
 
 @app.exception_handler(ZFloorError)

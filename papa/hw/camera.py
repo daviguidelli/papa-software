@@ -46,22 +46,59 @@ class PiCamera:
         self._cam.stop()
 
 
+class CameraStuck(RuntimeError):
+    """A capture did not finish in time: the camera stopped sending frames."""
+
+
 class LockedCamera:
     """One frame at a time. The live view and a scan share the one sensor, and
-    Picamera2 captures are not meant to overlap."""
+    Picamera2 captures are not meant to overlap.
+
+    Each capture has a deadline. A capture that never returns (a stalled
+    sensor or driver) would otherwise hold the lock forever and freeze every
+    later picture, so after a deadline the camera is marked stuck and every
+    call fails at once with CameraStuck until the process restarts."""
+
+    FRAME_S = 10.0
+    STILL_S = 25.0
 
     def __init__(self, inner: Any) -> None:
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "_lock", threading.Lock())
+        object.__setattr__(self, "stuck", None)
+
+    def _run(self, fn: Any, deadline: float) -> np.ndarray:
+        if self.stuck:
+            raise CameraStuck(self.stuck)
+        if not self._lock.acquire(timeout=deadline):
+            raise CameraStuck("the camera is still busy with an earlier picture")
+        box: dict[str, Any] = {}
+
+        def work() -> None:
+            try:
+                box["v"] = fn()
+            except BaseException as exc:                  # noqa: BLE001
+                box["e"] = exc
+            finally:
+                self._lock.release()
+
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        t.join(deadline)
+        if t.is_alive():
+            object.__setattr__(self, "stuck", f"a picture did not arrive within {deadline:g} s: "
+                                              "the camera stopped sending frames")
+            raise CameraStuck(self.stuck)
+        if "e" in box:
+            raise box["e"]
+        return box["v"]
 
     def frame(self) -> np.ndarray:
-        with self._lock:
-            return self._inner.frame()
+        return self._run(self._inner.frame, self.FRAME_S)
 
     def still(self, size: tuple[int, int] | None = None) -> np.ndarray:
-        with self._lock:
-            inner = self._inner
-            return inner.still(size) if hasattr(inner, "still") else inner.frame()
+        inner = self._inner
+        return self._run(lambda: inner.still(size) if hasattr(inner, "still") else inner.frame(), self.STILL_S)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)

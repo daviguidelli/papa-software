@@ -552,6 +552,7 @@
     <div class="row" style="margin-top:10px;align-items:center">
       <button class="sm" id="swCheck">Check for updates</button>
       <button class="gold sm" id="swUpdate" disabled>Update and restart</button>
+      <button class="sm" id="swRestart" title="Restarts the GUI server on the Pi. Clears a frozen camera.">Restart server</button>
     </div>
     <ul class="note" id="swNew" style="margin:8px 0 0 18px"></ul>
     <p class="note" id="swMsg">Gets the newest code for this branch from GitHub and restarts the GUI on the Pi. Nothing is changed until you press Update.</p>
@@ -1406,6 +1407,15 @@ function swPaint(j){
 }
 async function swLoad(){try{swPaint(await api('/api/software'))}catch(e){$('#swMsg').textContent='Version unknown: '+e.message}}
 $('#swCheck').onclick=()=>run('Checked for updates',async()=>{$('#swMsg').textContent='Asking GitHub…';const j=await post('/api/software/check');swPaint(j);$('#swMsg').className='note';$('#swMsg').textContent=j.new.length?'New on GitHub, listed above.':'This is the newest version.'});
+async function swWaitBack(){
+  const t0=Date.now();await new Promise(r=>setTimeout(r,4000));
+  for(;;){try{await api('/api/software');break}catch(e){if(Date.now()-t0>90000)throw new Error('The GUI did not come back. Check the Pi.');await new Promise(r=>setTimeout(r,1500))}}
+  location.reload();
+}
+$('#swRestart').onclick=()=>{
+  if(!confirm('Restart the GUI server on the Pi? Anything running stops; the page reconnects by itself.'))return;
+  run('Server restarted',async()=>{$('#swMsg').textContent='Restarting…';await post('/api/software/restart');await swWaitBack()});
+};
 $('#swUpdate').onclick=()=>{
   if(!confirm('Update the software and restart the GUI? Anything running stops; the page reconnects by itself.'))return;
   run('Software updated',async()=>{
