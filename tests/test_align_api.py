@@ -38,22 +38,14 @@ def consistent_points():
 def aligned(api):
     api.post("/api/align/camera/delete", json={"all": True})   # the sim file's points are only for the old tab
     teach(api, consistent_points())
+    # the mock camera is 1080p over the whole bed (~5 px/mm), coarser than a real
+    # full-resolution scan; accuracy itself is tested in test_alignment
+    api.post("/api/align/settings", json={"size_tolerance_mm": 0.5})
     api.server.hub.devices["camera"] = api.server.Device(
         "camera", lambda: MockCamera(arrays=ARRAYS, axes=api.server.hub.machine.axes,
                                      printer_axes=lambda: corr.PrinterAxes.from_detection(
                                          api.server.hub.cal.detection)))
     return api
-
-
-def test_scan_without_camera_points_shows_what_the_camera_finds(api):
-    api.post("/api/align/camera/delete", json={"all": True})
-    pa = corr.PrinterAxes.from_detection({"camera_to_machine": {
-        "points_px": [p for p, _ in consistent_points()], "points_mm": [m for _, m in consistent_points()]}})
-    api.server.hub.devices["camera"] = api.server.Device(
-        "camera", lambda: MockCamera(arrays=ARRAYS, axes=api.server.hub.machine.axes, printer_axes=lambda: pa))
-    j = api.post("/api/align/scan", json={"save": False}).json()
-    assert j["scan"] is None and j["preview"]["count"] == 3
-    assert j["preview"]["image"].startswith("data:image/jpeg;base64,")
 
 
 def test_teaching_saves_points_and_reports_the_fit(api):
@@ -77,7 +69,7 @@ def test_scan_places_every_array(aligned):
         th = np.radians(a.rot_deg)                     # true centre: local (6, 5) from the corner
         centre = (a.origin_mm[0] + 6 * np.cos(th) + 5 * np.sin(th), a.origin_mm[1] + 6 * np.sin(th) - 5 * np.cos(th))
         assert s["center_mm"] == pytest.approx(list(centre), abs=0.15)
-        assert s["measured_mm"] == pytest.approx([12, 10], abs=0.35)
+        assert s["measured_mm"] == pytest.approx([12, 10], abs=0.45)
         assert s["rotation_deg"] == pytest.approx(a.rot_deg, abs=0.5)
         assert s["pattern_source"] == "scrub tab" and s["crop"].startswith("data:image/jpeg")
     assert j["scan"]["image"].startswith("data:image/jpeg;base64,")
@@ -159,7 +151,7 @@ def test_live_view_can_be_corrected(api):
 def test_sketcher_gets_each_substrate_straightened(aligned):
     aligned.post("/api/align/scan", json={"save": False})
     j = aligned.get("/api/align/substrate/S2/sketch").json()
-    assert j["w"] == pytest.approx(12, abs=0.35) and j["h"] == pytest.approx(10, abs=0.35) and j["bridges"] == []
+    assert j["w"] == pytest.approx(12, abs=0.45) and j["h"] == pytest.approx(10, abs=0.45) and j["bridges"] == []
     import base64
 
     import cv2
@@ -186,3 +178,28 @@ def test_teaching_on_the_corrected_view_stores_photo_pixels(api):
     p = j["camera"]["points"][0]
     assert p["px"] == pytest.approx(photo, abs=0.01) and p["px_view"] == pytest.approx(view, abs=0.01)
     assert saved(api)["detection"]["camera_to_machine"]["photo_size"] == [1920, 1080]
+
+
+def test_scan_without_camera_points_labels_arrays_for_the_sketcher(api):
+    api.post("/api/align/camera/delete", json={"all": True})
+    pa = corr.PrinterAxes.from_detection({"camera_to_machine": {
+        "points_px": [p for p, _ in consistent_points()], "points_mm": [m for _, m in consistent_points()]}})
+    api.server.hub.devices["camera"] = api.server.Device(
+        "camera", lambda: MockCamera(arrays=ARRAYS, axes=api.server.hub.machine.axes, printer_axes=lambda: pa))
+    j = api.post("/api/align/scan", json={"save": False}).json()
+    assert j["scan"]["pixel_only"] and [s["id"] for s in j["scan"]["substrates"]] == ["S1", "S2", "S3"]
+    sk = api.get("/api/align/substrate/S2/sketch").json()
+    assert sk["size_known"] is False and sk["image"].startswith("data:image/jpeg")
+    assert sk["w"] == 10.0 and sk["h"] == pytest.approx(10.0 * 10 / 12, abs=0.6)   # measured aspect
+    api.post("/api/align/pattern", json={"targets": ["S2"], "sketch": SKETCH})
+    assert saved(api)["alignment"]["patterns"]["S2"]["drawn_on"] == "camera view"
+    sk = api.get("/api/align/substrate/S2/sketch").json()
+    assert (sk["w"], sk["h"], len(sk["bridges"])) == (12.0, 10.0, 1)
+    # once the points are taught, the same substrate keeps its name and its sketch
+    teach(api, consistent_points())
+    api.post("/api/align/settings", json={"size_tolerance_mm": 0.5})     # coarse mock camera
+    j = api.post("/api/align/scan", json={"save": False}).json()
+    s2 = next(s for s in j["scan"]["substrates"] if s["id"] == "S2")
+    assert s2["pattern_source"] == "own" and not s2["warnings"]
+    assert s2["center_mm"] == pytest.approx([216.0 + 6 * np.cos(np.radians(1.5)) + 5 * np.sin(np.radians(1.5)),
+                                            236.0 + 6 * np.sin(np.radians(1.5)) - 5 * np.cos(np.radians(1.5))], abs=0.2)

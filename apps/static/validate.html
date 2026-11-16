@@ -1116,19 +1116,25 @@ function paintAlign(){
   $('#alAxX').textContent=a.axes.local_x;$('#alAxY').textContent=a.axes.local_y;
   const sc=a.scan,run=alRunning(),lock=run||S.busy;
   $('#alScan').disabled=lock;
-  $('#alScanInfo').textContent=!a.camera.fit?(S.alPrev?`Camera check at ${S.alPrev.time} · ${S.alPrev.count} array${S.alPrev.count===1?'':'s'} found`:'No camera points yet: Scan shows what the camera finds, without toolpaths'):(sc?`Scan ${sc.scan_id?('#'+sc.scan_id+' '):''}at ${sc.time} · ${sc.substrates.length} array${sc.substrates.length===1?'':'s'}`:'No scan yet');
+  $('#alScanInfo').textContent=sc?`Scan ${sc.scan_id?('#'+sc.scan_id+' '):''}at ${sc.time} · ${sc.substrates.length} array${sc.substrates.length===1?'':'s'}${sc.pixel_only?' · no camera points yet':''}`:(a.camera.fit?'No scan yet':'No scan yet. Without camera points a scan finds and labels the arrays for sketching; toolpaths need the points.');
   $('#alScrubSk').textContent=`${fmt(a.scrub_tab.area.w,1)} × ${fmt(a.scrub_tab.area.h,1)} mm, ${a.scrub_tab.bridges} bridge${a.scrub_tab.bridges===1?'':'s'}`;
   const m=$('#alMsg');
   if(sc&&sc.warnings.length){m.textContent=sc.warnings.join(' ');m.className='note warn'}
   else if(sc&&sc.stale){m.textContent='Patterns or checks changed since this photo: the numbers below are updated, the picture is not. Scan again to redraw.';m.className='note'}
   else if(!m.dataset.keep){m.textContent='';m.className='note'}
-  const shown=sc?sc.image:(!a.camera.fit&&S.alPrev?S.alPrev.image:null);
+  const shown=sc?sc.image:null;
   $('#alImg').style.display=shown?'block':'none';if(shown&&$('#alImg').dataset.src!==shown){$('#alImg').src=shown;$('#alImg').dataset.src=shown}
   $('#alLegend').hidden=!sc;
-  if(!sc&&!a.camera.fit&&S.alPrev){m.textContent=S.alPrev.count?`Green: each array the camera found (A1, A2, …), size in pixels: ${S.alPrev.sizes_px.map((s,i)=>'A'+(i+1)+' '+s[0]+' × '+s[1]).join(', ')}. Teach the camera points to get millimetres, turns and toolpaths.`:'No arrays found. Check the lighting and focus on the Camera tab, and that the arrays are in view.';m.className='note '+(S.alPrev.count?'':'warn')}
+  if(sc&&sc.pixel_only&&sc.substrates.length&&!sc.warnings.length){m.textContent='Arrays found and labelled. Press Sketch to draw the bridges on each one. Sizes in mm, turns and toolpaths appear once the camera points are taught (below).';m.className='note'}
   const subs=sc?sc.substrates:[];
   $('#alTab').hidden=!subs.length;
   const ids=subs.map(x=>x.id);alSel=new Set([...alSel].filter(i=>ids.includes(i)));
+  if(sc&&sc.pixel_only){
+    $('#alRows').innerHTML=subs.map(x=>`<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>
+      <td><b>${x.id}</b></td><td>${esc(x.pattern_name)}</td><td colspan="5" class="muted">${x.size_px[0]} × ${x.size_px[1]} px (mm after the camera points)</td>
+      <td style="white-space:nowrap"><a class="btn sm gold" href="/static/bridge_sketcher.html?substrate=${x.id}" target="_blank">Sketch</a></td></tr>
+      <tr><td></td><td colspan="8" style="padding-top:0;font-size:12px;text-align:left">${x.crop?`<img src="${x.crop}" alt="${x.id} close-up" style="float:left;width:300px;max-width:45%;margin:2px 14px 6px 0;border:1px solid var(--line);border-radius:3px">`:''}<span class="muted">${x.problems.map(esc).join(' ')}</span></td></tr>`).join('');
+  }else
   $('#alRows').innerHTML=subs.map(x=>{
     const ok=!x.problems.length,err=x.size_error_mm.map(v=>(v>=0?'+':'')+fmt(v,2)).join(', ');
     return `<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>
@@ -1200,7 +1206,7 @@ $('#alPtsClear').onclick=()=>{if(!confirm('Delete every camera point? Scans need
   run('Camera points cleared',async()=>{S.al=await post('/api/align/camera/delete',{all:true});paintAlign()})};
 $('#alScan').onclick=()=>run('Substrates scanned',async()=>{
   $('#alMsg').textContent='Taking the photo and finding the arrays…';$('#alMsg').className='note';
-  const r=await post('/api/align/scan');S.alPrev=r.preview||null;$('#alMsg').textContent='';S.al=r;paintAlign()});
+  const r=await post('/api/align/scan');$('#alMsg').textContent='';S.al=r;paintAlign()});
 $('#alAll').onchange=e=>{const subs=(S.al&&S.al.scan)?S.al.scan.substrates:[];alSel=new Set(e.target.checked?subs.map(x=>x.id):[]);paintAlign()};
 $('#alRows').onclick=e=>{
   const c=e.target.closest('[data-sel]');

@@ -68,14 +68,17 @@ def _sim_arrays() -> tuple:
 
 
 def _sim_printer_axes() -> Any:
-    """The camera points currently in calibration.yaml, so the mock follows teaching."""
-    from papa.config import load_calibration
-    from papa.vision.correction import AxesError, PrinterAxes
+    """Where the simulated arrays physically are, seen by the simulated camera:
+    a fixed camera-to-printer geometry (0.2 mm per plate pixel, turned 1 deg),
+    independent of what has been taught, like a real camera."""
+    import numpy as np
 
-    try:
-        return PrinterAxes.from_detection(load_calibration().detection)
-    except AxesError:
-        return None
+    from papa.vision.correction import PrinterAxes
+
+    plate = np.array([[300.0, 200.0], [2000.0, 220.0], [1980.0, 1150.0]])
+    th = np.radians(1.0)
+    A = 0.2 * np.array([[np.cos(th), np.sin(th)], [np.sin(th), -np.cos(th)]])
+    return PrinterAxes(plate, plate @ A.T + [0.0, 330.0])
 
 
 def make_camera(machine: Machine | None = None) -> Any:

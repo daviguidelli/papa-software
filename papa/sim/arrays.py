@@ -66,13 +66,11 @@ def render(arrays: list[SimArray], machine_axes: dict[str, str], printer_axes: c
         holder = [poly(a, [(-m, -m), (a.w + m, -m), (a.w + m, a.h + m), (-m, a.h + m)])]
         cv2.fillPoly(plate, holder, HOLDER_RGB, cv2.LINE_AA, shift=3)
         cv2.fillPoly(cover, holder, 255, cv2.LINE_AA, shift=3)
-        y = 0.0
-        while y + line_mm <= a.h + 1e-9:     # copper lines along local x, edge to edge
+        n = max(2, int(round((a.h - line_mm) / pitch_mm)) + 1)      # evenly spaced, first and
+        step = (a.h - line_mm) / (n - 1)                               # last on the array's edges
+        for i in range(n):
+            y = i * step
             cv2.fillPoly(plate, [poly(a, [(0, y), (a.w, y), (a.w, y + line_mm), (0, y + line_mm)])],
-                         COPPER_RGB, cv2.LINE_AA, shift=3)
-            y += pitch_mm
-        if a.h - (y - pitch_mm + line_mm) > 1e-6:   # make the last line meet the bottom edge
-            cv2.fillPoly(plate, [poly(a, [(0, a.h - line_mm), (a.w, a.h - line_mm), (a.w, a.h), (0, a.h)])],
                          COPPER_RGB, cv2.LINE_AA, shift=3)
         cv2.fillPoly(plate, [poly(a, [(0, 0), (line_mm, 0), (line_mm, a.h), (0, a.h)])],
                      COPPER_RGB, cv2.LINE_AA, shift=3)   # a bus bar down the left edge

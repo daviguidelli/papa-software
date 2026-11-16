@@ -176,50 +176,74 @@ class ScanResult:
         }
 
 
+def view_order(corners_view: np.ndarray) -> np.ndarray:
+    """4 corners as top-left, top-right, bottom-right, bottom-left in the image."""
+    c = np.asarray(corners_view, dtype=np.float64).reshape(4, 2)
+    m = c.mean(0)
+    return c[np.argsort(np.arctan2(c[:, 1] - m[1], c[:, 0] - m[0]))]   # -135, -45, 45, 135 deg
+
+
+def find(rgb: np.ndarray, params: elec.ElectrodeParams | None = None) -> list[np.ndarray]:
+    """Every array in one camera photo, as corrected-view corners (TL, TR, BR,
+    BL), numbered S1, S2, ... in reading order of the corrected view: rows top
+    to bottom, then left to right. The same numbering is used with and without
+    camera points, so a substrate keeps its name once they are taught."""
+    size = (rgb.shape[1], rgb.shape[0])
+    if not corr.supported(size):
+        raise ValueError(f"no lens calibration for {size[0]} x {size[1]} frames")
+    found = [view_order(f.corners) for f in elec.detect(corr.get_correction(size).correct_image(rgb), params)]
+    if not found:
+        return []
+    row = 0.5 * float(np.median([np.linalg.norm(c[2] - c[1]) for c in found]))
+    found.sort(key=lambda c: c.mean(0)[1])
+    rows: list[list[np.ndarray]] = []
+    for c in found:
+        if rows and abs(c.mean(0)[1] - rows[-1][0].mean(0)[1]) < row:
+            rows[-1].append(c)
+        else:
+            rows.append([c])
+    return [c for r in rows for c in sorted(r, key=lambda c: c.mean(0)[0])]
+
+
+def drawn_turned(axes: dict[str, str], printer_axes: corr.PrinterAxes, size: tuple[int, int],
+                 p: Placement) -> bool:
+    """True if the pattern's frame, as placed on the printer, does not run the
+    same way as the camera view (local +x along image right, +y along image
+    down). A sketch drawn on the camera view before the camera points existed
+    would then be turned or mirrored on the substrate."""
+    c = corr.get_correction(size)
+    o = np.asarray(p.origin_mm)
+    pts = [to_machine(axes, o[0], o[1], x, y, p.rotation_deg) for x, y in ((0, 0), (1, 0), (0, 1))]
+    v = (c.to_corrected(c.from_plate(printer_axes.mm_to_plate(pts))))
+    ex, ey = v[1] - v[0], v[2] - v[0]
+    return not (ex[0] > abs(ex[1]) and ey[1] > abs(ey[0]))
+
+
 def scan(rgb: np.ndarray, axes: dict[str, str], printer_axes: corr.PrinterAxes,
          settings: dict[str, Any], default_pattern: dict,
          params: elec.ElectrodeParams | None = None) -> ScanResult:
     """Find every array in one RGB camera frame and place its pattern."""
     st = merged(settings)
     size = (rgb.shape[1], rgb.shape[0])
-    if not corr.supported(size):
-        raise ValueError(f"no lens calibration for {size[0]} x {size[1]} frames")
-    c = corr.get_correction(size)
-    found = elec.detect(c.correct_image(rgb), params)
-    to_mm = lambda pts: printer_axes.plate_to_mm(c.corrected_to_plate(pts))   # noqa: E731
-    corners_mm = [to_mm(a.corners) for a in found]
-    warnings: list[str] = []
+    found = find(rgb, params)
     if not found:
-        warnings.append("No electrode arrays found. Check lighting and focus, or the copper "
-                        "colour settings (detection.electrodes).")
-        return ScanResult(size, [], [], {}, warnings)
-    sizes = [float(np.linalg.norm(cm[1] - cm[0]) + np.linalg.norm(cm[2] - cm[1])) / 2 for cm in corners_mm]
-    order = number(axes, [cm.mean(0) for cm in corners_mm], row_mm=0.5 * float(np.median(sizes)))
+        return ScanResult(size, [], [], {}, ["No electrode arrays found. Check lighting and focus."])
+    c = corr.get_correction(size)
     placements, arrays_px, source = [], [], {}
-    for n, i in enumerate(order, 1):
+    for n, view in enumerate(found, 1):
         sid = f"S{n}"
         own = st["patterns"].get(sid)
         pattern = own or default_pattern
         source[sid] = "own" if own else "scrub tab"
-        p = place(sid, axes, corners_mm[i], pattern, st)
-        # photo pixels of the same corners, in the same (local) order
-        ordered_mm = np.asarray(p.corners_mm)
-        arrays_px.append(c.from_plate(printer_axes.mm_to_plate(ordered_mm)))
+        corners_mm = printer_axes.plate_to_mm(c.corrected_to_plate(view))
+        p = place(sid, axes, corners_mm, pattern, st)
+        if own and own.get("drawn_on") == "camera view" and drawn_turned(axes, printer_axes, size, p):
+            p.warnings.append("This sketch was drawn on the camera view before the camera points were "
+                              "taught, and the camera is turned relative to the printer, so it would land "
+                              "turned. Open it in the sketcher and save it again.")
+        arrays_px.append(c.from_plate(printer_axes.mm_to_plate(np.asarray(p.corners_mm))))
         placements.append(p)
-    return ScanResult(size, arrays_px, placements, source, warnings)
-
-
-def detect_only(rgb: np.ndarray, params: elec.ElectrodeParams | None = None) -> list[np.ndarray]:
-    """Arrays in one frame as photo-pixel corners, with no printer mapping.
-    For checking the camera and the copper settings before camera points exist."""
-    size = (rgb.shape[1], rgb.shape[0])
-    if not corr.supported(size):
-        raise ValueError(f"no lens calibration for {size[0]} x {size[1]} frames")
-    c = corr.get_correction(size)
-    found = elec.detect(c.correct_image(rgb), params)
-    out = [c.from_plate(c.corrected_to_plate(a.corners)) for a in found]
-    out.sort(key=lambda px: (round(float(px[:, 1].mean()) / 100), float(px[:, 0].mean())))
-    return out
+    return ScanResult(size, arrays_px, placements, source, [])
 
 
 def rectify(rgb: np.ndarray, machine_axes: dict[str, str], printer_axes: corr.PrinterAxes,
@@ -271,3 +295,20 @@ def printer_view(rgb: np.ndarray, printer_axes: corr.PrinterAxes, box: tuple[flo
     return cv2.remap(rgb, photo[:, 0].reshape(H, W).astype(np.float32),
                      photo[:, 1].reshape(H, W).astype(np.float32), cv2.INTER_CUBIC,
                      borderMode=cv2.BORDER_CONSTANT)
+
+
+def rectify_view(rgb: np.ndarray, corners_view: np.ndarray, w: float, h: float, px_per_mm: float) -> np.ndarray:
+    """A straight-on picture of one array from the corrected view alone (no
+    camera points): its four corners stretched onto a w x h mm rectangle."""
+    import cv2
+
+    c = corr.get_correction((rgb.shape[1], rgb.shape[0]))
+    W, H = max(1, int(round(w * px_per_mm))), max(1, int(round(h * px_per_mm)))
+    # sample through the lens model: map the output grid to the corrected view, then to the photo
+    M = cv2.getPerspectiveTransform(np.float32([[0, 0], [W, 0], [W, H], [0, H]]),
+                                    np.float32(corners_view))
+    U, V = np.meshgrid(np.arange(W) + 0.5, np.arange(H) + 0.5)
+    pts = cv2.perspectiveTransform(np.c_[U.ravel(), V.ravel()].reshape(-1, 1, 2).astype(np.float64), M).reshape(-1, 2)
+    photo = c.to_original(pts)
+    return cv2.remap(rgb, photo[:, 0].reshape(H, W).astype(np.float32), photo[:, 1].reshape(H, W).astype(np.float32),
+                     cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT)

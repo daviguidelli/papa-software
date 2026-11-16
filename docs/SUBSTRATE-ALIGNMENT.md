@@ -7,13 +7,20 @@ shifted to sit exactly on it before the scrub runs.
 ## Flow
 
 1. **Photo.** `Scan substrates` takes one full-resolution photo (4056 × 3040).
-2. **Find the arrays.** Copper-coloured areas are found in the corrected
-   (straight-down) view, and each array's four edges are measured to a
-   fraction of a pixel (`papa/vision/electrodes.py`).
+2. **Find the arrays.** In the corrected (straight-down) view, an array is a
+   block of evenly spaced, equally long parallel lines on the white holder,
+   whether the lines look copper or dark. Its outline is measured from the
+   lines themselves: the outer edges of the first and last line and the line
+   ends, with the angle refined until the lines run level
+   (`papa/vision/electrodes.py`). Arrays are numbered S1, S2, ... in reading
+   order of that view, with or without camera points.
 3. **Your geometry.** Each substrate has a pattern: array width × height and
    the bridges as keep-outs. Press **Sketch** on a substrate's row: the bridge
-   sketcher opens on that substrate, cut from the scan photo, straightened and
-   zoomed, with a dropdown to switch substrates. Draw the bridges and press
+   sketcher opens on the scanned substrates in order, each cut from the scan
+   photo, straightened and zoomed (no uploading). Before the camera points
+   are taught the array's size is not measured, so the sketcher asks for it;
+   sketches drawn then are checked once the points exist, and flagged if the
+   camera turns out to be turned relative to the printer. Draw the bridges and press
    Save to send them back. Or tick substrates and load a sketch file, or copy
    one substrate's pattern to others. Substrates without their own pattern use
    the Scrub tab's sketch.

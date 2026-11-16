@@ -135,10 +135,17 @@ kbd{font:10px var(--mono);border:1px solid var(--line2);padding:0 4px;color:var(
         <button class="sm" id="fsSave" disabled>Save</button>
         <button class="pri sm" id="fsSaveNext" disabled>Save &amp; next &rarr;</button>
       </div>
+      <div id="fsSize" hidden style="display:grid;gap:8px;border:1px solid var(--pick);padding:10px">
+        <div class="note" style="color:var(--tx)">No camera points yet, so the size of this array is not measured. Enter its real size; the picture stretches to match.</div>
+        <div class="row">
+          <label><span>Array width mm</span><input type="number" id="fsW" min="0.5" step="0.05"></label>
+          <label><span>Array height mm</span><input type="number" id="fsH" min="0.5" step="0.05"></label>
+        </div>
+      </div>
       <span class="cap" style="margin-bottom:-6px">Same geometry on another substrate?</span>
-      <button class="sm" id="fsCopyNext" disabled>Copy this sketch to the next one and go there</button>
+      <button class="sm" id="fsCopyNext" disabled>Same on the next one &rarr;</button>
       <div id="fsTargets" style="display:flex;flex-wrap:wrap;gap:6px 12px;font:11px var(--mono)"></div>
-      <button class="sm" id="fsCopy" disabled>Copy this sketch to the ticked substrates</button>
+      <button class="sm" id="fsCopy" disabled>Copy to ticked</button>
       <div class="stat" id="fsStat"></div>
       <button class="sm" id="fsRefresh">Refresh after a new scan</button>
     </div>
@@ -884,11 +891,17 @@ const fsIdx=()=>FS.list.findIndex(s=>s.id===FS.id);
 async function fsList(){
   let a;
   try{const r=await fetch('/api/align');if(!r.ok)throw 0;a=await r.json()}catch(e){$('#sec-scan').hidden=true;return false}
+  // On the PAPA server: substrates come from the scan, never from an upload.
+  $('#sec-image').hidden=true;$('#sec-align').hidden=true;
   FS.list=(a.scan&&a.scan.substrates)||[];FS.patterns=a.patterns||{};
   $('#sec-scan').hidden=!FS.list.length;
-  if(!FS.list.length)return false;
+  if(!FS.list.length){
+    $('#empty').innerHTML='<div class="box"><div class="big">No substrates yet</div><div class="note">Press <b>Scan substrates</b> on the Substrates tab. Every array it finds opens here automatically, one after another.</div><button class="pri" id="emptyRefresh">Load the scan</button></div>';
+    $('#emptyRefresh').onclick=async()=>{if(await fsList())fsLoad(FS.list[0].id)};
+    return false;
+  }
   const sel=$('#fsSel');
-  sel.innerHTML=FS.list.map(s=>`<option value="${s.id}">${s.id} · ${(+s.measured_mm[0]).toFixed(2)} × ${(+s.measured_mm[1]).toFixed(2)} mm · ${FS.patterns[s.id]?'✓ sketched ('+FS.patterns[s.id].bridges+' bridges)':'not sketched yet'}</option>`).join('');
+  sel.innerHTML=FS.list.map(s=>`<option value="${s.id}">${s.id}${s.measured_mm?' · '+(+s.measured_mm[0]).toFixed(2)+' × '+(+s.measured_mm[1]).toFixed(2)+' mm':''} · ${FS.patterns[s.id]?'✓ sketched ('+FS.patterns[s.id].bridges+' bridges)':'not sketched yet'}</option>`).join('');
   if(FS.id)sel.value=FS.id;
   fsStat();return true;
 }
@@ -904,6 +917,8 @@ function fsStat(){
   $('#fsTargets').innerHTML=others.map(s=>`<label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" value="${s.id}" ${ticked.has(s.id)?'checked':''}>${s.id}${FS.patterns[s.id]?' ✓':''}</label>`).join('');
   $('#fsCopy').disabled=!on;
   $('#fsStat').innerHTML=FS.id?`${S.w} × ${S.h} mm · ${S.rects.length} bridge${S.rects.length===1?'':'s'}${FS.dirty?' · <b>not saved</b>':''}`:'';
+  $('#fsSize').hidden=!(FS.id&&!FS.sizeKnown);
+  if(FS.id&&!FS.sizeKnown){const a=$('#fsW'),b=$('#fsH');if(document.activeElement!==a)a.value=S.w;if(document.activeElement!==b)b.value=S.h}
 }
 async function fsLoad(id){
   if(!id)return;
@@ -913,7 +928,7 @@ async function fsLoad(id){
     const r=await fetch('/api/align/substrate/'+encodeURIComponent(id)+'/sketch');const j=await r.json();
     if(!r.ok)throw new Error(j.error||r.status);
     S.sub=await loadImageURL(j.image);S.subURL=j.image;S.src=null;S.corners=[];S.subId=null;
-    S.w=j.w;S.h=j.h;$('#szw').value=S.w;$('#szh').value=S.h;
+    S.w=j.w;S.h=j.h;$('#szw').value=S.w;$('#szh').value=S.h;FS.sizeKnown=!!j.size_known;
     S.rects=(j.bridges||[]).map(b=>({id:S.nid++,cx:+b.cx,cy:+b.cy,l:+b.l,w:+b.w}));S.sel=null;S.hist=[];S.fut=[];
     FS.id=id;$('#fsSel').value=id;setMode('sub');changed();FS.dirty=false;
     history.replaceState(null,'','?substrate='+encodeURIComponent(id));
@@ -935,6 +950,13 @@ async function fsSave(){
 }
 const fsGo=d=>{const i=fsIdx()+d;if(i>=0&&i<FS.list.length)fsLoad(FS.list[i].id)};
 $('#fsSel').onchange=e=>fsLoad(e.target.value);
+for(const id of ['fsW','fsH'])$('#'+id).addEventListener('change',()=>{
+  const w=parseFloat($('#fsW').value),h=parseFloat($('#fsH').value);
+  if(!(w>0&&h>0))return;
+  pushHist();S.w=Math.round(w*100)/100;S.h=Math.round(h*100)/100;$('#szw').value=S.w;$('#szh').value=S.h;
+  for(const r of S.rects){r.cx=Math.min(r.cx,S.w);r.cy=Math.min(r.cy,S.h)}
+  fit();changed();
+});
 $('#fsPrev').onclick=()=>fsGo(-1);
 $('#fsNext').onclick=()=>fsGo(1);
 $('#fsSave').onclick=fsSave;

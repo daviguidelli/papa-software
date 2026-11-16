@@ -12,19 +12,20 @@ photo, near black in another), so colour is only one of two cues. Steps:
    a bright holder, and show a row of evenly spaced parallel stripes (this is
    what rejects the plate's holes and slots, label text and shadows), and fit
    a rotated rectangle to each,
-4. refine each side to sub-pixel accuracy (see refine): the outermost copper
-   edge is found along short stretches of each side, a line is fitted through
-   them, and the four lines are intersected. The blob outline alone is only good to about a pixel, which on
-   a 10 mm array is about a degree; the refined sides are good to a few
-   hundredths of a pixel.
+4. measure the exact outline from the electrode lines themselves (see
+   measure): the blob only says roughly where to look, so a pocket edge or a
+   shadow next to the array can no longer make the outline too big.
 
 Sizes are fractions of the image, so the same settings work at any frame size.
 Every setting can be overridden from calibration.yaml under
 detection.electrodes (same names as ElectrodeParams).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
+
+import math
 
 import cv2
 import numpy as np
@@ -32,20 +33,20 @@ import numpy as np
 
 @dataclass(frozen=True)
 class ElectrodeParams:
-    h_min: int = 5            # OpenCV hue, 0-179
+    h_min: int = 5  # OpenCV hue, 0-179
     h_max: int = 28
     s_min: int = 45
     v_min: int = 70
-    min_area_frac: float = 0.0002   # blob area / image area
+    min_area_frac: float = 0.0002  # blob area / image area
     max_area_frac: float = 0.05
-    close_frac: float = 0.012       # gap-closing size / image width; wider than the gap
-                                    # between lines, narrower than the gap between arrays
-    min_fill: float = 0.55          # blob area / rotated-rectangle area
-    max_aspect: float = 2.5         # long side / short side
-    min_copper: float = 0.25        # line pixels (copper or dark) / rectangle area
-    min_surround_v: int = 100       # brightness around the array (white holder; real lighting reads ~140)
-    line_contrast: int = 25         # grey levels a line must be darker than its surroundings
-    min_stripes: int = 4            # evenly spaced parallel lines needed to call it an array
+    close_frac: float = 0.012  # gap-closing size / image width; wider than the gap
+    # between lines, narrower than the gap between arrays
+    min_fill: float = 0.55  # blob area / rotated-rectangle area
+    max_aspect: float = 2.5  # long side / short side
+    min_copper: float = 0.25  # line pixels (copper or dark) / rectangle area
+    min_surround_v: int = 100  # brightness around the array (white holder; real lighting reads ~140)
+    line_contrast: int = 25  # grey levels a line must be darker than its surroundings
+    min_stripes: int = 4  # evenly spaced parallel lines needed to call it an array
 
     @classmethod
     def from_cfg(cls, d: dict | None) -> "ElectrodeParams":
@@ -59,9 +60,9 @@ class ElectrodeParams:
 
 @dataclass
 class Array:
-    corners: np.ndarray       # 4 x 2, pixels of the image searched, minAreaRect order
+    corners: np.ndarray  # 4 x 2, pixels of the image searched, minAreaRect order
     center: tuple[float, float]
-    copper: float             # fraction of the rectangle that is copper
+    copper: float  # fraction of the rectangle that is copper
 
 
 def copper_mask(rgb: np.ndarray, p: ElectrodeParams) -> np.ndarray:
@@ -75,71 +76,184 @@ def copper_score(rgb: np.ndarray, p: ElectrodeParams) -> np.ndarray:
     blended edge pixels keep copper's hue at lower saturation and so count
     partly, which is where the sub-pixel detail comes from."""
     hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
-    hue_ok = ((hsv[:, :, 0] >= p.h_min) & (hsv[:, :, 0] <= p.h_max)
-              & (hsv[:, :, 2] >= p.v_min)).astype(np.float32)
+    hue_ok = ((hsv[:, :, 0] >= p.h_min) & (hsv[:, :, 0] <= p.h_max) & (hsv[:, :, 2] >= p.v_min)).astype(
+        np.float32
+    )
     return hue_ok * np.clip(hsv[:, :, 1] / 255.0, 0, 1)
 
 
-def _sample(img: np.ndarray, pts: np.ndarray) -> np.ndarray:
-    m = pts.astype(np.float32).reshape(-1, 1, 2)
-    return cv2.remap(img, m[:, :, 0], m[:, :, 1], cv2.INTER_LINEAR,
-                     borderMode=cv2.BORDER_REPLICATE).ravel()
-
-
-def refine(score: np.ndarray, corners: np.ndarray, reach: float, segments: int = 10) -> np.ndarray | None:
-    """Sub-pixel corners from the four sides of a rough rectangle (None if it fails).
-
-    Each side is cut into short segments. A segment's samples are averaged
-    along the side, which turns electrode lines and gaps into one density
-    profile across the edge; the edge is the outermost point where that profile
-    reaches half the copper level just inside it. A line through the segment
-    edges is each side; neighbouring sides meet at the corners.
-    """
-    c = np.asarray(corners, dtype=np.float64)
-    centre = c.mean(0)
-    offsets = np.arange(-reach, reach + 1e-9, 0.25)
-    lines = []
-    for i in range(4):
-        a, b = c[i], c[(i + 1) % 4]
-        length = np.linalg.norm(b - a)
-        d = (b - a) / length
-        n = np.array([d[1], -d[0]])
-        if n @ ((a + b) / 2 - centre) < 0:
-            n = -n                                   # outward
-        pts = []
-        bounds = np.linspace(0.12, 0.88, segments + 1)
-        for t0, t1 in zip(bounds[:-1], bounds[1:]):
-            ts = np.arange(t0 * length, t1 * length, 0.5)
-            grid = (a + np.outer(ts, d))[:, None, :] + offsets[None, :, None] * n
-            prof = _sample(score, grid.reshape(-1, 2)).reshape(len(ts), len(offsets)).mean(0)
-            outside = float(np.median(prof[offsets > 0.6 * reach]))
-            peak = float(prof[offsets <= 0].max())
-            if peak - outside < 0.05:
-                continue
-            half = (peak + outside) / 2
-            idx = np.nonzero(prof >= half)[0]
-            j = idx[-1]                              # outermost point at or above half
-            if j + 1 >= len(offsets):
-                continue
-            f = (prof[j] - half) / (prof[j] - prof[j + 1])
-            s_edge = offsets[j] + f * (offsets[j + 1] - offsets[j])
-            pts.append(a + d * (t0 + t1) / 2 * length + n * s_edge)
-        if len(pts) < max(3, segments // 2):
-            return None
-        vx, vy, x0, y0 = cv2.fitLine(np.array(pts, np.float32), cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
-        lines.append((np.array([x0, y0], np.float64), np.array([vx, vy], np.float64)))
+def _peaks(P, floor):
     out = []
-    for i in range(4):                # corner i is where side i-1 meets side i
-        (p1, v1), (p2, v2) = lines[i - 1], lines[i]
-        A = np.array([v1, -v2]).T
-        if abs(np.linalg.det(A)) < 1e-9:
-            return None
-        s_, _ = np.linalg.solve(A, p2 - p1)
-        out.append(p1 + s_ * v1)
-    out = np.array(out)
-    if np.max(np.linalg.norm(out - c, axis=1)) > reach:   # refinement wandered off
-        return None
+    for i in range(1, len(P) - 1):
+        if P[i] >= P[i - 1] and P[i] > P[i + 1] and P[i] > floor:
+            d = P[i - 1] - 2 * P[i] + P[i + 1]
+            off = 0.5 * (P[i - 1] - P[i + 1]) / d if d != 0 else 0
+            out.append((i + off, float(P[i])))
     return out
+
+
+def _even_run(pk):
+    best = []
+    for i in range(len(pk)):
+        for j in range(i + 1, len(pk)):
+            d = pk[j][0] - pk[i][0]
+            if d < 2:
+                continue
+            run = [pk[i], pk[j]]
+            for q in pk[j + 1 :]:
+                g = q[0] - run[-1][0]
+                if abs(g - d) < 0.25 * d:
+                    run.append(q)
+                elif g > 1.25 * d:
+                    break
+            if len(run) > len(best):
+                best = run
+    return best
+
+
+def _cross(P, i, step, level):
+    i = int(round(i))
+    while 0 <= i + step < len(P) and P[i + step] >= level:
+        i += step
+    j = i + step
+    if not 0 <= j < len(P) or P[i] == P[j]:
+        return float(i)
+    return i + step * (P[i] - level) / (P[i] - P[j])
+
+
+def _window(score, center, theta, S):
+    M = cv2.getRotationMatrix2D((float(center[0]), float(center[1])), math.degrees(theta), 1.0)
+    M[:, 2] += [S / 2 - center[0], S / 2 - center[1]]
+    return cv2.warpAffine(score, M, (S, S), flags=cv2.INTER_LINEAR), M
+
+
+def _line_set(win, S, size):
+    mid = slice(int(S / 2 - 0.25 * size), int(S / 2 + 0.25 * size))
+    P = win[:, mid].mean(1)
+    pk = _peaks(P, 0.15 * P.max())
+    run = _even_run([p for p in pk if p[1] > 0.3 * P.max()])
+    if len(run) < 4:
+        return None, P
+    pitch = float(np.median(np.diff([y for y, _ in run])))
+    amp = float(np.median([a for _, a in run]))
+
+    def extent(y):
+        row = win[max(0, int(round(y)) - 1) : int(round(y)) + 2].mean(0)
+        lvl = 0.5 * float(np.median(row[mid]))
+        return _cross(row, S / 2, -1, lvl), _cross(row, S / 2, 1, lvl)
+
+    ext = [extent(y) for y, _ in run]
+    L = float(np.median([b - a for a, b in ext]))
+
+    def ok(p):
+        a, b = extent(p[0])
+        return p[1] > 0.35 * amp and abs((b - a) - L) < 0.2 * L
+
+    lines = list(run)
+    while True:  # weaker outer lines (glare, bus bars) one pitch out, same length
+        n = [p for p in pk if 0.7 * pitch < lines[0][0] - p[0] < 1.45 * pitch and ok(p)]
+        if not n:
+            break
+        lines.insert(0, n[0])
+    while True:
+        n = [p for p in pk if 0.7 * pitch < p[0] - lines[-1][0] < 1.45 * pitch and ok(p)]
+        if not n:
+            break
+        lines.append(n[0])
+    return lines, P
+
+
+def measure(lines_img: np.ndarray, center, size: float, copper: np.ndarray | None = None):
+    """The exact outline of one array, measured from its electrode lines.
+
+    lines_img is the dark-line score (dark_lines), centre and size a rough
+    position. Steps: the line direction from the image structure; a window
+    turned so the lines run level; the evenly spaced, equally long lines
+    across it (anything else, such as a pocket edge or a hole, breaks the
+    spacing or the length and is left out); the angle refined until the
+    lines are level to 0.01 deg; the outline is the outer edges of the first
+    and last line and the median line ends. If the array looks copper (a
+    copper film between the lines), the film's extent is used instead, as
+    pale outer lines can vanish in glare. Returns (corners 4 x 2, number of
+    lines) or None if there is no regular comb of at least 4 lines.
+    """
+    theta = _orientation(lines_img, center, int(0.6 * size))
+    score = lines_img
+    S = int(1.7 * size)
+    for _ in range(4):
+        win, M = _window(score, center, theta, S)
+        lines, P = _line_set(win, S, size)
+        if not lines:
+            return None
+        # slope of the lines: centroid row in a left and a right band
+        sl = []
+        for y, _ in lines:
+            r0 = max(0, int(round(y)) - 2)
+            band = win[r0 : r0 + 5]
+
+            def cy(x0, x1):
+                w = band[:, x0:x1].sum(1)
+                return r0 + (np.arange(len(w)) * w).sum() / max(w.sum(), 1e-6)
+
+            xa, xb = int(S / 2 - 0.35 * size), int(S / 2 - 0.1 * size)
+            xc, xd = int(S / 2 + 0.1 * size), int(S / 2 + 0.35 * size)
+            sl.append((cy(xc, xd) - cy(xa, xb)) / ((xc + xd) / 2 - (xa + xb) / 2))
+        slope = float(np.median(sl))
+        if abs(slope) < 2e-4:
+            break
+        theta += math.atan(slope)  # positive slope (falls to the right) -> rotate the window more
+    top = _cross(P, lines[0][0], -1, lines[0][1] / 2)
+    bot = _cross(P, lines[-1][0], 1, lines[-1][1] / 2)
+    mid = slice(int(S / 2 - 0.25 * size), int(S / 2 + 0.25 * size))
+    ends = []
+    for y, _ in lines:
+        row = win[max(0, int(round(y)) - 1) : int(round(y)) + 2].mean(0)
+        lvl = 0.5 * float(np.median(row[mid]))
+        ends.append((_cross(row, S / 2, -1, lvl), _cross(row, S / 2, 1, lvl)))
+    left = float(np.median([a for a, _ in ends]))
+    right = float(np.median([b for _, b in ends]))
+    if copper is not None:  # copper-looking arrays: the copper film marks the whole array
+        cw = cv2.warpAffine(copper, M, (S, S), flags=cv2.INTER_LINEAR)
+        xs = slice(int(left + 0.2 * (right - left)), int(right - 0.2 * (right - left)) + 1)
+        gaps = [int(round((a[0] + b[0]) / 2)) for a, b in zip(lines[:-1], lines[1:])]
+        rows = [int(round(y)) for y, _ in lines]
+        film = float(np.median(cw[gaps, xs])) if gaps else 0.0
+        on_lines = float(np.median(cw[rows, xs]))
+        if film > 0.12 and on_lines > 0.12:  # lines and gaps both copper: a film, not bare holder
+            yc, xc = int((top + bot) / 2), int((left + right) / 2)
+            inner = cw[int(top) : int(bot) + 1, int(left) : int(right) + 1]
+            lvl = 0.5 * float(np.median(inner))
+            Pc = np.convolve(cw[:, xs].mean(1), np.ones(3) / 3, mode="same")
+            Cc = np.convolve(
+                cw[int(top + 0.2 * (bot - top)) : int(bot - 0.2 * (bot - top)) + 1].mean(0),
+                np.ones(3) / 3,
+                mode="same",
+            )
+            t2, b2 = _cross(Pc, yc, -1, lvl), _cross(Pc, yc, 1, lvl)
+            l2, r2 = _cross(Cc, xc, -1, lvl), _cross(Cc, xc, 1, lvl)
+            pitch = (lines[-1][0] - lines[0][0]) / max(1, len(lines) - 1)
+            # The lines give the sharper edge; the film only takes over on a side where
+            # it reaches clearly further out, i.e. where outer lines were lost to glare.
+            if 0.6 * pitch < top - t2 < 4 * pitch:
+                top = t2
+            if 0.6 * pitch < b2 - bot < 4 * pitch:
+                bot = b2
+            if 0.6 * pitch < left - l2 < 4 * pitch:
+                left = l2
+            if 0.6 * pitch < r2 - right < 4 * pitch:
+                right = r2
+    rect = np.array([[left, top], [right, top], [right, bot], [left, bot]])
+    Minv = cv2.invertAffineTransform(M)
+    return np.c_[rect, np.ones(4)] @ Minv.T, len(lines)
+
+
+def _orientation(score, center, half):
+    x0, y0 = int(center[0] - half), int(center[1] - half)
+    patch = score[max(0, y0) : y0 + 2 * half, max(0, x0) : x0 + 2 * half]
+    gx = cv2.Sobel(patch, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(patch, cv2.CV_32F, 0, 1, ksize=3)
+    phi = 0.5 * math.atan2(2 * (gx * gy).sum(), (gx * gx).sum() - (gy * gy).sum())
+    return phi + math.pi / 2
 
 
 def dark_lines(gray: np.ndarray, k: int) -> np.ndarray:
@@ -157,9 +271,9 @@ def stripes(lines: np.ndarray, corners: np.ndarray) -> int:
     M = cv2.getPerspectiveTransform(c, np.float32([[0, 0], [W, 0], [W, H], [0, H]]))
     patch = cv2.warpPerspective(lines, M, (W, H))
     best = 0
-    for prof in (patch.mean(axis=1), patch.mean(axis=0)):   # across rows, across columns
+    for prof in (patch.mean(axis=1), patch.mean(axis=0)):  # across rows, across columns
         n = len(prof)
-        prof = np.convolve(prof, np.ones(3) / 3, mode="same")[int(0.05 * n):n - int(0.05 * n)]
+        prof = np.convolve(prof, np.ones(3) / 3, mode="same")[int(0.05 * n) : n - int(0.05 * n)]
         if len(prof) < 8 or prof.max() - prof.min() < 3:
             continue
         above = prof > (prof.max() + prof.min()) / 2
@@ -168,7 +282,7 @@ def stripes(lines: np.ndarray, corners: np.ndarray) -> int:
             starts = np.r_[0, starts]
         if len(starts) >= 3:
             gaps = np.diff(starts)
-            if gaps.std() / gaps.mean() > 0.35:            # uneven: not an electrode comb
+            if gaps.std() / gaps.mean() > 0.35:  # uneven: not an electrode comb
                 continue
         best = max(best, len(starts))
     return best
@@ -187,12 +301,6 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None) -> list[Array]:
     blobs = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     blobs = cv2.morphologyEx(blobs, cv2.MORPH_OPEN, kernel)
 
-    # one edge score for both looks: copper saturation, or darkness against the holder
-    # (scaled by the darkest lines in view rather than clipped early, so the
-    # half-way point between line and holder stays on the true edge)
-    marked = lines[lines > p.line_contrast]
-    top = max(2.0 * p.line_contrast, float(np.percentile(marked, 90)) if marked.size else 0.0)
-    score = np.maximum(copper_score(rgb, p), np.clip(lines / top, 0, 1))
     contours, _ = cv2.findContours(blobs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     found: list[Array] = []
     for c in contours:
@@ -216,10 +324,11 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None) -> list[Array]:
             continue
         if stripes(lines, corners) < p.min_stripes:
             continue
-        refined = refine(score, corners.astype(np.float64), reach=k / 2 + 4)
-        if refined is not None:
-            corners = refined
-        corners = np.asarray(corners, dtype=np.float64)
+        size = float(max(rw, rh))
+        measured = measure(lines, corners.mean(0), size, copper_score(rgb, p))
+        if measured is None:
+            continue
+        corners = np.asarray(measured[0], dtype=np.float64)
         found.append(Array(corners, tuple(map(float, corners.mean(0))), float(copper)))
     found.sort(key=lambda a: -cv2.contourArea(a.corners.astype(np.float32)))
     return found
