@@ -496,6 +496,15 @@
     </details>
   </div>
 
+  <details class="card fold" id="f-software" style="margin-top:16px"><summary><span class="label">Software</span> <span class="chip" id="swChip"></span></summary><div class="fold-body">
+    <div class="kv" id="swInfo"></div>
+    <div class="row" style="margin-top:10px;align-items:center">
+      <button class="sm" id="swCheck">Check for updates</button>
+      <button class="gold sm" id="swUpdate" disabled>Update and restart</button>
+    </div>
+    <ul class="note" id="swNew" style="margin:8px 0 0 18px"></ul>
+    <p class="note" id="swMsg">Gets the newest code for this branch from GitHub and restarts the GUI on the Pi. Nothing is changed until you press Update.</p>
+  </div></details>
   <details class="card fold" id="f-activity" style="margin-top:16px"><summary><span class="label">Activity</span></summary><div class="fold-body">
     
     <div id="log"></div>
@@ -1239,6 +1248,32 @@ $('#alClear').onclick=()=>{const targets=[...alSel];
   run(`${targets.join(', ')} use the Scrub tab sketch`,async()=>{S.al=await post('/api/align/pattern',{targets,clear:true});paintAlign()})};
 $('#alTolSave').onclick=()=>run('Saved alignment checks',async()=>{S.al=await post('/api/align/settings',{size_tolerance_mm:+$('#alTol').value,max_rotation_deg:+$('#alRot').value});paintAlign()});
 {const _paint4=paint;paint=function(){_paint4();if(S.mode==='align')paintAlign()}}
+
+/* ---------- software update ---------- */
+function swPaint(j){
+  $('#swInfo').innerHTML=`<span>Branch</span><span class="mono">${esc(j.branch)}</span><span>Version</span><span class="mono">${esc(j.commit)} · ${esc(j.date)}</span><span>Last change</span><span>${esc(j.subject)}</span>`;
+  const n=j.new;
+  $('#swChip').textContent=n===undefined?'':(n.length?n.length+' update'+(n.length===1?'':'s'):'up to date');
+  $('#swChip').className='chip '+(n&&n.length?'warn':'ok');
+  $('#swNew').innerHTML=(n||[]).map(x=>`<li>${esc(x)}</li>`).join('');
+  $('#swUpdate').disabled=!(n&&n.length)||S.busy;
+  if(j.local_changes&&j.local_changes.length){$('#swMsg').textContent='Files were edited on the Pi ('+j.local_changes.join(', ')+'); an update will not overwrite them.';$('#swMsg').className='note warn'}
+}
+async function swLoad(){try{swPaint(await api('/api/software'))}catch(e){$('#swMsg').textContent='Version unknown: '+e.message}}
+$('#swCheck').onclick=()=>run('Checked for updates',async()=>{$('#swMsg').textContent='Asking GitHub…';const j=await post('/api/software/check');swPaint(j);$('#swMsg').className='note';$('#swMsg').textContent=j.new.length?'New on GitHub, listed above.':'This is the newest version.'});
+$('#swUpdate').onclick=()=>{
+  if(!confirm('Update the software and restart the GUI? Anything running stops; the page reconnects by itself.'))return;
+  run('Software updated',async()=>{
+    $('#swMsg').textContent='Updating…';
+    const j=await post('/api/software/update');$('#swMsg').textContent=j.message+(j.packages&&j.packages.length?' Packages: '+j.packages.join('; '):'');
+    if(j.restarting){
+      const t0=Date.now();await new Promise(r=>setTimeout(r,4000));
+      for(;;){try{await api('/api/software');break}catch(e){if(Date.now()-t0>90000)throw new Error('The GUI did not come back. Check the Pi.');await new Promise(r=>setTimeout(r,1500))}}
+      location.reload();
+    }else swPaint(j);
+  });
+};
+$('#f-software').addEventListener('toggle',e=>{if(e.target.open)swLoad()});
 
 
 function setMode(m){

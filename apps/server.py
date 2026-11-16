@@ -370,6 +370,84 @@ def camera_capture_file(name: str) -> FileResponse:
     return FileResponse(p, media_type="image/jpeg", filename=name)
 
 
+# ---------- software update from GitHub, from the page ----------
+
+REPO_DIR = Path(__file__).resolve().parent.parent
+
+
+def _git(*args: str, timeout: float = 60, raw: bool = False) -> str:
+    import subprocess
+
+    r = subprocess.run(["git", "-C", str(REPO_DIR), *args], capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        raise HTTPException(500, (r.stderr or r.stdout).strip() or f"git {args[0]} failed")
+    return r.stdout.rstrip("\n") if raw else r.stdout.strip()
+
+
+def _software_info(fetch: bool = False) -> dict:
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    info: dict[str, Any] = {
+        "branch": branch,
+        "commit": _git("log", "-1", "--format=%h"),
+        "subject": _git("log", "-1", "--format=%s"),
+        "date": _git("log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M"),
+        "local_changes": [line[3:] for line in
+                          _git("status", "--porcelain", "--untracked-files=no", raw=True).splitlines() if line],
+        "service": bool(os.environ.get("INVOCATION_ID")),     # set by systemd
+    }
+    if fetch:
+        _git("fetch", "--quiet", "origin", branch, timeout=120)
+        new = _git("log", "--format=%h %s", f"HEAD..origin/{branch}")
+        info["new"] = new.splitlines() if new else []
+    return info
+
+
+@app.get("/api/software")
+def software_info() -> dict:
+    return _software_info()
+
+
+@app.post("/api/software/check")
+def software_check() -> dict:
+    """Ask GitHub what is new on this branch (nothing is changed)."""
+    return _software_info(fetch=True)
+
+
+@app.post("/api/software/update")
+def software_update() -> dict:
+    """Pull the new code from GitHub, install any new Python packages, and
+    restart. Only moves forward along the branch: edits made on the Pi are
+    never overwritten (the update stops and says which files)."""
+    import subprocess
+    import sys
+
+    hub.require_idle()
+    info = _software_info(fetch=True)
+    if info["local_changes"]:
+        raise HTTPException(409, "Files were edited on the Pi, so the update stopped to keep them: "
+                                 + ", ".join(info["local_changes"]))
+    if not info["new"]:
+        return {**info, "updated": False, "message": "Already up to date."}
+    before = _git("rev-parse", "HEAD")
+    _git("merge", "--ff-only", f"origin/{info['branch']}")
+    changed = _git("diff", "--name-only", before, "HEAD").splitlines()
+    log = []
+    for req in ("requirements.txt", "requirements-pi.txt"):
+        if req in changed and (REPO_DIR / req).exists():
+            r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(REPO_DIR / req)],
+                               capture_output=True, text=True, timeout=900)
+            log.append(f"{req}: " + ("installed" if r.returncode == 0 else (r.stderr or r.stdout)[-400:]))
+    after = _software_info()
+    restart = after["service"]
+    if restart:
+        # exit with an error code a moment after answering: systemd (Restart=on-failure)
+        # starts the server again on the new code within a few seconds
+        threading.Timer(1.5, lambda: os._exit(3)).start()
+    return {**after, "updated": True, "applied": info["new"], "packages": log, "restarting": restart,
+            "message": "Updated. Restarting, the page reconnects by itself." if restart else
+                       "Updated. Restart the server to run the new code."}
+
+
 # ---------- validation page ----------
 
 def _next_scan_dir() -> tuple[Path, int]:
