@@ -1081,15 +1081,17 @@ function paintAlign(){
   const a=S.al;if(!a)return;
   $('#alAxX').textContent=a.axes.local_x;$('#alAxY').textContent=a.axes.local_y;
   const sc=a.scan,run=alRunning(),lock=run||S.busy;
-  $('#alScan').disabled=lock||!a.camera.fit;
-  $('#alScanInfo').textContent=!a.camera.fit?'Teach the camera points first (below)':(sc?`Scan ${sc.scan_id?('#'+sc.scan_id+' '):''}at ${sc.time} · ${sc.substrates.length} array${sc.substrates.length===1?'':'s'}`:'No scan yet');
+  $('#alScan').disabled=lock;
+  $('#alScanInfo').textContent=!a.camera.fit?(S.alPrev?`Camera check at ${S.alPrev.time} · ${S.alPrev.count} array${S.alPrev.count===1?'':'s'} found`:'No camera points yet: Scan shows what the camera finds, without toolpaths'):(sc?`Scan ${sc.scan_id?('#'+sc.scan_id+' '):''}at ${sc.time} · ${sc.substrates.length} array${sc.substrates.length===1?'':'s'}`:'No scan yet');
   $('#alScrubSk').textContent=`${fmt(a.scrub_tab.area.w,1)} × ${fmt(a.scrub_tab.area.h,1)} mm, ${a.scrub_tab.bridges} bridge${a.scrub_tab.bridges===1?'':'s'}`;
   const m=$('#alMsg');
   if(sc&&sc.warnings.length){m.textContent=sc.warnings.join(' ');m.className='note warn'}
   else if(sc&&sc.stale){m.textContent='Patterns or checks changed since this photo: the numbers below are updated, the picture is not. Scan again to redraw.';m.className='note'}
   else if(!m.dataset.keep){m.textContent='';m.className='note'}
-  $('#alImg').style.display=sc?'block':'none';if(sc&&$('#alImg').dataset.src!==sc.image){$('#alImg').src=sc.image;$('#alImg').dataset.src=sc.image}
+  const shown=sc?sc.image:(!a.camera.fit&&S.alPrev?S.alPrev.image:null);
+  $('#alImg').style.display=shown?'block':'none';if(shown&&$('#alImg').dataset.src!==shown){$('#alImg').src=shown;$('#alImg').dataset.src=shown}
   $('#alLegend').hidden=!sc;
+  if(!sc&&!a.camera.fit&&S.alPrev){m.textContent=S.alPrev.count?`Green: each array the camera found (A1, A2, …), size in pixels: ${S.alPrev.sizes_px.map((s,i)=>'A'+(i+1)+' '+s[0]+' × '+s[1]).join(', ')}. Teach the camera points to get millimetres, turns and toolpaths.`:'No arrays found. Check the lighting and focus on the Camera tab, and that the arrays are in view.';m.className='note '+(S.alPrev.count?'':'warn')}
   const subs=sc?sc.substrates:[];
   $('#alTab').hidden=!subs.length;
   const ids=subs.map(x=>x.id);alSel=new Set([...alSel].filter(i=>ids.includes(i)));
@@ -1164,7 +1166,7 @@ $('#alPtsClear').onclick=()=>{if(!confirm('Delete every camera point? Scans need
   run('Camera points cleared',async()=>{S.al=await post('/api/align/camera/delete',{all:true});paintAlign()})};
 $('#alScan').onclick=()=>run('Substrates scanned',async()=>{
   $('#alMsg').textContent='Taking the photo and finding the arrays…';$('#alMsg').className='note';
-  S.al=await post('/api/align/scan');paintAlign()});
+  const r=await post('/api/align/scan');S.alPrev=r.preview||null;$('#alMsg').textContent='';S.al=r;paintAlign()});
 $('#alAll').onchange=e=>{const subs=(S.al&&S.al.scan)?S.al.scan.substrates:[];alSel=new Set(e.target.checked?subs.map(x=>x.id):[]);paintAlign()};
 $('#alRows').onclick=e=>{
   const c=e.target.closest('[data-sel]');

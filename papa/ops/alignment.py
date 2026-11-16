@@ -206,3 +206,16 @@ def scan(rgb: np.ndarray, axes: dict[str, str], printer_axes: corr.PrinterAxes,
         arrays_px.append(c.from_plate(printer_axes.mm_to_plate(ordered_mm)))
         placements.append(p)
     return ScanResult(size, arrays_px, placements, source, warnings)
+
+
+def detect_only(rgb: np.ndarray, params: elec.ElectrodeParams | None = None) -> list[np.ndarray]:
+    """Arrays in one frame as photo-pixel corners, with no printer mapping.
+    For checking the camera and the copper settings before camera points exist."""
+    size = (rgb.shape[1], rgb.shape[0])
+    if not corr.supported(size):
+        raise ValueError(f"no lens calibration for {size[0]} x {size[1]} frames")
+    c = corr.get_correction(size)
+    found = elec.detect(c.correct_image(rgb), params)
+    out = [c.from_plate(c.corrected_to_plate(a.corners)) for a in found]
+    out.sort(key=lambda px: (round(float(px[:, 1].mean()) / 100), float(px[:, 0].mean())))
+    return out

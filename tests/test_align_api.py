@@ -45,10 +45,15 @@ def aligned(api):
     return api
 
 
-def test_scan_needs_camera_points(api):
+def test_scan_without_camera_points_shows_what_the_camera_finds(api):
     api.post("/api/align/camera/delete", json={"all": True})
-    r = api.post("/api/align/scan", json={"save": False})
-    assert r.status_code == 400 and "Teach the camera points" in r.json()["error"]
+    pa = corr.PrinterAxes.from_detection({"camera_to_machine": {
+        "points_px": [p for p, _ in consistent_points()], "points_mm": [m for _, m in consistent_points()]}})
+    api.server.hub.devices["camera"] = api.server.Device(
+        "camera", lambda: MockCamera(arrays=ARRAYS, axes=api.server.hub.machine.axes, printer_axes=lambda: pa))
+    j = api.post("/api/align/scan", json={"save": False}).json()
+    assert j["scan"] is None and j["preview"]["count"] == 3
+    assert j["preview"]["image"].startswith("data:image/jpeg;base64,")
 
 
 def test_teaching_saves_points_and_reports_the_fit(api):

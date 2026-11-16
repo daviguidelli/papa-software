@@ -1459,6 +1459,35 @@ def _closeups(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.PrinterAx
     return out
 
 
+def _detect_preview(rgb: Any) -> dict:
+    """What the camera finds, in pixels only: for before the camera points are taught."""
+    import base64
+
+    import cv2
+    import numpy as np
+
+    params = ElectrodeParams.from_cfg(hub.cal.detection.get("electrodes"))
+    try:
+        found = alignmod.detect_only(rgb, params)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    t = max(1, img.shape[1] // 900)
+    for i, px in enumerate(found, 1):
+        cv2.polylines(img, [np.round(px * 8).astype(np.int32)], True, (80, 220, 80), t, cv2.LINE_AA, shift=3)
+        x, y = px[:, 0].min(), px[:, 1].min()
+        cv2.putText(img, f"A{i}", (int(x), int(y) - 6 * t), cv2.FONT_HERSHEY_SIMPLEX, 0.6 * t,
+                    (80, 220, 80), t, cv2.LINE_AA)
+    w = img.shape[1]
+    out_w = min(1600, w)
+    small = cv2.resize(img, (out_w, round(img.shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    sizes = [[round(float(np.linalg.norm(px[1] - px[0])), 1), round(float(np.linalg.norm(px[2] - px[1])), 1)]
+             for px in found]
+    return {"count": len(found), "sizes_px": sizes, "time": time.strftime("%H:%M:%S"),
+            "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()}
+
+
 async def _grab_rgb() -> Any:
     """One full-size RGB frame, from this Pi's camera or the camera host."""
     import cv2
@@ -1493,9 +1522,10 @@ async def align_scan(payload: dict | None = None) -> dict:
 
     hub.require_idle()
     axes_fit, err = _camera_axes()
-    if axes_fit is None:
-        raise HTTPException(400, f"Teach the camera points first: {err}")
     rgb = await _grab_rgb()
+    if axes_fit is None:
+        hub.align_scan = None
+        return {**_align_info(), "preview": await asyncio.to_thread(_detect_preview, rgb)}
 
     def work() -> dict:
         params = ElectrodeParams.from_cfg(hub.cal.detection.get("electrodes"))
