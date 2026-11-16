@@ -229,3 +229,48 @@ def test_corners_can_be_set_added_and_removed_by_hand(aligned):
     j = aligned.post("/api/align/substrate/S2/remove").json()
     assert [s["id"] for s in j["scan"]["substrates"]] == ["S1", "S2", "S3"]
     assert j["patterns"]["S2"]["name"] == "third" and "S3" not in j["patterns"]
+
+
+def _data_url(path):
+    import base64
+    return "data:image/png;base64," + base64.b64encode(open(path, "rb").read()).decode()
+
+
+def test_reference_flow_moves_the_gcode_onto_each_substrate(aligned, monkeypatch, tmp_path):
+    a = aligned
+    monkeypatch.setattr(a.server, "STATE_DIR", tmp_path)
+    j = a.get("/api/reference").json()
+    assert not j["ready"] and j["photo"] is None
+    j = a.post("/api/reference/photo", json={"image": _data_url("tests/data/reference_substrate.png")}).json()
+    assert j["array_found"] and j["photo"].startswith("data:image/jpeg")
+    xs = [p[0] for p in j["array"]]
+    assert min(xs) == pytest.approx(321, abs=6) and max(xs) == pytest.approx(662, abs=6)
+    j = a.post("/api/reference/corners", json={"corners": [[663, 806], [323, 463], [663, 463], [323, 806]]}).json()
+    assert j["red_corner"] == 2 and j["corners"][0] == [323, 463]          # sorted TL, TR, BR, BL
+    a.post("/api/reference/placement", json={"x_min": 162.5, "y_min": 162.1, "size": 25})
+    g = "G21\nG90\nG0 Z10\nG0 X162.65 Y174.6\nG1 Z4.5\nG1 X187.35 Y174.6 F600\nG0 Z10\n"
+    r = a.post("/api/reference/gcode", json={"text": "G20\nG1 X1", "name": "bad.gcode"})
+    assert r.status_code == 400
+    j = a.post("/api/reference/gcode", json={"text": g, "name": "clear.gcode"}).json()
+    assert j["ready"] and j["gcode"]["moves"] >= 1 and j["gcode"]["x"] == [162.65, 187.35]
+
+    subs = a.post("/api/align/scan", json={"save": False}).json()["scan"]["substrates"]
+    for s, arr in zip(subs, ARRAYS):
+        m = s["mount"]
+        assert m and m["source"] == "estimated from the array" and m["gcode_ready"]
+        assert m["rotation_deg"] == pytest.approx(arr.rot_deg, abs=0.7)    # reference array is ~square to its glass
+    r = a.get("/api/align/substrate/S2/gcode")
+    assert r.status_code == 200 and "S2_clear.gcode" in r.headers["content-disposition"]
+    body = r.text
+    assert "; PAPA: reference toolpath moved onto substrate S2" in body and "G1 Z4.5" in body
+
+    # glass corners by hand override the estimate and survive a reference change
+    v = a.get("/api/align/view", params={"sid": "S1", "what": "mount"}).json()
+    cv = (np.asarray(v["corners"]) / v["scale"] + v["offset"]).tolist()
+    j = a.post("/api/align/substrate/S1/mount", json={"corners": cv}).json()
+    s1 = next(s for s in j["scan"]["substrates"] if s["id"] == "S1")
+    assert s1["mount"]["source"] == "set by hand"
+    j = a.post("/api/reference/array", json={"corners": [[320, 505], [662, 505], [662, 775], [320, 775]]}).json()
+    assert j["array"][0] == [320, 505]
+    s1 = next(s for s in a.get("/api/align").json()["scan"]["substrates"] if s["id"] == "S1")
+    assert s1["mount"]["source"] == "set by hand"

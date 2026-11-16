@@ -154,6 +154,7 @@ kbd{font:10px var(--mono);border:1px solid var(--line2);padding:0 4px;color:var(
       <div class="row" id="fsCornerTools">
         <button class="sm" id="fsEditCorners" disabled>Set its 4 corners</button>
         <button class="sm" id="fsAdd">+ Add a substrate</button>
+        <button class="sm" id="fsGlass" disabled title="The clear glass square, used to compare with the reference substrate and move its G-code">Set its glass corners</button>
       </div>
       <button class="sm bad" id="fsRemove" disabled>Not a substrate: remove it from this scan</button>
       <span class="cap" style="margin-bottom:-6px">Same geometry on another substrate?</span>
@@ -958,8 +959,8 @@ function fsStat(){
   if(!FS||!FS.list.length)return;
   fsThumbs();
   const cm=!!FS.cm;$('#fsCornerBox').hidden=!cm;$('#fsCornerTools').hidden=cm;
-  if(cm){$('#fsCornerNote').innerHTML=(FS.cm.kind==='add'?'<b>New substrate.</b> Click its four corners on the photo':'<b>'+FS.cm.sid+'</b>: drag the four corners onto the array')+' (any order; scroll to zoom, hold Space to pan). '+S.corners.length+' / 4 placed.';$('#fsCornerUse').disabled=S.corners.length!==4;$('#fsSave').disabled=$('#fsSaveNext').disabled=$('#fsCopyNext').disabled=$('#fsCopy').disabled=true;return}
-  $('#fsEditCorners').disabled=!FS.id;$('#fsRemove').disabled=!FS.id;
+  if(cm){$('#fsCornerNote').innerHTML=(FS.cm.kind==='add'?'<b>New substrate.</b> Click its four corners on the photo':FS.cm.kind==='mount'?'<b>'+FS.cm.sid+' glass</b>: drag the four corners onto the corners of the clear glass square (not the array)'+(FS.cm.estimated?'. They start where the glass is expected from the array; move them if they are off':''):'<b>'+FS.cm.sid+'</b>: drag the four corners onto the array')+' (any order; scroll to zoom, hold Space to pan). '+S.corners.length+' / 4 placed.';$('#fsCornerUse').disabled=S.corners.length!==4;$('#fsSave').disabled=$('#fsSaveNext').disabled=$('#fsCopyNext').disabled=$('#fsCopy').disabled=true;return}
+  $('#fsEditCorners').disabled=!FS.id;$('#fsRemove').disabled=!FS.id;$('#fsGlass').disabled=!FS.id;
   const i=fsIdx(),on=!!FS.id&&S.mode==='sub';
   $('#fsHead').textContent=FS.id?`${FS.id}  ·  ${i+1} of ${FS.list.length}`:'';
   $('#fsPrev').disabled=i<=0;$('#fsNext').disabled=i<0||i>=FS.list.length-1;
@@ -1037,16 +1038,17 @@ addEventListener('keydown',e=>{
 async function fsCorners(kind){
   if(FS.dirty&&FS.id&&!confirm(FS.id+' has changes that are not saved. Continue without saving them?'))return;
   try{
-    const r=await fetch('/api/align/view'+(kind==='edit'?'?sid='+encodeURIComponent(FS.id):''));const j=await r.json();
+    const r=await fetch('/api/align/view'+(kind==='edit'?'?sid='+encodeURIComponent(FS.id):kind==='mount'?'?what=mount&sid='+encodeURIComponent(FS.id):''));const j=await r.json();
     if(!r.ok)throw new Error(j.error||r.status);
-    S.src=await loadImageURL(j.image);S.srcName=kind==='edit'?FS.id:'scan photo';
+    S.src=await loadImageURL(j.image);S.srcName=kind==='add'?'scan photo':FS.id;
     S.corners=j.corners?j.corners.map(p=>[+p[0],+p[1]]):[];S.sorted=!!j.corners;
-    FS.cm={kind,sid:FS.id,offset:j.offset,scale:j.scale};FS.dirty=false;
+    FS.cm={kind,sid:FS.id,offset:j.offset,scale:j.scale,estimated:kind==='mount'};FS.dirty=false;
     setMode('photo');fsStat();
   }catch(e){toast('Could not open the photo: '+(e.message||e))}
 }
 $('#fsEditCorners').onclick=()=>fsCorners('edit');
 $('#fsAdd').onclick=()=>fsCorners('add');
+$('#fsGlass').onclick=()=>fsCorners('mount');
 $('#fsCornerReset').onclick=()=>{S.corners=[];S.sorted=false;updateUI();req()};
 $('#fsCornerCancel').onclick=async()=>{const id=FS.cm.sid;FS.cm=null;FS.dirty=false;if(id)await fsLoad(id);else if(FS.list.length)await fsLoad(FS.list[0].id)};
 $('#fsCornerUse').onclick=async()=>{
@@ -1054,11 +1056,11 @@ $('#fsCornerUse').onclick=async()=>{
   if(!S.sorted)sortCorners();
   const cm=FS.cm,pts=S.corners.map(p=>[p[0]/cm.scale+cm.offset[0],p[1]/cm.scale+cm.offset[1]]);
   try{
-    const url=cm.kind==='add'?'/api/align/substrate/add':'/api/align/substrate/'+encodeURIComponent(cm.sid)+'/corners';
+    const url=cm.kind==='add'?'/api/align/substrate/add':'/api/align/substrate/'+encodeURIComponent(cm.sid)+(cm.kind==='mount'?'/mount':'/corners');
     const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({corners:pts})});
     const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);
     const id=cm.kind==='add'?j.added:cm.sid;FS.cm=null;
-    toast(cm.kind==='add'?'Added '+id:'Corners of '+id+' saved');
+    toast(cm.kind==='add'?'Added '+id:cm.kind==='mount'?'Glass corners of '+id+' saved':'Corners of '+id+' saved');
     await fsList();await fsLoad(id);
   }catch(e){toast('Not saved: '+(e.message||e))}
 };
@@ -1104,9 +1106,11 @@ $('#fsCopy').onclick=async()=>{
 $('#fsRefresh').onclick=async()=>{if(await fsList()&&!FS.list.some(s=>s.id===FS.id))fsLoad(FS.list[0].id)};
 async function fsStart(){
   if(!await fsList())return false;
-  const want=new URLSearchParams(location.search).get('substrate');
+  const q=new URLSearchParams(location.search),want=q.get('substrate'),glass=q.get('glass');
   const first=(want&&FS.list.find(s=>s.id===want))||FS.list.find(s=>!FS.patterns[s.id])||FS.list[0];
-  await fsLoad(first.id);return true;
+  await fsLoad(first.id);
+  if(want&&glass&&FS.id===want)await fsCorners('mount');
+  return true;
 }
 
 /* ---------- init ---------- */

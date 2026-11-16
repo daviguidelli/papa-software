@@ -367,3 +367,34 @@ def _detect(rgb: np.ndarray, p: ElectrodeParams) -> list[Array]:
         found.append(Array(corners, tuple(map(float, corners.mean(0))), float(copper)))
     found.sort(key=lambda a: -cv2.contourArea(a.corners.astype(np.float32)))
     return found
+
+
+def detect_loose(rgb: np.ndarray, p: ElectrodeParams | None = None) -> list[Array]:
+    """A gentler search for close-up photos (a phone photo of one substrate),
+    where the lines can look brighter than the gaps and the strict line test
+    of detect() fails: the biggest roughly rectangular copper-coloured patch.
+    Tries detect() first."""
+    found = detect(rgb, p)
+    if found:
+        return found
+    p = p or ElectrodeParams()
+    loose = ElectrodeParams(**{**p.__dict__, "s_min": min(p.s_min, 30), "v_min": min(p.v_min, 60)})
+    h, w = rgb.shape[:2]
+    m = copper_mask(rgb, loose)
+    k = max(3, int(round(p.close_frac * w)) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel)
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel)
+    contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    out = []
+    for c in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+        area = cv2.contourArea(c)
+        if area < 0.005 * w * h:
+            break
+        rect = cv2.minAreaRect(c)
+        rw, rh = rect[1]
+        if min(rw, rh) == 0 or area / (rw * rh) < 0.5 or max(rw, rh) / min(rw, rh) > p.max_aspect:
+            continue
+        corners = cv2.boxPoints(rect).astype(np.float64)
+        out.append(Array(corners, tuple(map(float, corners.mean(0))), float(area / (rw * rh))))
+    return out[:1]

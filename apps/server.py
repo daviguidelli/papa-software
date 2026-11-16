@@ -25,6 +25,7 @@ from papa.ops import autonomous as automod
 from papa.ops import scrub as scrubmod
 from papa.ops import routine as routinemod
 from papa.ops import alignment as alignmod
+from papa.ops import reference as refmod
 from papa.vision import correction as corrmod
 from papa.vision.electrodes import ElectrodeParams
 from papa.ops.guard import Guard, GuardedPrinter, ZFloorError
@@ -1547,6 +1548,9 @@ def _align_info() -> dict:
             sub["problems"] = list(sub["warnings"]) + bad
             sub["crop"] = sc.get("crops", {}).get(sid)
             sub["manual"] = sid in sc.get("manual", set())
+            mi = (sc.get("mount_info") or [None] * len(d["substrates"]))[int(sid[1:]) - 1]
+            sub["mount"] = None if mi is None else {"source": mi["source"], **mi["match"].as_dict(),
+                                                    "gcode_ready": _ref_ready()[0]}
             pat = st["patterns"].get(sid)
             sub["pattern_name"] = (pat or {}).get("name") or ("own pattern" if pat else "Scrub tab sketch")
         info["scan"] = {**d, "time": sc["time"], "scan_id": sc.get("scan_id"), "image": sc["image"],
@@ -1631,8 +1635,46 @@ def _draw_alignment(img: Any, result: alignmod.ScanResult, box: tuple[float, flo
     return img
 
 
+def _draw_mounts(img: Any, sc: dict | None, axes_fit: corrmod.PrinterAxes, box: tuple, ppm: float,
+                 only: str | None = None) -> None:
+    """Each substrate's glass outline (cyan, red ring on the dot corner) and the
+    reference G-code moved onto it (orange), on a printer view."""
+    import cv2
+    import numpy as np
+
+    if not sc or not sc.get("mount_info"):
+        return
+    x0, x1, y0, y1 = box
+    c = corrmod.get_correction(sc["rgb"].shape[1::-1])
+    gcode = _ref_gcode()
+
+    def at(mm: Any) -> Any:
+        m = np.asarray(mm, dtype=np.float64).reshape(-1, 2)
+        return np.c_[(m[:, 0] - x0) * ppm, (y1 - m[:, 1]) * ppm]
+
+    for i, info in enumerate(sc["mount_info"]):
+        sid = f"S{i + 1}"
+        if info is None or (only and sid != only):
+            continue
+        mm = axes_fit.plate_to_mm(c.corrected_to_plate(np.asarray(info["corners_view"])))
+        t = 1 if only else max(1, img.shape[1] // 1500)
+        if gcode:
+            try:
+                _, segs = refmod.transform_gcode(gcode, info["match"].R, info["match"].t)
+                for sg in segs:
+                    if sg["cut"]:
+                        p = np.round(at([[sg["x0"], sg["y0"]], [sg["x1"], sg["y1"]]]) * 8).astype(np.int32)
+                        cv2.line(img, tuple(p[0]), tuple(p[1]), (30, 140, 255), 1, cv2.LINE_AA, shift=3)
+            except refmod.ReferenceError:
+                pass
+        cv2.polylines(img, [np.round(at(mm) * 8).astype(np.int32)], True, (255, 220, 60), t, cv2.LINE_AA, shift=3)
+        if info.get("red_view") is not None:
+            r = at(axes_fit.plate_to_mm(c.corrected_to_plate(np.asarray([info["red_view"]]))))[0]
+            cv2.circle(img, (int(r[0]), int(r[1])), 8 * t, (0, 0, 255), t + 1, cv2.LINE_AA)
+
+
 def _scan_views(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.PrinterAxes,
-                closeup_px: int = 360) -> tuple[Any, dict[str, Any]]:
+                sc: dict | None = None, closeup_px: int = 360) -> tuple[Any, dict[str, Any]]:
     """The overview and one close-up per substrate, both square to the printer."""
     import cv2
     import numpy as np
@@ -1642,6 +1684,7 @@ def _scan_views(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.Printer
               1 / (corrmod.get_correction(result.photo_size)._step * axes_fit.mm_per_plate_px))
     over = cv2.cvtColor(alignmod.printer_view(rgb, axes_fit, box, ppm), cv2.COLOR_RGB2BGR)
     over = _draw_alignment(over, result, box, ppm)
+    _draw_mounts(over, sc, axes_fit, box, ppm)
     crops = {}
     for p in result.placements:
         c = np.asarray(p.corners_mm)
@@ -1651,6 +1694,7 @@ def _scan_views(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.Printer
         k = closeup_px / (b[1] - b[0])
         img = cv2.cvtColor(alignmod.printer_view(rgb, axes_fit, b, k), cv2.COLOR_RGB2BGR)
         crops[p.id] = _draw_alignment(img, result, b, k, only=p.id, overview=False)
+        _draw_mounts(crops[p.id], sc, axes_fit, b, k, only=p.id)
     return over, crops
 
 
@@ -1697,10 +1741,11 @@ def _render_scan(sc: dict) -> None:
     rgb, views = sc["rgb"], sc["views"]
     axes_fit, _ = _camera_axes()
     sc["stale"] = False
+    _mounts(sc)
     if axes_fit is not None:
         result = alignmod.place_views(views, rgb.shape[1::-1], hub.machine.axes, axes_fit,
                                       _align_settings(), _scrub_tab_pattern())
-        drawn, closeups = _scan_views(rgb, result, axes_fit)    # square to the printer's X and Y
+        drawn, closeups = _scan_views(rgb, result, axes_fit, sc)    # square to the printer's X and Y
         sc["result"], sc["drawn"] = result, drawn
         sc["crops"] = {sid: _jpeg(img, 88) for sid, img in closeups.items()}
     else:
@@ -1877,11 +1922,12 @@ def _check_corners(sc: dict, corners: Any) -> Any:
 
 
 @app.get("/api/align/view")
-def align_view(sid: str = "", margin: float = 1.5) -> dict:
+def align_view(sid: str = "", margin: float = 1.5, what: str = "array") -> dict:
     """The corrected view of the last scan for picking corners: around one
     substrate (sid, with its current corners) or the whole photo (to add one).
     Coordinates in the reply: view px = picture px / scale + offset."""
     import cv2
+    import numpy as np
 
     sc = _scan_or_400()
     view = _view_image(sc)
@@ -1889,6 +1935,11 @@ def align_view(sid: str = "", margin: float = 1.5) -> dict:
     corners = None
     if sid:
         v = sc["views"][_sid_index(sc, sid)]
+        if what == "mount":                 # glass corners: hand-set or estimated, else start from the array
+            _mounts(sc)
+            mv = sc["mounts"][_sid_index(sc, sid)]
+            v = np.asarray(mv) if mv is not None else v
+            margin = max(margin, 1.2)
         (x0, y0), (x1, y1) = v.min(0), v.max(0)
         m = margin * max(x1 - x0, y1 - y0) / 2
         X0, Y0, X1, Y1 = int(max(0, x0 - m)), int(max(0, y0 - m)), int(min(W, x1 + m)), int(min(H, y1 + m))
@@ -1913,6 +1964,8 @@ def align_set_corners(sid: str, payload: dict) -> dict:
     i = _sid_index(sc, sid)
     sc["views"][i] = _check_corners(sc, payload.get("corners"))
     sc.setdefault("manual", set()).add(sid)
+    if sc.get("mounts") and sid not in sc.get("mount_manual", set()):
+        sc["mounts"][i] = None              # estimated glass follows the corrected array
     _render_scan(sc)
     return _align_info()
 
@@ -1925,6 +1978,8 @@ def align_add_substrate(payload: dict) -> dict:
     sc = _scan_or_400()
     sc["views"].append(_check_corners(sc, payload.get("corners")))
     sid = f"S{len(sc['views'])}"
+    if sc.get("mounts") is not None:
+        sc["mounts"].append(None)
     sc.setdefault("manual", set()).add(sid)
     _render_scan(sc)
     return {**_align_info(), "added": sid}
@@ -1939,6 +1994,10 @@ def align_remove_substrate(sid: str) -> dict:
     i = _sid_index(sc, sid)
     n = len(sc["views"])
     del sc["views"][i]
+    if sc.get("mounts") is not None and i < len(sc["mounts"]):
+        del sc["mounts"][i]
+        sc["mount_manual"] = {f"S{int(m[1:]) - (1 if int(m[1:]) > i + 1 else 0)}"
+                              for m in sc.get("mount_manual", set()) if m != sid}
     patterns = dict(_align_settings()["patterns"])
     patterns.pop(sid, None)
     for k in range(i + 2, n + 1):
@@ -1957,6 +2016,311 @@ def align_remove_substrate(sid: str) -> dict:
     _patch_calibration({"alignment": raw})
     _render_scan(sc)
     return _align_info()
+
+
+# ---------- reference substrate: known glass corners + known G-code toolpath ----------
+
+def _ref_dir() -> Path:
+    d = STATE_DIR / "reference"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _ref_cfg() -> dict:
+    return dict(hub.cal.raw.get("reference") or {})
+
+
+def _ref_photo() -> Any:
+    import cv2
+
+    p = _ref_dir() / "photo.jpg"
+    if not p.exists():
+        return None
+    bgr = cv2.imread(str(p))
+    return None if bgr is None else cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def _ref_gcode() -> str | None:
+    p = _ref_dir() / "toolpath.gcode"
+    return p.read_text() if p.exists() else None
+
+
+def _ref_ready() -> tuple[bool, list[str]]:
+    r = _ref_cfg()
+    missing = []
+    if _ref_photo() is None:
+        missing.append("a photo of the reference substrate")
+    if not r.get("photo_corners"):
+        missing.append("its 4 glass corners")
+    elif r.get("red_corner") is None:
+        missing.append("which corner has the red dot")
+    if not r.get("placement"):
+        missing.append("where that glass was on the printer for the G-code")
+    if _ref_gcode() is None:
+        missing.append("the G-code toolpath")
+    return not missing, missing
+
+
+def _ref_info() -> dict:
+    import cv2
+    import numpy as np
+
+    r = _ref_cfg()
+    photo = _ref_photo()
+    ready, missing = _ref_ready()
+    info: dict[str, Any] = {"ready": ready, "missing": missing, "photo": None, "photo_size": None,
+                            "corners": r.get("photo_corners"), "red_corner": r.get("red_corner"),
+                            "placement": r.get("placement"), "gcode": None, "array_found": bool(r.get("array_photo")),
+                            "array": r.get("array_photo")}
+    g = _ref_gcode()
+    if g is not None:
+        try:
+            st = refmod.gcode_stats(g)
+            info["gcode"] = {"name": r.get("gcode_name") or "toolpath.gcode", "moves": st.moves,
+                             "x": [round(v, 3) for v in st.x], "y": [round(v, 3) for v in st.y], "z_cut": st.z_cut}
+        except refmod.ReferenceError as exc:
+            info["gcode"] = {"name": r.get("gcode_name"), "error": str(exc)}
+    if photo is not None:
+        h, w = photo.shape[:2]
+        info["photo_size"] = [w, h]
+        img = cv2.cvtColor(photo, cv2.COLOR_RGB2BGR)
+        t = max(1, w // 700)
+        c = np.asarray(r["photo_corners"]) if r.get("photo_corners") else None
+        if c is not None and r.get("placement") and g is not None and info["gcode"] and "error" not in info["gcode"]:
+            Hinv = np.linalg.inv(refmod.photo_to_mm(c, r["placement"]))       # mm -> photo
+            _, segs = refmod.transform_gcode(g)
+            for sg in segs:
+                pts = cv2.perspectiveTransform(np.float64([[[sg["x0"], sg["y0"]], [sg["x1"], sg["y1"]]]]), Hinv)[0]
+                cv2.line(img, tuple(np.round(pts[0]).astype(int)), tuple(np.round(pts[1]).astype(int)),
+                         (30, 120, 255) if sg["cut"] else (200, 200, 200), 1, cv2.LINE_AA)
+        if r.get("array_photo"):
+            cv2.polylines(img, [np.round(np.asarray(r["array_photo"])).astype(np.int32)], True, (80, 200, 80), t, cv2.LINE_AA)
+        if c is not None:
+            cv2.polylines(img, [np.round(c).astype(np.int32)], True, (255, 200, 0), t + 1, cv2.LINE_AA)
+            for i, (x, y) in enumerate(c):
+                cv2.putText(img, ["TL", "TR", "BR", "BL"][i], (int(x) + 6, int(y) - 6), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5 * t, (255, 200, 0), t, cv2.LINE_AA)
+            if r.get("red_corner") is not None:
+                x, y = c[int(r["red_corner"])]
+                cv2.circle(img, (int(x), int(y)), 14 * t, (0, 0, 255), 2 * t, cv2.LINE_AA)
+        info["photo"] = _jpeg(img, 88)
+    return info
+
+
+@app.get("/api/reference")
+def reference_info() -> dict:
+    return _ref_info()
+
+
+@app.post("/api/reference/photo")
+def reference_photo(payload: dict) -> dict:
+    """The reference substrate's photo, sent as a data URL (any camera)."""
+    import base64
+
+    import cv2
+    import numpy as np
+
+    hub.require_idle()
+    try:
+        data = base64.b64decode(str(payload["image"]).split(",", 1)[-1])
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, "send the photo as image: a data URL") from exc
+    bgr = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise HTTPException(400, "that file is not a photo this can read (use JPEG or PNG)")
+    scale = min(1.0, 2000 / max(bgr.shape[:2]))           # plenty for clicking corners
+    if scale < 1:
+        bgr = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    cv2.imwrite(str(_ref_dir() / "photo.jpg"), bgr, [cv2.IMWRITE_JPEG_QUALITY, 93])
+    found = alignmod.elec.detect_loose(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    r = _ref_cfg()
+    r.update({"photo_corners": None, "red_corner": None,
+              "array_photo": alignmod.view_order(found[0].corners).round(2).tolist() if found else None})
+    _patch_calibration({"reference": r})
+    return _ref_info()
+
+
+@app.post("/api/reference/corners")
+def reference_corners(payload: dict) -> dict:
+    """The reference glass's 4 corners on its photo (any order); the red dot
+    is looked for next to them."""
+    hub.require_idle()
+    photo = _ref_photo()
+    if photo is None:
+        raise HTTPException(400, "Upload the reference photo first.")
+    try:
+        c = refmod.image_order(payload["corners"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, "send corners as four [x, y] points") from exc
+    r = _ref_cfg()
+    r["photo_corners"] = c.round(2).tolist()
+    r["red_corner"] = refmod.red_corner(photo, c)
+    _patch_calibration({"reference": r})
+    _refresh_scan()
+    return _ref_info()
+
+
+@app.post("/api/reference/array")
+def reference_array(payload: dict) -> dict:
+    """The reference electrode array's 4 corners on its photo, set by hand
+    (when the automatic outline is off)."""
+    hub.require_idle()
+    if _ref_photo() is None:
+        raise HTTPException(400, "Upload the reference photo first.")
+    try:
+        c = refmod.image_order(payload["corners"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, "send corners as four [x, y] points") from exc
+    r = _ref_cfg()
+    r["array_photo"] = c.round(2).tolist()
+    _patch_calibration({"reference": r})
+    _refresh_scan()
+    return _ref_info()
+
+
+@app.post("/api/reference/red")
+def reference_red(payload: dict) -> dict:
+    hub.require_idle()
+    i = int(payload.get("corner", -1))
+    if i not in range(4):
+        raise HTTPException(400, "corner is 0 (top-left), 1 (top-right), 2 (bottom-right) or 3 (bottom-left)")
+    r = _ref_cfg()
+    r["red_corner"] = i
+    _patch_calibration({"reference": r})
+    _refresh_scan()
+    return _ref_info()
+
+
+@app.post("/api/reference/placement")
+def reference_placement(payload: dict) -> dict:
+    """Where the reference glass was on the printer when the G-code was made:
+    a square from (x_min, y_min), size mm a side, square to the printer."""
+    hub.require_idle()
+    try:
+        pl = {k: float(payload[k]) for k in ("x_min", "y_min", "size")}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, "send x_min, y_min and size in mm") from exc
+    if not 1 <= pl["size"] <= 100:
+        raise HTTPException(400, "size must be 1 to 100 mm")
+    r = _ref_cfg()
+    r["placement"] = pl
+    _patch_calibration({"reference": r})
+    _refresh_scan()
+    return _ref_info()
+
+
+@app.post("/api/reference/gcode")
+def reference_gcode(payload: dict) -> dict:
+    """The known toolpath for the reference substrate, as text."""
+    hub.require_idle()
+    text = str(payload.get("text") or "")
+    try:
+        refmod.gcode_stats(text)
+    except refmod.ReferenceError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    (_ref_dir() / "toolpath.gcode").write_text(text)
+    r = _ref_cfg()
+    r["gcode_name"] = str(payload.get("name") or "toolpath.gcode")
+    _patch_calibration({"reference": r})
+    _refresh_scan()
+    return _ref_info()
+
+
+def _mounts(sc: dict) -> None:
+    """Each substrate's glass corners (estimated from its array through the
+    reference, unless set by hand) and its match to the reference."""
+    import numpy as np
+
+    n = len(sc["views"])
+    sc.setdefault("mounts", [None] * n)
+    sc["mounts"] = (sc["mounts"] + [None] * n)[:n]
+    sc.setdefault("mount_manual", set())
+    sc["mount_info"] = [None] * n
+    r = _ref_cfg()
+    key = repr((r.get("array_photo"), r.get("photo_corners"), r.get("placement")))
+    if sc.get("mount_ref_key") != key:   # reference changed: re-estimate the glass not set by hand
+        sc["mounts"] = [m if f"S{i + 1}" in sc["mount_manual"] else None for i, m in enumerate(sc["mounts"])]
+        sc["mount_ref_key"] = key
+    axes_fit, _ = _camera_axes()
+    if axes_fit is None or not r.get("photo_corners") or not r.get("placement"):
+        return
+    size = sc["rgb"].shape[1::-1]
+    c = corrmod.get_correction(size)
+
+    def view_to_mm(v: Any) -> Any:
+        return axes_fit.plate_to_mm(c.corrected_to_plate(np.asarray(v)))
+
+    def mm_to_view(m: Any) -> Any:
+        return (axes_fit.mm_to_plate(np.asarray(m)) - c._origin) / c._step
+
+    ref_mm = refmod.reference_mm(r["placement"])
+    H = refmod.photo_to_mm(r["photo_corners"], r["placement"])
+    ref_array = None
+    if r.get("array_photo"):
+        import cv2
+        ref_array = cv2.perspectiveTransform(np.float64([r["array_photo"]]), H)[0]
+    view = _view_image(sc)
+    for i, v in enumerate(sc["views"]):
+        sid = f"S{i + 1}"
+        if sc["mounts"][i] is None and ref_array is not None:
+            # same glass-to-array layout as the reference: move the reference glass with the array
+            arr = view_to_mm(v)
+            m = refmod.match(ref_array, 0, arr, None, float(np.linalg.norm(ref_array[1] - ref_array[0])), 1e9)
+            sc["mounts"][i] = mm_to_view(ref_mm @ m.R.T + m.t)
+        mv = sc["mounts"][i]
+        if mv is None:
+            continue
+        mmc = view_to_mm(mv)
+        red_i = refmod.red_corner(view, mv)
+        try:
+            mt = refmod.match(ref_mm, int(r["red_corner"]) if r.get("red_corner") is not None else 0, mmc,
+                              None if red_i is None else mmc[red_i], float(r["placement"]["size"]))
+        except refmod.ReferenceError:
+            continue
+        sc["mount_info"][i] = {"corners_view": np.asarray(mv).round(2).tolist(),
+                               "source": "set by hand" if sid in sc["mount_manual"] else "estimated from the array",
+                               "match": mt, "red_view": None if red_i is None else np.asarray(mv)[red_i].round(1).tolist()}
+
+
+@app.post("/api/align/substrate/{sid}/mount")
+def align_set_mount(sid: str, payload: dict) -> dict:
+    """Set a substrate's glass corners by hand (corrected-view px of the scan photo)."""
+    hub.require_idle()
+    sc = _scan_or_400()
+    i = _sid_index(sc, sid)
+    _mounts(sc)
+    sc["mounts"][i] = _check_corners(sc, payload.get("corners"))
+    sc["mount_manual"].add(sid)
+    _render_scan(sc)
+    return _align_info()
+
+
+@app.get("/api/align/substrate/{sid}/gcode")
+def align_substrate_gcode(sid: str) -> Response:
+    """The reference G-code moved onto this substrate's glass."""
+    sc = _scan_or_400()
+    i = _sid_index(sc, sid)
+    ready, missing = _ref_ready()
+    if not ready:
+        raise HTTPException(400, "The reference is not complete: " + ", ".join(missing))
+    if _camera_axes()[0] is None:
+        raise HTTPException(400, "Teach the camera points first.")
+    info = (sc.get("mount_info") or [None] * (i + 1))[i]
+    if info is None:
+        raise HTTPException(400, f"{sid} has no glass corners yet: set them in the sketcher.")
+    mt = info["match"]
+    head = "\n".join([
+        f"; PAPA: reference toolpath moved onto substrate {sid}",
+        f"; scan {sc.get('scan_id', '-')} at {sc['time']}; glass corners {info['source']}",
+        f"; turned {mt.rotation_deg:+.3f} deg, centre moved {mt.shift_mm[0]:+.3f}, {mt.shift_mm[1]:+.3f} mm; "
+        f"fit {mt.rms_mm:.3f} mm; red dot {'found' if mt.red_found else 'NOT found'}",
+    ] + [f"; WARNING: {w}" for w in mt.warnings])
+    try:
+        text, _ = refmod.transform_gcode(_ref_gcode() or "", mt.R, mt.t, header=head)
+    except refmod.ReferenceError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return Response(text, media_type="text/plain",
+                    headers={"Content-Disposition": f'attachment; filename="{sid}_{_ref_cfg().get("gcode_name") or "toolpath.gcode"}"'})
 
 
 @app.post("/api/align/settings")

@@ -47,6 +47,37 @@ A substrate whose size differs from its pattern by more than the tolerance, or
 that is turned more than the limit (Checks), is flagged in red and runs only
 after you confirm.
 
+## Reference substrate and G-code (Reference fold)
+
+One substrate whose toolpath already exists as G-code is the reference. Every
+scan compares each new substrate's **glass square** to it and moves the G-code
+by the same turn and shift.
+
+1. **Photo of the reference** (any camera, from straight above). The browser
+   converts it to JPEG (Safari also reads iPhone HEIC). Its electrode array is
+   found by itself (`electrodes.detect_loose`, which also handles close-ups where
+   the lines look brighter than the gaps); if the green outline is off, choose
+   "electrode array corners" and click its 4 corners.
+2. **Click the 4 glass corners.** The red-dot corner is found by itself
+   (`reference.red_corner`); override it with the Red dot corner list.
+3. **Placement**: where that glass sat on the printer for the G-code (left
+   edge X, front edge Y, size; square to the printer). Default 162.5, 162.1, 25.
+4. **G-code file** (G21 mm; G90/G91, G0/G1/G2/G3). G20 and G92 X/Y are refused.
+
+Stored under `reference:` in `calibration.yaml` and in `<state>/reference/`
+(photo.jpg, toolpath.gcode).
+
+On each scan (needs the camera points), every substrate's glass is estimated
+from its array, using the same glass-to-array layout as on the reference, unless
+set by hand ("Set glass corners" in the table or "Set its glass corners" in
+the sketcher). The red dot is looked for next to its corners. `reference.match`
+fits new = R·ref + t with the red dot fixing which way round it is (any 90°
+turn); without the dot the smallest turn is taken and flagged. Each row then
+shows "Glass vs reference" (turn, shift, glass size, red dot, warnings) and a
+**G-code ↓** link: the reference G-code with every X/Y (and arc I/J) moved by
+R and t, Z and feeds unchanged, and a header saying what was done. On the
+overview picture: cyan glass outline, red ring on the dot, orange moved cut path.
+
 ## Frames
 
 - The pattern's origin is the array's **top-left** corner, with local +x and
@@ -60,8 +91,9 @@ after you confirm.
   `cameraUpdates/camera_correction`). Valid while focus, zoom, the camera
   mount and the plate height stay as calibrated.
 - **Camera points** (the Camera points fold on the tab, Stage 6 in
-  `VALIDATION.md`). Jog the swab tip over a small mark, click the mark in the
-  photo, press Pair. Two points work; four spread over the plate plus a fifth to
+  `VALIDATION.md`). Click a small mark in the photo, jog the swab tip exactly
+  over it, press Pair (Pair needs the printer connected and X/Y homed; the fold
+  says which is missing). Two points work; four spread over the plate plus a fifth to
   check are better. The fit reports each point's error (limit 0.5 mm) and
   whether X and Y agree in scale and squareness. Points are stored in
   `calibration.yaml` under `detection.camera_to_machine`, with the frame size
