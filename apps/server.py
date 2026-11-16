@@ -52,26 +52,38 @@ class Device:
     startup would mean a missing load cell stops you jogging the gantry. Each
     device is built on first use and a failure is remembered, so the endpoints
     that need it return 503 with the reason while everything else keeps working.
+    A failure is retried at most every RETRY_S, so a device that was busy or
+    unplugged comes back once it is free, without restarting the server.
     """
+
+    RETRY_S = 5.0
+    HINTS = {
+        "camera": " The camera is probably in use by another program on the Pi (a camera script, "
+                  "rpicam-hello/rpicam-still, or a second copy of this server). Close it; the page "
+                  "retries by itself. If it stays, check the ribbon cable and run rpicam-hello --list-cameras.",
+    }
 
     def __init__(self, name: str, factory: Callable[[], Any]) -> None:
         self.name = name
         self._factory = factory
         self._obj: Any = None
         self.error: str | None = None
+        self._failed_at = 0.0
 
     @property
     def built(self) -> bool:
         return self._obj is not None
 
     def get(self) -> Any:
-        if self._obj is None and self.error is None:
+        if self._obj is None and (self.error is None or time.monotonic() - self._failed_at >= self.RETRY_S):
             try:
                 self._obj = self._factory()
+                self.error = None
             except Exception as exc:                     # noqa: BLE001
                 self.error = f"{type(exc).__name__}: {exc}"
-        if self.error is not None:
-            raise HTTPException(503, f"{self.name} is unavailable ({self.error})")
+                self._failed_at = time.monotonic()
+        if self.error is not None and self._obj is None:
+            raise HTTPException(503, f"{self.name} is unavailable ({self.error}).{self.HINTS.get(self.name, '')}")
         return self._obj
 
     def describe(self) -> dict:
