@@ -232,3 +232,25 @@ def test_detects_the_real_array_when_its_lines_look_dark():
     assert 300 < c[:, 0].mean() < 390 and 200 < c[:, 1].mean() < 270
     sides = [np.linalg.norm(c[i] - c[(i + 1) % 4]) for i in range(4)]
     assert 50 < min(sides) and max(sides) < 85
+
+
+def test_full_resolution_search_is_fast_and_as_exact():
+    """A full-resolution scan is searched on a smaller copy and measured in a
+    window around each array: much faster, same outline."""
+    import time
+    from pathlib import Path
+
+    import cv2
+
+    from papa.vision import electrodes as el
+
+    small = cv2.imread(str(Path(__file__).parent / "data" / "real_plate_dark_lines.jpg"))
+    big = cv2.cvtColor(cv2.resize(small, (small.shape[1] * 3, small.shape[0] * 3), interpolation=cv2.INTER_CUBIC),
+                       cv2.COLOR_BGR2RGB)
+    t = time.monotonic()
+    fast = el.detect(big)
+    took = time.monotonic() - t
+    slow = el.detect(big, coarse_width=10**6)
+    assert len(fast) == len(slow) == 1
+    assert np.abs(fast[0].corners - slow[0].corners).max() < 1.5      # px, on a ~210 px wide array
+    assert took < 3.0

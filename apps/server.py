@@ -1528,7 +1528,7 @@ def _align_info() -> dict:
                          "crop": sc["crops"].get(sid), "manual": sid in sc.get("manual", set()),
                          "pattern_name": (pat or {}).get("name") or ("own pattern" if pat else "not sketched yet"),
                          "problems": ["Teach the camera points to place this substrate's toolpath on the printer."]})
-        info["scan"] = {"pixel_only": True, "substrates": subs, "warnings": [] if subs else
+        info["scan"] = {"pixel_only": True, "substrates": subs, "timing": sc.get("timing"), "warnings": [] if subs else
                         ["No electrode arrays found. Check the lighting and focus on the Camera tab."],
                         "time": sc["time"], "scan_id": sc.get("scan_id"), "image": sc["image"],
                         "shown_scale": sc["shown_scale"], "stale": False}
@@ -1550,6 +1550,7 @@ def _align_info() -> dict:
             pat = st["patterns"].get(sid)
             sub["pattern_name"] = (pat or {}).get("name") or ("own pattern" if pat else "Scrub tab sketch")
         info["scan"] = {**d, "time": sc["time"], "scan_id": sc.get("scan_id"), "image": sc["image"],
+                        "timing": sc.get("timing"),
                         "shown_scale": sc["shown_scale"], "stale": sc.get("stale", False)}
     return info
 
@@ -1653,19 +1654,28 @@ def _scan_views(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.Printer
     return over, crops
 
 
-def _pixel_scan(rgb: Any, save: bool = True) -> dict:
-    """A scan without camera points: the arrays are found and numbered S1, S2,
-    ... in the corrected view so they can be sketched, but nothing is placed
-    on the printer until the camera points are taught."""
+def _scan_photo(rgb: Any, save: bool, t_photo: float) -> dict:
+    """Find the arrays in one photo and draw the result. With camera points
+    each substrate is placed on the printer; without them the arrays are
+    still found and numbered S1, S2, ... so they can be sketched."""
     params = ElectrodeParams.from_cfg(hub.cal.detection.get("electrodes"))
-    try:
-        views = alignmod.find(rgb, params)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    sc = {"rgb": rgb, "views": views, "manual": set(), "time": time.strftime("%H:%M:%S")}
+    sc: dict[str, Any] = {"rgb": rgb, "manual": set(), "time": time.strftime("%H:%M:%S")}
+    t = time.monotonic()
+    if not corrmod.supported(rgb.shape[1::-1]):
+        raise HTTPException(400, f"no lens calibration for {rgb.shape[1]} x {rgb.shape[0]} photos")
+    view = _view_image(sc)
+    t_corr = time.monotonic() - t
+    t = time.monotonic()
+    sc["views"] = alignmod.find(rgb, params, corrected=view)
+    t_find = time.monotonic() - t
+    t = time.monotonic()
     _render_scan(sc)
+    t_draw = time.monotonic() - t
+    t = time.monotonic()
     if save:
         _save_scan(sc)
+    sc["timing"] = {"photo": round(t_photo, 1), "straighten": round(t_corr, 1), "find": round(t_find, 1),
+                    "draw": round(t_draw, 1), "save": round(time.monotonic() - t, 1)}
     return sc
 
 
@@ -1694,8 +1704,7 @@ def _render_scan(sc: dict) -> None:
         sc["result"], sc["drawn"] = result, drawn
         sc["crops"] = {sid: _jpeg(img, 88) for sid, img in closeups.items()}
     else:
-        c = corrmod.get_correction(rgb.shape[1::-1])
-        drawn = cv2.cvtColor(c.correct_image(rgb), cv2.COLOR_RGB2BGR)
+        drawn = cv2.cvtColor(_view_image(sc), cv2.COLOR_RGB2BGR)
         base = drawn.copy()
         t = max(1, drawn.shape[1] // 1200)
         crops = {}
@@ -1728,8 +1737,8 @@ def _save_scan(sc: dict) -> None:
     import cv2
 
     d, n = _next_scan_dir()
-    cv2.imwrite(str(d / "original.jpg"), cv2.cvtColor(sc["rgb"], cv2.COLOR_RGB2BGR))
-    cv2.imwrite(str(d / "scan.jpg"), sc["drawn"])
+    cv2.imwrite(str(d / "original.jpg"), cv2.cvtColor(sc["rgb"], cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
+    cv2.imwrite(str(d / "scan.jpg"), sc["drawn"], [cv2.IMWRITE_JPEG_QUALITY, 85])
     out = {"scan_id": n, "corrected_view_corners": {f"S{i}": v.round(2).tolist()
                                                      for i, v in enumerate(sc["views"], 1)}}
     if sc.get("result") is not None:
@@ -1766,23 +1775,12 @@ def align_info() -> dict:
 async def align_scan(payload: dict | None = None) -> dict:
     """Photo of the plate -> every electrode array -> its pattern placed on it."""
     hub.require_idle()
-    axes_fit, err = _camera_axes()
+    t0 = time.monotonic()
     rgb = await _grab_rgb()
-    if axes_fit is None:
-        hub.align_scan = await asyncio.to_thread(_pixel_scan, rgb, (payload or {}).get("save", True))
-        return _align_info()
+    t_photo = time.monotonic() - t0
 
     def work() -> dict:
-        params = ElectrodeParams.from_cfg(hub.cal.detection.get("electrodes"))
-        try:
-            views = alignmod.find(rgb, params)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        sc = {"rgb": rgb, "views": views, "manual": set(), "time": time.strftime("%H:%M:%S")}
-        _render_scan(sc)
-        if (payload or {}).get("save", True):
-            _save_scan(sc)
-        return sc
+        return _scan_photo(rgb, (payload or {}).get("save", True), t_photo)
 
     hub.align_scan = await asyncio.to_thread(work)
     return _align_info()

@@ -1127,7 +1127,9 @@ function paintAlign(){
   $('#alAxX').textContent=a.axes.local_x;$('#alAxY').textContent=a.axes.local_y;
   const sc=a.scan,run=alRunning(),lock=run||S.busy;
   $('#alScan').disabled=lock;
-  $('#alScanInfo').textContent=sc?`Scan ${sc.scan_id?('#'+sc.scan_id+' '):''}at ${sc.time} · ${sc.substrates.length} array${sc.substrates.length===1?'':'s'}${sc.pixel_only?' · no camera points yet':''}`:(a.camera.fit?'No scan yet':'No scan yet. Without camera points a scan finds and labels the arrays for sketching; toolpaths need the points.');
+  const tm=sc&&sc.timing,tt=tm?Object.values(tm).reduce((a,b)=>a+b,0):0;
+  $('#alScanInfo').title=tm?Object.entries(tm).map(([k,v])=>k+' '+v+' s').join(', '):'';
+  $('#alScanInfo').textContent=sc?`Scan ${sc.scan_id?('#'+sc.scan_id+' '):''}at ${sc.time} · ${sc.substrates.length} array${sc.substrates.length===1?'':'s'}${sc.pixel_only?' · no camera points yet':''}${tm?' · took '+tt.toFixed(1)+' s (photo '+tm.photo+', find '+tm.find+', draw '+tm.draw+')':''}`:(a.camera.fit?'No scan yet':'No scan yet. Without camera points a scan finds and labels the arrays for sketching; toolpaths need the points.');
   $('#alScrubSk').textContent=`${fmt(a.scrub_tab.area.w,1)} × ${fmt(a.scrub_tab.area.h,1)} mm, ${a.scrub_tab.bridges} bridge${a.scrub_tab.bridges===1?'':'s'}`;
   const m=$('#alMsg');
   if(sc&&sc.warnings.length){m.textContent=sc.warnings.join(' ');m.className='note warn'}
@@ -1219,7 +1221,7 @@ $('#alPts').onclick=e=>{const b=e.target.closest('[data-delpt]');if(!b)return;
 $('#alPtsClear').onclick=()=>{if(!confirm('Delete every camera point? Scans need at least 2.'))return;
   run('Camera points cleared',async()=>{S.al=await post('/api/align/camera/delete',{all:true});paintAlign()})};
 $('#alScan').onclick=()=>run('Substrates scanned',async()=>{
-  $('#alMsg').textContent='Taking the photo and finding the arrays…';$('#alMsg').className='note';
+  $('#alMsg').textContent='Taking a full-resolution photo and finding the arrays (a few seconds)…';$('#alMsg').className='note';
   const r=await post('/api/align/scan');$('#alMsg').textContent='';S.al=r;paintAlign()});
 $('#alAll').onchange=e=>{const subs=(S.al&&S.al.scan)?S.al.scan.substrates:[];alSel=new Set(e.target.checked?subs.map(x=>x.id):[]);paintAlign()};
 $('#alRows').onclick=e=>{

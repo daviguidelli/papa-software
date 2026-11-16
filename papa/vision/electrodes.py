@@ -288,9 +288,44 @@ def stripes(lines: np.ndarray, corners: np.ndarray) -> int:
     return best
 
 
-def detect(rgb: np.ndarray, p: ElectrodeParams | None = None) -> list[Array]:
-    """Arrays in an RGB image (normally the corrected view), largest first."""
+def detect(rgb: np.ndarray, p: ElectrodeParams | None = None, coarse_width: int = 2000) -> list[Array]:
+    """Arrays in an RGB image (normally the corrected view), largest first.
+
+    A big picture (a full-resolution scan) is searched on a smaller copy
+    about coarse_width wide, which is many times faster, and each array
+    found is then measured on the full picture in a window around it, so the
+    outline keeps full-resolution accuracy."""
     p = p or ElectrodeParams()
+    h, w = rgb.shape[:2]
+    if w <= 1.5 * coarse_width:
+        return _detect(rgb, p)
+    f = coarse_width / w
+    small = cv2.resize(rgb, (coarse_width, max(1, round(h * f))), interpolation=cv2.INTER_AREA)
+    k = max(3, int(round(p.close_frac * w)) | 1)
+    out = []
+    for a in _detect(small, p):
+        rough = a.corners / f
+        size = float(max(np.linalg.norm(rough[1] - rough[0]), np.linalg.norm(rough[2] - rough[1])))
+        centre = rough.mean(0)
+        m = 1.0 * size + k
+        x0, y0 = int(max(0, centre[0] - m)), int(max(0, centre[1] - m))
+        x1, y1 = int(min(w, centre[0] + m)), int(min(h, centre[1] + m))
+        win = rgb[y0:y1, x0:x1]
+        lines = dark_lines(cv2.cvtColor(win, cv2.COLOR_RGB2GRAY), k)
+        measured = measure(lines, centre - [x0, y0], size, copper_score(win, p))
+        corners = measured[0] + [x0, y0] if measured is not None else rough
+        out.append(
+            Array(
+                np.asarray(corners, dtype=np.float64),
+                tuple(map(float, np.asarray(corners).mean(0))),
+                a.copper,
+            )
+        )
+    return out
+
+
+def _detect(rgb: np.ndarray, p: ElectrodeParams) -> list[Array]:
+    """detect() on one picture, at its own resolution."""
     h, w = rgb.shape[:2]
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     k = max(3, int(round(p.close_frac * w)) | 1)

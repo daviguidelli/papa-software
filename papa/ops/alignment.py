@@ -183,7 +183,8 @@ def view_order(corners_view: np.ndarray) -> np.ndarray:
     return c[np.argsort(np.arctan2(c[:, 1] - m[1], c[:, 0] - m[0]))]   # -135, -45, 45, 135 deg
 
 
-def find(rgb: np.ndarray, params: elec.ElectrodeParams | None = None) -> list[np.ndarray]:
+def find(rgb: np.ndarray, params: elec.ElectrodeParams | None = None,
+         corrected: np.ndarray | None = None) -> list[np.ndarray]:
     """Every array in one camera photo, as corrected-view corners (TL, TR, BR,
     BL), numbered S1, S2, ... in reading order of the corrected view: rows top
     to bottom, then left to right. The same numbering is used with and without
@@ -191,7 +192,8 @@ def find(rgb: np.ndarray, params: elec.ElectrodeParams | None = None) -> list[np
     size = (rgb.shape[1], rgb.shape[0])
     if not corr.supported(size):
         raise ValueError(f"no lens calibration for {size[0]} x {size[1]} frames")
-    found = [view_order(f.corners) for f in elec.detect(corr.get_correction(size).correct_image(rgb), params)]
+    view = corrected if corrected is not None else corr.get_correction(size).correct_image(rgb)
+    found = [view_order(f.corners) for f in elec.detect(view, params)]
     if not found:
         return []
     row = 0.5 * float(np.median([np.linalg.norm(c[2] - c[1]) for c in found]))
