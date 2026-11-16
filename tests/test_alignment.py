@@ -214,3 +214,21 @@ def test_detects_the_real_array_in_lab_lighting():
     sides = [np.linalg.norm(c[i] - c[(i + 1) % 4]) for i in range(4)]
     assert 60 < min(sides) and max(sides) < 90          # about 80 x 65 px in this picture
     assert 440 < c[:, 0].mean() < 560 and 410 < c[:, 1].mean() < 520
+
+
+def test_detects_the_real_array_when_its_lines_look_dark():
+    """Same camera, other light: the electrode lines read near black rather
+    than copper, so colour alone finds nothing. Holes, slots and label text
+    on the same picture must not count."""
+    import cv2
+    from pathlib import Path
+
+    from papa.vision import electrodes as el
+
+    img = cv2.imread(str(Path(__file__).parent / "data" / "real_plate_dark_lines.jpg"))
+    found = el.detect(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    assert len(found) == 1
+    c = found[0].corners
+    assert 300 < c[:, 0].mean() < 390 and 200 < c[:, 1].mean() < 270
+    sides = [np.linalg.norm(c[i] - c[(i + 1) % 4]) for i in range(4)]
+    assert 50 < min(sides) and max(sides) < 85

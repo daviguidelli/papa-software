@@ -1,13 +1,17 @@
-"""Electrode array detection: copper lines on a white holder.
+"""Electrode array detection: a block of parallel lines on a white holder.
 
 Runs on the corrected (straight-down) view, where an array is a true
-rectangle. Steps:
+rectangle. The lines' colour depends on the light and exposure (copper in one
+photo, near black in another), so colour is only one of two cues. Steps:
 
-1. keep copper-coloured pixels (HSV window; copper sits near hue 13-19 with
-   low-to-medium saturation, well apart from the white plate and blue parts),
+1. mark line pixels: copper-coloured pixels (HSV window) OR pixels clearly
+   darker than their surroundings (a black-hat filter, which picks out thin
+   dark lines whatever their colour),
 2. close the gaps between electrode lines so each array is one solid blob,
-3. keep blobs of the right size and shape that are mostly copper and sit on a
-   bright holder, and fit a rotated rectangle to each,
+3. keep blobs of the right size and shape that are mostly line pixels, sit on
+   a bright holder, and show a row of evenly spaced parallel stripes (this is
+   what rejects the plate's holes and slots, label text and shadows), and fit
+   a rotated rectangle to each,
 4. refine each side to sub-pixel accuracy (see refine): the outermost copper
    edge is found along short stretches of each side, a line is fitted through
    them, and the four lines are intersected. The blob outline alone is only good to about a pixel, which on
@@ -38,8 +42,10 @@ class ElectrodeParams:
                                     # between lines, narrower than the gap between arrays
     min_fill: float = 0.55          # blob area / rotated-rectangle area
     max_aspect: float = 2.5         # long side / short side
-    min_copper: float = 0.35        # copper pixels / rectangle area
+    min_copper: float = 0.25        # line pixels (copper or dark) / rectangle area
     min_surround_v: int = 100       # brightness around the array (white holder; real lighting reads ~140)
+    line_contrast: int = 25         # grey levels a line must be darker than its surroundings
+    min_stripes: int = 4            # evenly spaced parallel lines needed to call it an array
 
     @classmethod
     def from_cfg(cls, d: dict | None) -> "ElectrodeParams":
@@ -136,19 +142,57 @@ def refine(score: np.ndarray, corners: np.ndarray, reach: float, segments: int =
     return out
 
 
+def dark_lines(gray: np.ndarray, k: int) -> np.ndarray:
+    """How much darker each pixel is than its surroundings (black-hat), in grey levels."""
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    return cv2.morphologyEx(gray.astype(np.float32), cv2.MORPH_BLACKHAT, kernel)
+
+
+def stripes(lines: np.ndarray, corners: np.ndarray) -> int:
+    """Evenly spaced parallel lines inside a rotated rectangle, counted across
+    whichever direction has more (0 if they are not evenly spaced)."""
+    c = np.asarray(corners, dtype=np.float32)
+    rw, rh = np.linalg.norm(c[1] - c[0]), np.linalg.norm(c[2] - c[1])
+    W, H = max(8, int(round(rw))), max(8, int(round(rh)))
+    M = cv2.getPerspectiveTransform(c, np.float32([[0, 0], [W, 0], [W, H], [0, H]]))
+    patch = cv2.warpPerspective(lines, M, (W, H))
+    best = 0
+    for prof in (patch.mean(axis=1), patch.mean(axis=0)):   # across rows, across columns
+        n = len(prof)
+        prof = np.convolve(prof, np.ones(3) / 3, mode="same")[int(0.05 * n):n - int(0.05 * n)]
+        if len(prof) < 8 or prof.max() - prof.min() < 3:
+            continue
+        above = prof > (prof.max() + prof.min()) / 2
+        starts = np.nonzero(above[1:] & ~above[:-1])[0]
+        if above[0]:
+            starts = np.r_[0, starts]
+        if len(starts) >= 3:
+            gaps = np.diff(starts)
+            if gaps.std() / gaps.mean() > 0.35:            # uneven: not an electrode comb
+                continue
+        best = max(best, len(starts))
+    return best
+
+
 def detect(rgb: np.ndarray, p: ElectrodeParams | None = None) -> list[Array]:
     """Arrays in an RGB image (normally the corrected view), largest first."""
     p = p or ElectrodeParams()
     h, w = rgb.shape[:2]
-    mask = copper_mask(rgb, p)
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-
     k = max(3, int(round(p.close_frac * w)) | 1)
+    lines = dark_lines(gray, k)
+    mask = cv2.bitwise_or(copper_mask(rgb, p), (lines > p.line_contrast).astype(np.uint8) * 255)
+
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     blobs = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     blobs = cv2.morphologyEx(blobs, cv2.MORPH_OPEN, kernel)
 
-    score = copper_score(rgb, p)
+    # one edge score for both looks: copper saturation, or darkness against the holder
+    # (scaled by the darkest lines in view rather than clipped early, so the
+    # half-way point between line and holder stays on the true edge)
+    marked = lines[lines > p.line_contrast]
+    top = max(2.0 * p.line_contrast, float(np.percentile(marked, 90)) if marked.size else 0.0)
+    score = np.maximum(copper_score(rgb, p), np.clip(lines / top, 0, 1))
     contours, _ = cv2.findContours(blobs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     found: list[Array] = []
     for c in contours:
@@ -169,6 +213,8 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None) -> list[Array]:
             continue
         ring = cv2.subtract(cv2.dilate(box, kernel), box)
         if cv2.mean(gray, mask=ring)[0] < p.min_surround_v:
+            continue
+        if stripes(lines, corners) < p.min_stripes:
             continue
         refined = refine(score, corners.astype(np.float64), reach=k / 2 + 4)
         if refined is not None:

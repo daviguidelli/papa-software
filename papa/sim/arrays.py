@@ -57,6 +57,10 @@ def render(arrays: list[SimArray], machine_axes: dict[str, str], printer_axes: c
               for x, y in pts_local]
         return np.round(printer_axes.mm_to_plate(mm) * 8).astype(np.int32)   # 3 bits subpixel
 
+    for a in arrays:            # the bare plate around each holder, as on the real machine
+        m = holder_mm + 10.0
+        plate_patch = [poly(a, [(-m, -m), (a.w + m, -m), (a.w + m, a.h + m), (-m, a.h + m)])]
+        cv2.fillPoly(cover, plate_patch, 255, cv2.LINE_AA, shift=3)
     for a in arrays:
         m = holder_mm
         holder = [poly(a, [(-m, -m), (a.w + m, -m), (a.w + m, a.h + m), (-m, a.h + m)])]
