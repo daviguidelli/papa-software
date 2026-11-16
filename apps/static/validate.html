@@ -396,7 +396,7 @@
       <summary><span class="label">Sketch</span></summary>
       <div class="fold-body">
         <p class="note" style="margin-top:0">Load the JSON exported by the bridge sketcher. Bridge length runs along x, width along y.</p>
-        <div class="row"><input type="file" id="scFile" accept=".json,application/json"><a class="btn sm" style="flex:0 0 auto;display:inline-flex;align-items:center" href="/static/bridge_sketcher.html" target="_blank">Open sketcher</a></div>
+        <div class="row"><input type="file" id="scFile" accept=".json,application/json"><a class="btn sm" style="flex:0 0 auto;display:inline-flex;align-items:center" href="/static/bridge_sketcher.html?for=scrub">Open sketcher</a></div>
         <div class="kv" style="margin-top:12px"><span>Loaded</span><span id="scSk">–</span></div>
       </div>
     </details>
@@ -438,6 +438,7 @@
         <thead><tr><th><input type="checkbox" id="alAll" title="Select all"></th><th>Substrate</th><th>Pattern</th><th>Measured mm</th><th>Pattern mm</th><th>Turn °</th><th>Origin X, Y mm</th><th>Fit mm</th><th></th></tr></thead>
         <tbody id="alRows"></tbody>
       </table>
+      <p class="note warn" id="alNeedPrinter" hidden></p>
       <div class="row" style="margin-top:14px;align-items:center">
         <button class="danger sm" id="alStop" disabled>Stop after this move</button>
         <span class="muted" style="font-size:12.5px">Scrub uses the swab already in the jaws. Routine 1 grips a swab, scrubs, and disposes of it. Contact Z, speeds and swab size come from the Scrub tab.</span>
@@ -451,7 +452,7 @@
         <p class="note" style="margin-top:0">Fastest: press <b>Sketch</b> on any row. The sketcher opens on the scanned substrates in order (S1, S2, …), each cut from the photo and straightened; draw the bridges, press Save &amp; next, and copy a sketch to the next substrate or any others when they are the same. Or tick substrates in the table above and give them a pattern below. A substrate without its own pattern uses the Scrub tab's sketch (<span class="mono" id="alScrubSk">–</span>).</p>
         <div class="row" style="align-items:flex-end">
           <label>Sketch file for the ticked substrates<input type="file" id="alFile" accept=".json,application/json"></label>
-          <a class="btn sm" style="flex:0 0 auto;display:inline-flex;align-items:center" href="/static/bridge_sketcher.html" target="_blank">Open sketcher</a>
+          <a class="btn sm" style="flex:0 0 auto;display:inline-flex;align-items:center" href="/static/bridge_sketcher.html">Open sketcher</a>
         </div>
         <div class="row" style="margin-top:10px;align-items:flex-end">
           <label>Copy the pattern of<select id="alCopyFrom"></select></label>
@@ -1130,6 +1131,8 @@ function paintAlign(){
   const subs=sc?sc.substrates:[];
   $('#alTab').hidden=!subs.length;
   $('#alSketchAll').hidden=!subs.length;
+  const np=$('#alNeedPrinter');np.hidden=!(subs.length&&!homedXY());
+  np.textContent='Scanning, sketching, setting corners and patterns all work now. Scrub and Routine 1 also need the printer: connect it, then Home XY (Manual test & calibration).';
   const ids=subs.map(x=>x.id);alSel=new Set([...alSel].filter(i=>ids.includes(i)));
   if(sc&&sc.pixel_only){
     $('#alRows').innerHTML=subs.map(x=>`<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>

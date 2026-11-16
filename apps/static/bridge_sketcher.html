@@ -164,6 +164,15 @@ kbd{font:10px var(--mono);border:1px solid var(--line2);padding:0 4px;color:var(
       <button class="sm" id="fsRefresh">Refresh after a new scan</button>
     </div>
   </details>
+  <details id="sec-scrubsend" open hidden>
+    <summary>Scrub tab sketch</summary>
+    <div class="body">
+      <div class="note">This sketch is for the Scrub tab (one pattern, placed at the jogged start). Start from a substrate in the last scan, or from a photo below, then send it.</div>
+      <label id="scrubPickWrap" hidden><span>Start from a scanned substrate</span><select id="scrubPick" style="width:100%;background:#000;color:var(--tx);border:1px solid var(--line2);padding:8px;font:12px var(--mono)"></select></label>
+      <button class="pri" id="sendScrub" disabled>Send to the Scrub tab</button>
+      <div class="stat" id="sendScrubStat"></div>
+    </div>
+  </details>
   <details id="sec-image" open>
     <summary>1 &nbsp; Image</summary>
     <div class="body">
@@ -896,13 +905,22 @@ function updateUI(){
   $('#clearAll').disabled=!S.rects.length;
   syncProps();updateList();renderTools();updateStatus();
   if(FS&&FS.list&&FS.list.length)fsStat();
+  if(typeof FOR_SCRUB!=='undefined'&&FOR_SCRUB)$('#sendScrub').disabled=S.mode!=='sub';
 }
 
 
 /* ---------- from the scan (Substrates tab) ---------- */
 var FS={id:null,list:[],patterns:{},dirty:false};
 const fsIdx=()=>FS.list.findIndex(s=>s.id===FS.id);
+const FOR_SCRUB=new URLSearchParams(location.search).get('for')==='scrub';
 async function fsList(){
+  if(FOR_SCRUB){
+    $('#sec-scan').hidden=true;$('#sec-scrubsend').hidden=false;$('#backBtn').innerHTML='&larr; Back to scrub';
+    try{const r=await fetch('/api/align');const a=await r.json();const subs=(a.scan&&a.scan.substrates)||[];
+      if(subs.length){$('#scrubPickWrap').hidden=false;$('#scrubPick').innerHTML='<option value="">Choose…</option>'+subs.map(s=>`<option>${s.id}</option>`).join('')}
+    }catch(e){}
+    return false;
+  }
   let a;
   try{const r=await fetch('/api/align');if(!r.ok)throw 0;a=await r.json()}catch(e){$('#sec-scan').hidden=true;return false}
   // On the PAPA server: substrates come from the scan, never from an upload.
@@ -910,8 +928,15 @@ async function fsList(){
   FS.list=(a.scan&&a.scan.substrates)||[];FS.patterns=a.patterns||{};
   $('#sec-scan').hidden=!FS.list.length;
   if(!FS.list.length){
-    $('#empty').innerHTML='<div class="box"><div class="big">No substrates yet</div><div class="note">Press <b>Scan substrates</b> on the Substrates tab. Every array it finds opens here automatically, one after another.</div><button class="pri" id="emptyRefresh">Load the scan</button></div>';
-    $('#emptyRefresh').onclick=async()=>{if(await fsList())fsLoad(FS.list[0].id)};
+    $('#empty').innerHTML='<div class="box"><div class="big">No substrates yet</div><div class="note">Scan the plate: every electrode array it finds opens here automatically, one after another.</div><div class="row" style="justify-content:center;gap:10px"><button class="pri" id="emptyScan">Scan substrates now</button><button id="emptyBack">Back to substrates</button></div><div class="note" id="emptyMsg"></div></div>';
+    $('#emptyBack').onclick=()=>fsBack();
+    $('#emptyScan').onclick=async()=>{
+      const b=$('#emptyScan'),m=$('#emptyMsg');b.disabled=true;m.textContent='Taking the photo and finding the arrays…';
+      try{const r=await fetch('/api/align/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const j=await r.json();
+        if(!r.ok)throw new Error(j.error||r.status);
+        if(await fsList())await fsLoad(FS.list[0].id);else m.textContent='No electrode arrays were found. Check the lighting and focus on the Camera tab, or add one by hand after a scan.';
+      }catch(e){m.textContent='Scan failed: '+(e.message||e)}finally{b.disabled=false}
+    };
     return false;
   }
   const sel=$('#fsSel');
@@ -982,8 +1007,26 @@ $('#fsSel').onchange=e=>fsLoad(e.target.value);
 function fsBack(){
   if(FS&&FS.dirty&&FS.id&&!confirm(FS.id+' has changes that are not saved. Leave without saving?'))return;
   if(FS)FS.dirty=false;
-  location.href='/validate?mode=align';
+  location.href='/validate?mode='+(FOR_SCRUB?'scrub':'align');
 }
+$('#scrubPick').onchange=async e=>{
+  const id=e.target.value;if(!id)return;
+  try{const r=await fetch('/api/align/substrate/'+encodeURIComponent(id)+'/sketch');const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);
+    pushHist();S.sub=await loadImageURL(j.image);S.subURL=j.image;S.src=null;S.corners=[];S.subId=null;
+    S.w=j.w;S.h=j.h;$('#szw').value=S.w;$('#szh').value=S.h;S.rects=(j.bridges||[]).map(b=>({id:S.nid++,cx:+b.cx,cy:+b.cy,l:+b.l,w:+b.w}));
+    setMode('sub');changed();toast(id+' loaded from the scan');
+  }catch(err){toast('Could not load '+id+': '+(err.message||err))}
+};
+$('#sendScrub').onclick=async()=>{
+  const st=$('#sendScrubStat');
+  try{
+    const body={substrate:{w:S.w,h:S.h},bridges:S.rects.map((r,i)=>({id:'B'+(i+1),cx:r3(r.cx),cy:r3(r.cy),l:r3(r.l),w:r3(r.w)}))};
+    const r=await fetch('/api/scrub/sketch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);
+    st.textContent='Sent: '+S.w+' × '+S.h+' mm, '+S.rects.length+' bridge'+(S.rects.length===1?'':'s')+'.';
+    if(confirm('Sent to the Scrub tab. Go back to it now?'))fsBack();
+  }catch(e){st.textContent='Not sent: '+(e.message||e)}
+};
 $('#backBtn').onclick=fsBack;
 $('#fsThumbs').onclick=e=>{const t=e.target.closest('[data-thumb]');if(t&&!FS.cm)fsLoad(t.dataset.thumb)};
 addEventListener('keydown',e=>{
