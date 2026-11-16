@@ -1437,6 +1437,8 @@ def _align_info() -> dict:
         "scrub_status": hub.scrub.status.as_dict(),
         "routine_status": hub.routine.status.as_dict(),
     }
+    if hub.align_scan and hub.align_scan.get("result") is None and _camera_axes()[0] is not None:
+        _render_scan(hub.align_scan)          # camera points were taught after this scan: place it now
     if hub.align_scan and hub.align_scan.get("result") is None:
         sc = hub.align_scan
         subs = []
@@ -1445,7 +1447,7 @@ def _align_info() -> dict:
             pat = st["patterns"].get(sid)
             subs.append({"id": sid, "size_px": [round(float(np.linalg.norm(v[1] - v[0])), 1),
                                                 round(float(np.linalg.norm(v[3] - v[0])), 1)],
-                         "crop": sc["crops"].get(sid),
+                         "crop": sc["crops"].get(sid), "manual": sid in sc.get("manual", set()),
                          "pattern_name": (pat or {}).get("name") or ("own pattern" if pat else "not sketched yet"),
                          "problems": ["Teach the camera points to place this substrate's toolpath on the printer."]})
         info["scan"] = {"pixel_only": True, "substrates": subs, "warnings": [] if subs else
@@ -1466,6 +1468,7 @@ def _align_info() -> dict:
                 bad = [str(getattr(exc, "detail", exc))]
             sub["problems"] = list(sub["warnings"]) + bad
             sub["crop"] = sc.get("crops", {}).get(sid)
+            sub["manual"] = sid in sc.get("manual", set())
             pat = st["patterns"].get(sid)
             sub["pattern_name"] = (pat or {}).get("name") or ("own pattern" if pat else "Scrub tab sketch")
         info["scan"] = {**d, "time": sc["time"], "scan_id": sc.get("scan_id"), "image": sc["image"],
@@ -1576,52 +1579,85 @@ def _pixel_scan(rgb: Any, save: bool = True) -> dict:
     """A scan without camera points: the arrays are found and numbered S1, S2,
     ... in the corrected view so they can be sketched, but nothing is placed
     on the printer until the camera points are taught."""
-    import base64
-    import json
-
-    import cv2
-    import numpy as np
-
     params = ElectrodeParams.from_cfg(hub.cal.detection.get("electrodes"))
     try:
         views = alignmod.find(rgb, params)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    c = corrmod.get_correction(rgb.shape[1::-1])
-    img = cv2.cvtColor(c.correct_image(rgb), cv2.COLOR_RGB2BGR)
-    t = max(1, img.shape[1] // 1200)
-    crops = {}
-    for n, v in enumerate(views, 1):
-        sid = f"S{n}"
-        (x0, y0), (x1, y1) = v.min(0), v.max(0)
-        m = 0.3 * max(x1 - x0, y1 - y0)
-        X0, Y0 = int(max(0, x0 - m)), int(max(0, y0 - m))
-        X1, Y1 = int(min(img.shape[1], x1 + m)), int(min(img.shape[0], y1 + m))
-        k = 360 / max(1, X1 - X0)
-        crop = cv2.resize(img[Y0:Y1, X0:X1], (360, max(1, round((Y1 - Y0) * k))), interpolation=cv2.INTER_CUBIC)
-        cv2.polylines(crop, [np.round((v - [X0, Y0]) * k * 8).astype(np.int32)], True, (80, 220, 80), 1,
-                      cv2.LINE_AA, shift=3)
-        ok, cb = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
-        crops[sid] = "data:image/jpeg;base64," + base64.b64encode(cb.tobytes()).decode()
-        cv2.polylines(img, [np.round(v * 8).astype(np.int32)], True, (80, 220, 80), t, cv2.LINE_AA, shift=3)
-        cv2.circle(img, tuple(np.round(v[0]).astype(int)), 3 * t, (80, 220, 80), -1, cv2.LINE_AA)
-        cv2.putText(img, sid, (int(x0), int(y0) - 8 * t), cv2.FONT_HERSHEY_SIMPLEX, 0.8 * t, (80, 220, 80),
-                    2 * t, cv2.LINE_AA)
-    w = img.shape[1]
-    out_w = min(1600, w)
-    small = cv2.resize(img, (out_w, round(img.shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
-    ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    scan = {"result": None, "views": views, "rgb": rgb, "crops": crops, "time": time.strftime("%H:%M:%S"),
-            "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode(),
-            "shown_scale": out_w / w}
+    sc = {"rgb": rgb, "views": views, "manual": set(), "time": time.strftime("%H:%M:%S")}
+    _render_scan(sc)
     if save:
-        d, n = _next_scan_dir()
-        cv2.imwrite(str(d / "original.jpg"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-        cv2.imwrite(str(d / "found.jpg"), img)
-        (d / "arrays.json").write_text(json.dumps({"scan_id": n, "corrected_view_corners": {
-            f"S{i}": v.round(2).tolist() for i, v in enumerate(views, 1)}}, indent=2))
-        scan["scan_id"] = n
-    return scan
+        _save_scan(sc)
+    return sc
+
+
+def _jpeg(bgr: Any, q: int = 85) -> str:
+    import base64
+
+    import cv2
+
+    ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, q])
+    return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+
+
+def _render_scan(sc: dict) -> None:
+    """(Re)place and (re)draw a scan from its photo and its arrays' corners,
+    after a scan, a corner edit or an added substrate."""
+    import cv2
+    import numpy as np
+
+    rgb, views = sc["rgb"], sc["views"]
+    axes_fit, _ = _camera_axes()
+    sc["stale"] = False
+    if axes_fit is not None:
+        result = alignmod.place_views(views, rgb.shape[1::-1], hub.machine.axes, axes_fit,
+                                      _align_settings(), _scrub_tab_pattern())
+        drawn, closeups = _scan_views(rgb, result, axes_fit)    # square to the printer's X and Y
+        sc["result"], sc["drawn"] = result, drawn
+        sc["crops"] = {sid: _jpeg(img, 88) for sid, img in closeups.items()}
+    else:
+        c = corrmod.get_correction(rgb.shape[1::-1])
+        drawn = cv2.cvtColor(c.correct_image(rgb), cv2.COLOR_RGB2BGR)
+        base = drawn.copy()
+        t = max(1, drawn.shape[1] // 1200)
+        crops = {}
+        for n, v in enumerate(views, 1):
+            sid = f"S{n}"
+            colour = (255, 170, 60) if sid in sc["manual"] else (80, 220, 80)
+            (x0, y0), (x1, y1) = v.min(0), v.max(0)
+            m = 0.3 * max(x1 - x0, y1 - y0)
+            X0, Y0 = int(max(0, x0 - m)), int(max(0, y0 - m))
+            X1, Y1 = int(min(base.shape[1], x1 + m)), int(min(base.shape[0], y1 + m))
+            k = 360 / max(1, X1 - X0)
+            crop = cv2.resize(base[Y0:Y1, X0:X1], (360, max(1, round((Y1 - Y0) * k))), interpolation=cv2.INTER_CUBIC)
+            cv2.polylines(crop, [np.round((v - [X0, Y0]) * k * 8).astype(np.int32)], True, colour, 1,
+                          cv2.LINE_AA, shift=3)
+            crops[sid] = _jpeg(crop, 88)
+            cv2.polylines(drawn, [np.round(v * 8).astype(np.int32)], True, colour, t, cv2.LINE_AA, shift=3)
+            cv2.circle(drawn, tuple(np.round(v[0]).astype(int)), 3 * t, colour, -1, cv2.LINE_AA)
+            cv2.putText(drawn, sid, (int(x0), int(y0) - 8 * t), cv2.FONT_HERSHEY_SIMPLEX, 0.8 * t, colour,
+                        2 * t, cv2.LINE_AA)
+        sc["result"], sc["drawn"], sc["crops"] = None, drawn, crops
+    w = sc["drawn"].shape[1]
+    out_w = min(1600, w)
+    small = cv2.resize(sc["drawn"], (out_w, round(sc["drawn"].shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
+    sc["image"], sc["shown_scale"] = _jpeg(small), out_w / w
+
+
+def _save_scan(sc: dict) -> None:
+    import json
+
+    import cv2
+
+    d, n = _next_scan_dir()
+    cv2.imwrite(str(d / "original.jpg"), cv2.cvtColor(sc["rgb"], cv2.COLOR_RGB2BGR))
+    cv2.imwrite(str(d / "scan.jpg"), sc["drawn"])
+    out = {"scan_id": n, "corrected_view_corners": {f"S{i}": v.round(2).tolist()
+                                                     for i, v in enumerate(sc["views"], 1)}}
+    if sc.get("result") is not None:
+        out.update(sc["result"].as_dict())
+    (d / "alignment.json").write_text(json.dumps(out, indent=2))
+    sc["scan_id"] = n
 
 
 async def _grab_rgb() -> Any:
@@ -1651,11 +1687,6 @@ def align_info() -> dict:
 @app.post("/api/align/scan")
 async def align_scan(payload: dict | None = None) -> dict:
     """Photo of the plate -> every electrode array -> its pattern placed on it."""
-    import base64
-    import json
-
-    import cv2
-
     hub.require_idle()
     axes_fit, err = _camera_axes()
     rgb = await _grab_rgb()
@@ -1666,30 +1697,14 @@ async def align_scan(payload: dict | None = None) -> dict:
     def work() -> dict:
         params = ElectrodeParams.from_cfg(hub.cal.detection.get("electrodes"))
         try:
-            result = alignmod.scan(rgb, hub.machine.axes, axes_fit, _align_settings(),
-                                   _scrub_tab_pattern(), params)
+            views = alignmod.find(rgb, params)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        drawn, closeups = _scan_views(rgb, result, axes_fit)    # square to the printer's X and Y
-        crops = {}
-        for sid, crop in closeups.items():
-            ok, cb = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
-            crops[sid] = "data:image/jpeg;base64," + base64.b64encode(cb.tobytes()).decode()
-        w = drawn.shape[1]
-        out_w = min(1600, w)
-        small = cv2.resize(drawn, (out_w, round(drawn.shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
-        ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        scan = {"result": result, "time": time.strftime("%H:%M:%S"), "crops": crops, "rgb": rgb,
-                "views": alignmod.find(rgb, params),
-                "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode(),
-                "shown_scale": out_w / w}
+        sc = {"rgb": rgb, "views": views, "manual": set(), "time": time.strftime("%H:%M:%S")}
+        _render_scan(sc)
         if (payload or {}).get("save", True):
-            d, n = _next_scan_dir()
-            cv2.imwrite(str(d / "original.jpg"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-            cv2.imwrite(str(d / "aligned.jpg"), drawn)
-            (d / "alignment.json").write_text(json.dumps({"scan_id": n, **result.as_dict()}, indent=2))
-            scan["scan_id"] = n
-        return scan
+            _save_scan(sc)
+        return sc
 
     hub.align_scan = await asyncio.to_thread(work)
     return _align_info()
@@ -1746,6 +1761,128 @@ def align_substrate_sketch(sid: str) -> dict:
             "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()}
 
 
+# ---------- corners set by hand ----------
+
+def _view_image(sc: dict) -> Any:
+    if "view_rgb" not in sc:
+        sc["view_rgb"] = corrmod.get_correction(sc["rgb"].shape[1::-1]).correct_image(sc["rgb"])
+    return sc["view_rgb"]
+
+
+def _scan_or_400() -> dict:
+    if not hub.align_scan:
+        raise HTTPException(400, "Scan the substrates first.")
+    return hub.align_scan
+
+
+def _sid_index(sc: dict, sid: str) -> int:
+    ids = [f"S{n}" for n in range(1, len(sc["views"]) + 1)]
+    if sid not in ids:
+        raise HTTPException(404, f"no substrate {sid} in the last scan")
+    return ids.index(sid)
+
+
+def _check_corners(sc: dict, corners: Any) -> Any:
+    import numpy as np
+
+    try:
+        c = np.asarray(corners, dtype=np.float64).reshape(4, 2)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "send corners as four [x, y] points") from exc
+    h, w = _view_image(sc).shape[:2]
+    if not (np.all(c >= -1) and np.all(c[:, 0] <= w + 1) and np.all(c[:, 1] <= h + 1)):
+        raise HTTPException(400, "a corner is outside the photo")
+    c = alignmod.view_order(c)
+    x, y = c[:, 0], c[:, 1]
+    a = 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))   # shoelace
+    if a < 100:
+        raise HTTPException(400, "the four corners enclose almost no area")
+    return c
+
+
+@app.get("/api/align/view")
+def align_view(sid: str = "", margin: float = 1.5) -> dict:
+    """The corrected view of the last scan for picking corners: around one
+    substrate (sid, with its current corners) or the whole photo (to add one).
+    Coordinates in the reply: view px = picture px / scale + offset."""
+    import cv2
+
+    sc = _scan_or_400()
+    view = _view_image(sc)
+    H, W = view.shape[:2]
+    corners = None
+    if sid:
+        v = sc["views"][_sid_index(sc, sid)]
+        (x0, y0), (x1, y1) = v.min(0), v.max(0)
+        m = margin * max(x1 - x0, y1 - y0) / 2
+        X0, Y0, X1, Y1 = int(max(0, x0 - m)), int(max(0, y0 - m)), int(min(W, x1 + m)), int(min(H, y1 + m))
+        corners = v
+    else:
+        X0, Y0, X1, Y1 = 0, 0, W, H
+    k = min(1.0, 2400 / max(X1 - X0, Y1 - Y0))
+    crop = cv2.resize(view[Y0:Y1, X0:X1], (max(1, round((X1 - X0) * k)), max(1, round((Y1 - Y0) * k))),
+                      interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_CUBIC)
+    others = [((o - [X0, Y0]) * k).round(2).tolist() for i, o in enumerate(sc["views"])
+              if not sid or i != _sid_index(sc, sid)]
+    return {"image": _jpeg(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR), 90), "offset": [X0, Y0], "scale": k,
+            "corners": None if corners is None else ((corners - [X0, Y0]) * k).round(2).tolist(),
+            "others": others}
+
+
+@app.post("/api/align/substrate/{sid}/corners")
+def align_set_corners(sid: str, payload: dict) -> dict:
+    """Replace a substrate's corners (corrected-view px of the scan photo)."""
+    hub.require_idle()
+    sc = _scan_or_400()
+    i = _sid_index(sc, sid)
+    sc["views"][i] = _check_corners(sc, payload.get("corners"))
+    sc.setdefault("manual", set()).add(sid)
+    _render_scan(sc)
+    return _align_info()
+
+
+@app.post("/api/align/substrate/add")
+def align_add_substrate(payload: dict) -> dict:
+    """A substrate the scan missed, from four corners picked by hand. It is
+    numbered after the others."""
+    hub.require_idle()
+    sc = _scan_or_400()
+    sc["views"].append(_check_corners(sc, payload.get("corners")))
+    sid = f"S{len(sc['views'])}"
+    sc.setdefault("manual", set()).add(sid)
+    _render_scan(sc)
+    return {**_align_info(), "added": sid}
+
+
+@app.post("/api/align/substrate/{sid}/remove")
+def align_remove_substrate(sid: str) -> dict:
+    """Drop a false find from the last scan. Later substrates move up one
+    number, and so do their patterns, so each pattern stays on its substrate."""
+    hub.require_idle()
+    sc = _scan_or_400()
+    i = _sid_index(sc, sid)
+    n = len(sc["views"])
+    del sc["views"][i]
+    patterns = dict(_align_settings()["patterns"])
+    patterns.pop(sid, None)
+    for k in range(i + 2, n + 1):
+        if f"S{k}" in patterns:
+            patterns[f"S{k - 1}"] = patterns.pop(f"S{k}")
+    manual = set()
+    for m in sc.get("manual", set()):
+        k = int(m[1:])
+        if k < i + 1:
+            manual.add(m)
+        elif k > i + 1:
+            manual.add(f"S{k - 1}")
+    sc["manual"] = manual
+    raw = dict(hub.cal.raw.get("alignment") or {})
+    raw["patterns"] = patterns
+    _patch_calibration({"alignment": raw})
+    _render_scan(sc)
+    return _align_info()
+
+
 @app.post("/api/align/settings")
 def align_settings(payload: dict) -> dict:
     hub.require_idle()
@@ -1764,16 +1901,9 @@ def align_settings(payload: dict) -> dict:
 
 
 def _refresh_scan() -> None:
-    """Re-place the last scan's arrays after a pattern or setting change (no new photo)."""
-    if not hub.align_scan or hub.align_scan.get("result") is None:
-        return
-    r: alignmod.ScanResult = hub.align_scan["result"]
-    st = _align_settings()
-    for i, p in enumerate(r.placements):
-        own = st["patterns"].get(p.id)
-        r.placements[i] = alignmod.place(p.id, hub.machine.axes, p.corners_mm, own or _scrub_tab_pattern(), st)
-        r.pattern_source[p.id] = "own" if own else "scrub tab"
-    hub.align_scan["stale"] = True      # the picture still shows the old toolpaths
+    """Re-place and redraw the last scan after a pattern or setting change (no new photo)."""
+    if hub.align_scan:
+        _render_scan(hub.align_scan)
 
 
 @app.post("/api/align/pattern")

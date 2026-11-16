@@ -8,6 +8,7 @@
 :root{--bg:#000;--line:#262626;--line2:#444;--tx:#ececec;--mut:#7d7d7d;--acc:#2f6bff;--pick:#ff6a1a;--bad:#ff4d4d;
 --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--sans:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif}
 *{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
 html,body{height:100%;background:var(--bg);color:var(--tx);font:12px/1.45 var(--sans);overflow:hidden}
 body{display:grid;grid-template-rows:56px 1fr 30px;grid-template-columns:1fr 340px}
 header{grid-column:1/3;display:flex;align-items:center;gap:18px;padding:0 20px;border-bottom:1px solid var(--line)}
@@ -126,6 +127,8 @@ kbd{font:10px var(--mono);border:1px solid var(--line2);padding:0 4px;color:var(
     <div class="body">
       <div class="note">Every substrate the scan found, cut from the photo, straightened and zoomed. Sketch the bridges on each in turn; if the next one is the same, copy this sketch to it.</div>
       <div id="fsHead" style="font:600 15px var(--sans);letter-spacing:.04em"></div>
+      <div id="fsThumbs" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:6px;max-height:260px;overflow-y:auto"></div>
+      <div class="note">Click a substrate to open it. Keys: <b>[</b> and <b>]</b> (or Page Up / Page Down) for previous / next.</div>
       <label><span>Substrate</span><select id="fsSel" style="width:100%;background:#000;color:var(--tx);border:1px solid var(--line2);padding:8px;font:12px var(--mono)"></select></label>
       <div class="row">
         <button class="sm" id="fsPrev">&larr; Previous</button>
@@ -142,6 +145,16 @@ kbd{font:10px var(--mono);border:1px solid var(--line2);padding:0 4px;color:var(
           <label><span>Array height mm</span><input type="number" id="fsH" min="0.5" step="0.05"></label>
         </div>
       </div>
+      <div id="fsCornerBox" hidden style="display:grid;gap:8px;border:1px solid var(--pick);padding:10px">
+        <div class="note" style="color:var(--tx)" id="fsCornerNote"></div>
+        <div class="row"><button class="pri sm" id="fsCornerUse">Use these corners</button><button class="sm" id="fsCornerCancel">Cancel</button></div>
+        <button class="sm" id="fsCornerReset">Clear the corners and click all four again</button>
+      </div>
+      <div class="row" id="fsCornerTools">
+        <button class="sm" id="fsEditCorners" disabled>Set its 4 corners</button>
+        <button class="sm" id="fsAdd">+ Add a substrate</button>
+      </div>
+      <button class="sm bad" id="fsRemove" disabled>Not a substrate: remove it from this scan</button>
       <span class="cap" style="margin-bottom:-6px">Same geometry on another substrate?</span>
       <button class="sm" id="fsCopyNext" disabled>Same on the next one &rarr;</button>
       <div id="fsTargets" style="display:flex;flex-wrap:wrap;gap:6px 12px;font:11px var(--mono)"></div>
@@ -881,7 +894,7 @@ function updateUI(){
   $('#undo').disabled=!S.hist.length;$('#redo').disabled=!S.fut.length;
   $('#clearAll').disabled=!S.rects.length;
   syncProps();updateList();renderTools();updateStatus();
-  if(FS)fsStat();
+  if(FS&&FS.list&&FS.list.length)fsStat();
 }
 
 
@@ -903,10 +916,24 @@ async function fsList(){
   const sel=$('#fsSel');
   sel.innerHTML=FS.list.map(s=>`<option value="${s.id}">${s.id}${s.measured_mm?' · '+(+s.measured_mm[0]).toFixed(2)+' × '+(+s.measured_mm[1]).toFixed(2)+' mm':''} · ${FS.patterns[s.id]?'✓ sketched ('+FS.patterns[s.id].bridges+' bridges)':'not sketched yet'}</option>`).join('');
   if(FS.id)sel.value=FS.id;
+  FS.crops=Object.fromEntries(FS.list.map(s=>[s.id,s.crop]));FS.manual=Object.fromEntries(FS.list.map(s=>[s.id,!!s.manual]));
   fsStat();return true;
+}
+function fsThumbs(){
+  const box=$('#fsThumbs');if(!box)return;
+  const key=FS.list.map(s=>s.id+(FS.patterns[s.id]?1:0)+(FS.manual&&FS.manual[s.id]?'m':'')).join()+'|'+FS.id+'|'+(FS.crops?Object.values(FS.crops).map(c=>c?c.length:0).join():'');
+  if(box.dataset.key===key)return;box.dataset.key=key;
+  box.innerHTML=FS.list.map(s=>`<div data-thumb="${s.id}" title="${s.id}" style="cursor:pointer;border:2px solid ${s.id===FS.id?'#fff':'var(--line)'};background:#000;position:relative">
+    ${FS.crops&&FS.crops[s.id]?`<img src="${FS.crops[s.id]}" style="width:100%;display:block">`:'<div style="height:60px"></div>'}
+    <div style="position:absolute;left:0;top:0;padding:1px 5px;background:rgba(0,0,0,.75);font:600 11px var(--mono)">${s.id}</div>
+    <div style="position:absolute;right:0;top:0;padding:1px 5px;background:rgba(0,0,0,.75);font:11px var(--mono);color:${FS.patterns[s.id]?'#93d5b1':'var(--mut)'}">${FS.patterns[s.id]?'✓':'·'}</div></div>`).join('');
 }
 function fsStat(){
   if(!FS||!FS.list.length)return;
+  fsThumbs();
+  const cm=!!FS.cm;$('#fsCornerBox').hidden=!cm;$('#fsCornerTools').hidden=cm;
+  if(cm){$('#fsCornerNote').innerHTML=(FS.cm.kind==='add'?'<b>New substrate.</b> Click its four corners on the photo':'<b>'+FS.cm.sid+'</b>: drag the four corners onto the array')+' (any order; scroll to zoom, hold Space to pan). '+S.corners.length+' / 4 placed.';$('#fsCornerUse').disabled=S.corners.length!==4;$('#fsSave').disabled=$('#fsSaveNext').disabled=$('#fsCopyNext').disabled=$('#fsCopy').disabled=true;return}
+  $('#fsEditCorners').disabled=!FS.id;$('#fsRemove').disabled=!FS.id;
   const i=fsIdx(),on=!!FS.id&&S.mode==='sub';
   $('#fsHead').textContent=FS.id?`${FS.id}  ·  ${i+1} of ${FS.list.length}`:'';
   $('#fsPrev').disabled=i<=0;$('#fsNext').disabled=i<0||i>=FS.list.length-1;
@@ -922,6 +949,7 @@ function fsStat(){
 }
 async function fsLoad(id){
   if(!id)return;
+  if(FS.cm)return;
   if(FS.dirty&&FS.id&&id!==FS.id&&!confirm(FS.id+' has changes that are not saved. Leave without saving?')){$('#fsSel').value=FS.id;return}
   $('#fsStat').textContent='Loading '+id+'…';
   try{
@@ -950,6 +978,50 @@ async function fsSave(){
 }
 const fsGo=d=>{const i=fsIdx()+d;if(i>=0&&i<FS.list.length)fsLoad(FS.list[i].id)};
 $('#fsSel').onchange=e=>fsLoad(e.target.value);
+$('#fsThumbs').onclick=e=>{const t=e.target.closest('[data-thumb]');if(t&&!FS.cm)fsLoad(t.dataset.thumb)};
+addEventListener('keydown',e=>{
+  if(!FS||!FS.list.length||FS.cm||e.target.closest('input,select,textarea'))return;
+  if(e.key===']'||e.key==='PageDown'){e.preventDefault();fsGo(1)}
+  else if(e.key==='['||e.key==='PageUp'){e.preventDefault();fsGo(-1)}
+});
+async function fsCorners(kind){
+  if(FS.dirty&&FS.id&&!confirm(FS.id+' has changes that are not saved. Continue without saving them?'))return;
+  try{
+    const r=await fetch('/api/align/view'+(kind==='edit'?'?sid='+encodeURIComponent(FS.id):''));const j=await r.json();
+    if(!r.ok)throw new Error(j.error||r.status);
+    S.src=await loadImageURL(j.image);S.srcName=kind==='edit'?FS.id:'scan photo';
+    S.corners=j.corners?j.corners.map(p=>[+p[0],+p[1]]):[];S.sorted=!!j.corners;
+    FS.cm={kind,sid:FS.id,offset:j.offset,scale:j.scale};FS.dirty=false;
+    setMode('photo');fsStat();
+  }catch(e){toast('Could not open the photo: '+(e.message||e))}
+}
+$('#fsEditCorners').onclick=()=>fsCorners('edit');
+$('#fsAdd').onclick=()=>fsCorners('add');
+$('#fsCornerReset').onclick=()=>{S.corners=[];S.sorted=false;updateUI();req()};
+$('#fsCornerCancel').onclick=async()=>{const id=FS.cm.sid;FS.cm=null;FS.dirty=false;if(id)await fsLoad(id);else if(FS.list.length)await fsLoad(FS.list[0].id)};
+$('#fsCornerUse').onclick=async()=>{
+  if(S.corners.length!==4)return;
+  if(!S.sorted)sortCorners();
+  const cm=FS.cm,pts=S.corners.map(p=>[p[0]/cm.scale+cm.offset[0],p[1]/cm.scale+cm.offset[1]]);
+  try{
+    const url=cm.kind==='add'?'/api/align/substrate/add':'/api/align/substrate/'+encodeURIComponent(cm.sid)+'/corners';
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({corners:pts})});
+    const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);
+    const id=cm.kind==='add'?j.added:cm.sid;FS.cm=null;
+    toast(cm.kind==='add'?'Added '+id:'Corners of '+id+' saved');
+    await fsList();await fsLoad(id);
+  }catch(e){toast('Not saved: '+(e.message||e))}
+};
+$('#fsRemove').onclick=async()=>{
+  const id=FS.id;if(!id||!confirm('Remove '+id+' from this scan? Its sketch is deleted, and the substrates after it move up one number (their sketches move with them).'))return;
+  try{
+    const r=await fetch('/api/align/substrate/'+encodeURIComponent(id)+'/remove',{method:'POST'});const j=await r.json();
+    if(!r.ok)throw new Error(j.error||r.status);
+    FS.id=null;FS.dirty=false;toast(id+' removed');
+    if(await fsList())await fsLoad(FS.list[Math.min(FS.list.length-1,Math.max(0,+id.slice(1)-1))].id);
+    else location.reload();
+  }catch(e){toast('Not removed: '+(e.message||e))}
+};
 for(const id of ['fsW','fsH'])$('#'+id).addEventListener('change',()=>{
   const w=parseFloat($('#fsW').value),h=parseFloat($('#fsH').value);
   if(!(w>0&&h>0))return;

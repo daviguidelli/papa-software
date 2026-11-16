@@ -79,7 +79,7 @@ def test_scan_places_every_array(aligned):
 def test_patterns_set_copy_and_clear(aligned):
     aligned.post("/api/align/scan", json={"save": False})
     j = aligned.post("/api/align/pattern", json={"targets": ["S1"], "sketch": SKETCH, "name": "comb"}).json()
-    assert j["patterns"]["S1"]["bridges"] == 1 and j["scan"]["stale"]
+    assert j["patterns"]["S1"]["bridges"] == 1 and not j["scan"]["stale"]      # redrawn right away
     j = aligned.post("/api/align/pattern", json={"targets": ["S2", "S3"], "copy_from": "S1"}).json()
     subs = {s["id"]: s for s in j["scan"]["substrates"]}
     assert all(subs[i]["pattern_name"] == "comb" and not subs[i]["warnings"] for i in ("S1", "S2", "S3"))
@@ -203,3 +203,29 @@ def test_scan_without_camera_points_labels_arrays_for_the_sketcher(api):
     assert s2["pattern_source"] == "own" and not s2["warnings"]
     assert s2["center_mm"] == pytest.approx([216.0 + 6 * np.cos(np.radians(1.5)) + 5 * np.sin(np.radians(1.5)),
                                             236.0 + 6 * np.sin(np.radians(1.5)) - 5 * np.cos(np.radians(1.5))], abs=0.2)
+
+
+def test_corners_can_be_set_added_and_removed_by_hand(aligned):
+    j = aligned.post("/api/align/scan", json={"save": False}).json()
+    assert len(j["scan"]["substrates"]) == 3
+    aligned.post("/api/align/pattern", json={"targets": ["S3"], "sketch": SKETCH, "name": "third"})
+    v = aligned.get("/api/align/view", params={"sid": "S2"}).json()
+    assert len(v["corners"]) == 4 and v["image"].startswith("data:image/jpeg")
+    to_view = lambda pts: [[x / v["scale"] + v["offset"][0], y / v["scale"] + v["offset"][1]] for x, y in pts]  # noqa: E731
+    before = next(s for s in j["scan"]["substrates"] if s["id"] == "S2")["center_mm"]
+    moved = [[x + 2, y] for x, y in v["corners"]]            # shift the outline 2 picture px right
+    j = aligned.post("/api/align/substrate/S2/corners", json={"corners": to_view(moved)}).json()
+    s2 = next(s for s in j["scan"]["substrates"] if s["id"] == "S2")
+    assert s2["manual"] and s2["center_mm"][0] > before[0] + 0.05
+    # add one by hand: a copy of S1's corners moved well clear
+    w = aligned.get("/api/align/view").json()
+    s1 = aligned.get("/api/align/view", params={"sid": "S1"}).json()
+    full = [[(x / s1["scale"] + s1["offset"][0] + 150) * w["scale"], (y / s1["scale"] + s1["offset"][1]) * w["scale"]]
+            for x, y in s1["corners"]]
+    j = aligned.post("/api/align/substrate/add", json={"corners": [[x / w["scale"], y / w["scale"]] for x, y in full]}).json()
+    assert j["added"] == "S4" and len(j["scan"]["substrates"]) == 4
+    assert aligned.post("/api/align/substrate/add", json={"corners": [[0, 0], [1, 0], [1, 1], [0, 1]]}).status_code == 400
+    # remove S2: S3 becomes S2 and keeps its sketch
+    j = aligned.post("/api/align/substrate/S2/remove").json()
+    assert [s["id"] for s in j["scan"]["substrates"]] == ["S1", "S2", "S3"]
+    assert j["patterns"]["S2"]["name"] == "third" and "S3" not in j["patterns"]

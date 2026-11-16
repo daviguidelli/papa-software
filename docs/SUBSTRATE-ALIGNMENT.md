@@ -20,7 +20,15 @@ shifted to sit exactly on it before the scrub runs.
    photo, straightened and zoomed (no uploading). Before the camera points
    are taught the array's size is not measured, so the sketcher asks for it;
    sketches drawn then are checked once the points exist, and flagged if the
-   camera turns out to be turned relative to the printer. Draw the bridges and press
+   camera turns out to be turned relative to the printer.
+   In the sketcher, thumbnails of every substrate (✓ when sketched) open it
+   with a click; [ and ] (or Page Up / Page Down) go to the previous / next.
+   **Set its 4 corners** shows the photo around the substrate with the found
+   corners: drag them (or clear and click all four) and press Use these
+   corners. **+ Add a substrate** does the same on the whole photo for one the
+   scan missed, and **Not a substrate** removes a false find (later substrates
+   move up one number, their sketches with them). Hand-set corners hold for
+   that scan; a new scan finds the arrays again. Draw the bridges and press
    Save to send them back. Or tick substrates and load a sketch file, or copy
    one substrate's pattern to others. Substrates without their own pattern use
    the Scrub tab's sketch.

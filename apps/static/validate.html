@@ -428,11 +428,12 @@
       <p class="note" style="margin-top:0">Takes one photo, finds every copper electrode array, and places each substrate's pattern on its array: turned and shifted to match it, at the sketched size. The sketch's top-left corner is the array's top-left corner (local +x runs to machine <span class="mono" id="alAxX">+X</span>, local +y to <span class="mono" id="alAxY">−Y</span>).</p>
       <div class="row" style="align-items:center">
         <button class="gold" id="alScan">Scan substrates</button>
+        <a class="btn" id="alSketchAll" href="/static/bridge_sketcher.html" target="_blank" hidden>Sketch them in order &rarr;</a>
         <span class="muted mono" id="alScanInfo" style="font-size:12.5px"></span>
       </div>
       <p class="note" id="alMsg"></p>
       <img id="alImg" alt="Detected arrays with their placed toolpaths" style="width:100%;display:none;margin-top:10px;border:1px solid var(--line);border-radius:4px">
-      <p class="note" id="alLegend" hidden>The picture is square to the printer: right is exactly +X, up is exactly +Y, grid lines every 10 mm. Green outline: array as measured (dot = its top-left corner). White: scrub path. Gold: lifted hops. Red: bridges. Red outline: this array does not match its pattern. Arrows: printer +X and +Y.</p>
+      <p class="note" id="alLegend" hidden>The picture is square to the printer: right is exactly +X, up is exactly +Y, grid lines every 10 mm. Green outline: array as measured (dot = its top-left corner; orange = corners set by hand in the sketcher). White: scrub path. Gold: lifted hops. Red: bridges. Red outline: this array does not match its pattern. Arrows: printer +X and +Y.</p>
       <table style="margin-top:12px" id="alTab" hidden>
         <thead><tr><th><input type="checkbox" id="alAll" title="Select all"></th><th>Substrate</th><th>Pattern</th><th>Measured mm</th><th>Pattern mm</th><th>Turn °</th><th>Origin X, Y mm</th><th>Fit mm</th><th></th></tr></thead>
         <tbody id="alRows"></tbody>
@@ -1128,6 +1129,7 @@ function paintAlign(){
   if(sc&&sc.pixel_only&&sc.substrates.length&&!sc.warnings.length){m.textContent='Arrays found and labelled. Press Sketch to draw the bridges on each one. Sizes in mm, turns and toolpaths appear once the camera points are taught (below).';m.className='note'}
   const subs=sc?sc.substrates:[];
   $('#alTab').hidden=!subs.length;
+  $('#alSketchAll').hidden=!subs.length;
   const ids=subs.map(x=>x.id);alSel=new Set([...alSel].filter(i=>ids.includes(i)));
   if(sc&&sc.pixel_only){
     $('#alRows').innerHTML=subs.map(x=>`<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>

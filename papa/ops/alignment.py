@@ -219,18 +219,14 @@ def drawn_turned(axes: dict[str, str], printer_axes: corr.PrinterAxes, size: tup
     return not (ex[0] > abs(ex[1]) and ey[1] > abs(ey[0]))
 
 
-def scan(rgb: np.ndarray, axes: dict[str, str], printer_axes: corr.PrinterAxes,
-         settings: dict[str, Any], default_pattern: dict,
-         params: elec.ElectrodeParams | None = None) -> ScanResult:
-    """Find every array in one RGB camera frame and place its pattern."""
+def place_views(views: list[np.ndarray], size: tuple[int, int], axes: dict[str, str],
+                printer_axes: corr.PrinterAxes, settings: dict[str, Any], default_pattern: dict) -> ScanResult:
+    """Place each substrate's pattern on arrays given as corrected-view corners
+    (found by find, or set by hand), numbered S1, S2, ... in list order."""
     st = merged(settings)
-    size = (rgb.shape[1], rgb.shape[0])
-    found = find(rgb, params)
-    if not found:
-        return ScanResult(size, [], [], {}, ["No electrode arrays found. Check lighting and focus."])
     c = corr.get_correction(size)
     placements, arrays_px, source = [], [], {}
-    for n, view in enumerate(found, 1):
+    for n, view in enumerate(views, 1):
         sid = f"S{n}"
         own = st["patterns"].get(sid)
         pattern = own or default_pattern
@@ -243,7 +239,16 @@ def scan(rgb: np.ndarray, axes: dict[str, str], printer_axes: corr.PrinterAxes,
                               "turned. Open it in the sketcher and save it again.")
         arrays_px.append(c.from_plate(printer_axes.mm_to_plate(np.asarray(p.corners_mm))))
         placements.append(p)
-    return ScanResult(size, arrays_px, placements, source, [])
+    return ScanResult(size, arrays_px, placements, source,
+                      [] if views else ["No electrode arrays found. Check lighting and focus."])
+
+
+def scan(rgb: np.ndarray, axes: dict[str, str], printer_axes: corr.PrinterAxes,
+         settings: dict[str, Any], default_pattern: dict,
+         params: elec.ElectrodeParams | None = None) -> ScanResult:
+    """Find every array in one RGB camera frame and place its pattern."""
+    size = (rgb.shape[1], rgb.shape[0])
+    return place_views(find(rgb, params), size, axes, printer_axes, settings, default_pattern)
 
 
 def rectify(rgb: np.ndarray, machine_axes: dict[str, str], printer_axes: corr.PrinterAxes,
