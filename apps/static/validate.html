@@ -428,7 +428,7 @@
       <p class="note" style="margin-top:0">Takes one photo, finds every copper electrode array, and places each substrate's pattern on its array: turned and shifted to match it, at the sketched size. The sketch's top-left corner is the array's top-left corner (local +x runs to machine <span class="mono" id="alAxX">+X</span>, local +y to <span class="mono" id="alAxY">−Y</span>).</p>
       <div class="row" style="align-items:center">
         <button class="gold" id="alScan">Scan substrates</button>
-        <a class="btn" id="alSketchAll" href="/static/bridge_sketcher.html" target="_blank" hidden>Sketch them in order &rarr;</a>
+        <a class="btn" id="alSketchAll" href="/static/bridge_sketcher.html" hidden>Sketch them in order &rarr;</a>
         <span class="muted mono" id="alScanInfo" style="font-size:12.5px"></span>
       </div>
       <p class="note" id="alMsg"></p>
@@ -1134,7 +1134,7 @@ function paintAlign(){
   if(sc&&sc.pixel_only){
     $('#alRows').innerHTML=subs.map(x=>`<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>
       <td><b>${x.id}</b></td><td>${esc(x.pattern_name)}</td><td colspan="5" class="muted">${x.size_px[0]} × ${x.size_px[1]} px (mm after the camera points)</td>
-      <td style="white-space:nowrap"><a class="btn sm gold" href="/static/bridge_sketcher.html?substrate=${x.id}" target="_blank">Sketch</a></td></tr>
+      <td style="white-space:nowrap"><a class="btn sm gold" href="/static/bridge_sketcher.html?substrate=${x.id}">Sketch</a></td></tr>
       <tr><td></td><td colspan="8" style="padding-top:0;font-size:12px;text-align:left">${x.crop?`<img src="${x.crop}" alt="${x.id} close-up" style="float:left;width:300px;max-width:45%;margin:2px 14px 6px 0;border:1px solid var(--line);border-radius:3px">`:''}<span class="muted">${x.problems.map(esc).join(' ')}</span></td></tr>`).join('');
   }else
   $('#alRows').innerHTML=subs.map(x=>{
@@ -1145,7 +1145,7 @@ function paintAlign(){
       <td>${fmt(x.pattern_mm[0],2)} × ${fmt(x.pattern_mm[1],2)}</td>
       <td class="${Math.abs(x.rotation_deg)>a.settings.max_rotation_deg?'err':''}">${(x.rotation_deg>=0?'+':'')+fmt(x.rotation_deg,2)}</td>
       <td>${fmt(x.origin_mm[0],2)}, ${fmt(x.origin_mm[1],2)}</td><td>${fmt(x.fit_rms_mm,3)}</td>
-      <td style="white-space:nowrap"><a class="btn sm" href="/static/bridge_sketcher.html?substrate=${x.id}" target="_blank">Sketch</a> <button class="sm" data-scrub="${x.id}" ${lock||!homedXY()?'disabled':''}>Scrub</button> <button class="sm gold" data-routine="${x.id}" ${lock||!homedXY()?'disabled':''}>Routine 1</button></td></tr>
+      <td style="white-space:nowrap"><a class="btn sm" href="/static/bridge_sketcher.html?substrate=${x.id}">Sketch</a> <button class="sm" data-scrub="${x.id}" ${lock||!homedXY()?'disabled':''}>Scrub</button> <button class="sm gold" data-routine="${x.id}" ${lock||!homedXY()?'disabled':''}>Routine 1</button></td></tr>
       <tr><td></td><td colspan="8" class="${ok?'good':'warn'}" style="padding-top:0;font-size:12px;text-align:left">${x.crop?`<img src="${x.crop}" alt="${x.id} close-up" style="float:left;width:300px;max-width:45%;margin:2px 14px 6px 0;border:1px solid var(--line);border-radius:3px">`:''}${ok?(x.plan?`Ready · ${x.plan.rows} rows, ${x.plan.hops} hops, ~${fmt(x.plan.est_s/60,1)} min`:'Ready'):x.problems.map(esc).join(' ')}</td></tr>`}).join('');
   $('#alAll').checked=subs.length&&alSel.size===subs.length;
   const opts=['<option value="">Scrub tab sketch</option>'].concat(subs.filter(x=>a.patterns[x.id]).map(x=>`<option value="${x.id}">${x.id} · ${esc(x.pattern_name)}</option>`));
@@ -1250,7 +1250,8 @@ document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{if(S.mode!==b.datas
 /* ---------- start ---------- */
 setInterval(()=>{if(!S.busy)poll()},1500);
 setInterval(loadDev,15000);
-(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();if(['auto','scrub','align'].includes(LS.get('mode','manual')))setMode(LS.get('mode'));else if(S.tab==='cell')setWatch(true)})();
+(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();{const qm=new URLSearchParams(location.search).get('mode');if(['auto','scrub','align'].includes(qm))LS.set('mode',qm)}
+  if(['auto','scrub','align'].includes(LS.get('mode','manual')))setMode(LS.get('mode'));else if(S.tab==='cell')setWatch(true)})();
 </script>
 </body>
 </html>

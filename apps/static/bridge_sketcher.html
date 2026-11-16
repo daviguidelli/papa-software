@@ -103,6 +103,7 @@ kbd{font:10px var(--mono);border:1px solid var(--line2);padding:0 4px;color:var(
   <span class="sep"></span>
   <span class="ttl">Bridge sketcher</span>
   <span class="sp"></span>
+  <button id="backBtn" title="Back to the Substrates tab" style="margin-right:12px">&larr; Back to substrates</button>
   <button id="undo" title="Ctrl/Cmd+Z">Undo</button>
   <button id="redo" title="Ctrl/Cmd+Shift+Z">Redo</button>
 </header>
@@ -978,6 +979,12 @@ async function fsSave(){
 }
 const fsGo=d=>{const i=fsIdx()+d;if(i>=0&&i<FS.list.length)fsLoad(FS.list[i].id)};
 $('#fsSel').onchange=e=>fsLoad(e.target.value);
+function fsBack(){
+  if(FS&&FS.dirty&&FS.id&&!confirm(FS.id+' has changes that are not saved. Leave without saving?'))return;
+  if(FS)FS.dirty=false;
+  location.href='/validate?mode=align';
+}
+$('#backBtn').onclick=fsBack;
 $('#fsThumbs').onclick=e=>{const t=e.target.closest('[data-thumb]');if(t&&!FS.cm)fsLoad(t.dataset.thumb)};
 addEventListener('keydown',e=>{
   if(!FS||!FS.list.length||FS.cm||e.target.closest('input,select,textarea'))return;
@@ -1032,7 +1039,13 @@ for(const id of ['fsW','fsH'])$('#'+id).addEventListener('change',()=>{
 $('#fsPrev').onclick=()=>fsGo(-1);
 $('#fsNext').onclick=()=>fsGo(1);
 $('#fsSave').onclick=fsSave;
-$('#fsSaveNext').onclick=async()=>{if(await fsSave())fsGo(1)};
+$('#fsSaveNext').onclick=async()=>{
+  if(!await fsSave())return;
+  if(fsIdx()<FS.list.length-1){fsGo(1);return}
+  const left=FS.list.filter(s=>!FS.patterns[s.id]).map(s=>s.id);
+  if(left.length){if(confirm('That was the last one. Still not sketched: '+left.join(', ')+'. Go to '+left[0]+'?'))fsLoad(left[0])}
+  else if(confirm('Every substrate is sketched. Back to the Substrates tab?'))fsBack();
+};
 $('#fsCopyNext').onclick=async()=>{
   const nxt=FS.list[fsIdx()+1];if(!nxt)return;
   try{await fsPost([FS.id,nxt.id]);FS.dirty=false;toast('Saved '+FS.id+' and copied it to '+nxt.id);await fsList();fsLoad(nxt.id)}
