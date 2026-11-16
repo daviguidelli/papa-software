@@ -185,6 +185,36 @@ def plan(settings: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def to_gcode(settings: dict[str, Any], axes: dict[str, str], header: str = "") -> str:
+    """The same moves ScrubRunner.execute makes, as a G-code file (mm,
+    absolute): rise, travel to the start, lower to contact, scrub, hop over
+    bridges, rise at the end. Needs start x, y, z."""
+    st = merged(settings)
+    p = plan(st)
+    s = st.get("start") or {}
+    if s.get("z") is None or s.get("x") is None:
+        raise ScrubError("No start: the contact Z (and X, Y from the camera) are needed.")
+    sx, sy, cz = float(s["x"]), float(s["y"]), float(s["z"])
+    tz = cz + float(st["lift_mm"])
+    fz, ft, fc = (60 * float(st[k]) for k in ("z_mm_s", "travel_mm_s", "scrub_mm_s"))
+    rot = float(st.get("rotation_deg") or 0.0)
+
+    def xy(lx: float, ly: float) -> str:
+        mx, my = to_machine(axes, sx, sy, lx, ly, rot)
+        return f"X{mx:.3f} Y{my:.3f}"
+
+    out = [ln for ln in header.splitlines()] + [
+        f"; scrub: {p['rows']} rows, {p['hops']} hops, swab {float(st['swab_mm']):g} mm, contact Z {cz:g}",
+        "G21", "G90", f"G0 Z{tz:.3f} F{fz:.0f}", f"G0 {xy(0.0, 0.0)} F{ft:.0f}", f"G1 Z{cz:.3f} F{fz:.0f}"]
+    for seg in p["segments"]:
+        if seg["kind"] == "hop":
+            out += [f"G1 Z{tz:.3f} F{fz:.0f}", f"G0 {xy(seg['x1'], seg['y1'])} F{ft:.0f}", f"G1 Z{cz:.3f} F{fz:.0f}"]
+        else:
+            out.append(f"G1 {xy(seg['x1'], seg['y1'])} F{fc:.0f}")
+    out.append(f"G1 Z{tz:.3f} F{fz:.0f}")
+    return "\n".join(out) + "\n"
+
+
 def problems(settings: dict[str, Any], machine: Any, ref: str | None, floor: float | None) -> list[str]:
     st = merged(settings)
     out: list[str] = []

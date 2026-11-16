@@ -1472,8 +1472,7 @@ def _substrate(sid: str) -> tuple[alignmod.Placement, dict]:
         raise HTTPException(400, "Teach the camera points first, then scan again.")
     for p in hub.align_scan["result"].placements:
         if p.id == sid:
-            pattern = _align_settings()["patterns"].get(sid) or _scrub_tab_pattern()
-            return p, pattern
+            return p, _pattern_of(sid)
     raise HTTPException(404, f"no substrate {sid} in the last scan")
 
 
@@ -1551,8 +1550,12 @@ def _align_info() -> dict:
             mi = (sc.get("mount_info") or [None] * len(d["substrates"]))[int(sid[1:]) - 1]
             sub["mount"] = None if mi is None else {"source": mi["source"], **mi["match"].as_dict(),
                                                     "gcode_ready": _ref_ready()[0]}
+            sub["gcode_from"] = ("reference G-code" if _ref_gcode() is not None and _ref_ready()[0] and mi is not None
+                                 else "plan")
+            sub["glass_placed"] = sub.get("pattern_source") == "reference"
             pat = st["patterns"].get(sid)
-            sub["pattern_name"] = (pat or {}).get("name") or ("own pattern" if pat else "Scrub tab sketch")
+            sub["pattern_name"] = ((pat or {}).get("name") or "own pattern") if pat else (
+                "Reference sketch (on the glass)" if sub["glass_placed"] else "Scrub tab sketch")
         info["scan"] = {**d, "time": sc["time"], "scan_id": sc.get("scan_id"), "image": sc["image"],
                         "timing": sc.get("timing"),
                         "shown_scale": sc["shown_scale"], "stale": sc.get("stale", False)}
@@ -1603,7 +1606,7 @@ def _draw_alignment(img: Any, result: alignmod.ScanResult, box: tuple[float, flo
     for p in result.placements:
         if only is not None and p.id != only:
             continue
-        pattern = st_patterns.get(p.id) or _scrub_tab_pattern()
+        pattern = _pattern_of(p.id, result)
         try:
             plan = scrubmod.plan(alignmod.scrub_settings(_scrub_settings(), pattern, p))
             for sg in plan["segments"]:
@@ -1732,6 +1735,51 @@ def _jpeg(bgr: Any, q: int = 85) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
 
 
+def _glass_placements(sc: dict, result: alignmod.ScanResult) -> None:
+    """Substrates without their own pattern get the reference sketch, placed
+    on their glass by the glass-vs-reference match (instead of on the array)."""
+    import numpy as np
+
+    from papa.ops.geometry import axis_matrix
+
+    sk, r = _ref_sketch(), _ref_cfg()
+    if sk is None or not r.get("placement"):
+        return
+    st = _align_settings()
+    bx, by = axis_matrix(hub.machine.axes)
+    for i, p in enumerate(result.placements):
+        mi = (sc.get("mount_info") or [None] * len(result.placements))[i]
+        if mi is None or st["patterns"].get(p.id):
+            continue
+        mt = mi["match"]
+        g = refmod.glass_placement(r["placement"], mt, bx, by)
+        c = np.asarray(g["corners"])
+        w, h = float(sk["area"]["w"]), float(sk["area"]["h"])
+        mw = float((np.linalg.norm(c[1] - c[0]) + np.linalg.norm(c[2] - c[3])) / 2)
+        mh = float((np.linalg.norm(c[3] - c[0]) + np.linalg.norm(c[2] - c[1])) / 2)
+        warns = list(mt.warnings) + g["warnings"]
+        lim = float(st["max_rotation_deg"])
+        if abs(mt.rotation_deg) > lim and not mt.red_found:
+            warns.append(f"Glass turned {mt.rotation_deg:+.1f} deg from the reference, more than {lim:g} deg.")
+        result.placements[i] = alignmod.Placement(
+            p.id, c.tolist(), c.mean(0).tolist(), g["origin"], g["rotation_deg"], [mw, mh], [w, h],
+            [mw - w, mh - h], mt.rms_mm, warns)
+        result.pattern_source[p.id] = "reference"
+
+
+def _pattern_of(sid: str, result: alignmod.ScanResult | None = None) -> dict:
+    """The pattern a placed substrate runs: its own, else the reference sketch
+    (when placed on its glass), else the Scrub tab's."""
+    own = _align_settings()["patterns"].get(sid)
+    if own:
+        return own
+    res = result or (hub.align_scan or {}).get("result")
+    if res is not None and res.pattern_source.get(sid) == "reference" and _ref_sketch() is not None:
+        sk = _ref_sketch()
+        return {"name": sk.get("name") or "reference sketch", "area": sk["area"], "bridges": sk["bridges"]}
+    return _scrub_tab_pattern()
+
+
 def _render_scan(sc: dict) -> None:
     """(Re)place and (re)draw a scan from its photo and its arrays' corners,
     after a scan, a corner edit or an added substrate."""
@@ -1745,6 +1793,7 @@ def _render_scan(sc: dict) -> None:
     if axes_fit is not None:
         result = alignmod.place_views(views, rgb.shape[1::-1], hub.machine.axes, axes_fit,
                                       _align_settings(), _scrub_tab_pattern())
+        _glass_placements(sc, result)
         drawn, closeups = _scan_views(rgb, result, axes_fit, sc)    # square to the printer's X and Y
         sc["result"], sc["drawn"] = result, drawn
         sc["crops"] = {sid: _jpeg(img, 88) for sid, img in closeups.items()}
@@ -2045,6 +2094,13 @@ def _ref_gcode() -> str | None:
     return p.read_text() if p.exists() else None
 
 
+def _ref_sketch() -> dict | None:
+    import json
+
+    p = _ref_dir() / "sketch.json"
+    return json.loads(p.read_text()) if p.exists() else None
+
+
 def _ref_ready() -> tuple[bool, list[str]]:
     r = _ref_cfg()
     missing = []
@@ -2056,8 +2112,8 @@ def _ref_ready() -> tuple[bool, list[str]]:
         missing.append("which corner has the red dot")
     if not r.get("placement"):
         missing.append("where that glass was on the printer for the G-code")
-    if _ref_gcode() is None:
-        missing.append("the G-code toolpath")
+    if _ref_gcode() is None and _ref_sketch() is None:
+        missing.append("the toolpath (a bridge sketch or a G-code file)")
     return not missing, missing
 
 
@@ -2072,6 +2128,17 @@ def _ref_info() -> dict:
                             "corners": r.get("photo_corners"), "red_corner": r.get("red_corner"),
                             "placement": r.get("placement"), "gcode": None, "array_found": bool(r.get("array_photo")),
                             "array": r.get("array_photo")}
+    sk = _ref_sketch()
+    if sk is not None:
+        info["sketch"] = {"name": sk.get("name") or "sketch", "w": sk["area"]["w"], "h": sk["area"]["h"],
+                          "bridges": len(sk["bridges"]), "warning": None}
+        if r.get("placement") and max(abs(sk["area"]["w"] - r["placement"]["size"]),
+                                      abs(sk["area"]["h"] - r["placement"]["size"])) > 0.5:
+            info["sketch"]["warning"] = (f"The sketch is {sk['area']['w']:g} x {sk['area']['h']:g} mm but the glass "
+                                         f"is {r['placement']['size']:g} mm: the sketch should cover the whole glass, "
+                                         "with (0, 0) at the photo's top-left glass corner.")
+    else:
+        info["sketch"] = None
     g = _ref_gcode()
     if g is not None:
         try:
@@ -2093,6 +2160,14 @@ def _ref_info() -> dict:
                 pts = cv2.perspectiveTransform(np.float64([[[sg["x0"], sg["y0"]], [sg["x1"], sg["y1"]]]]), Hinv)[0]
                 cv2.line(img, tuple(np.round(pts[0]).astype(int)), tuple(np.round(pts[1]).astype(int)),
                          (30, 120, 255) if sg["cut"] else (200, 200, 200), 1, cv2.LINE_AA)
+        if c is not None and sk is not None:
+            # bridges in photo pixels: sketch (0,0) = top-left glass corner, x right, y down
+            cc = refmod.image_order(c)
+            ex, ey = (cc[1] - cc[0]) / sk["area"]["w"], (cc[3] - cc[0]) / sk["area"]["h"]
+            for b in sk["bridges"]:
+                pts = [cc[0] + (b["cx"] + dx * b["l"] / 2) * ex + (b["cy"] + dy * b["w"] / 2) * ey
+                       for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+                cv2.polylines(img, [np.round(pts).astype(np.int32)], True, (255, 0, 255), t + 1, cv2.LINE_AA)
         if r.get("array_photo"):
             cv2.polylines(img, [np.round(np.asarray(r["array_photo"])).astype(np.int32)], True, (80, 200, 80), t, cv2.LINE_AA)
         if c is not None:
@@ -2209,10 +2284,34 @@ def reference_placement(payload: dict) -> dict:
     return _ref_info()
 
 
+@app.post("/api/reference/sketch")
+def reference_sketch(payload: dict) -> dict:
+    """The reference substrate's bridge sketch (a bridge-sketcher export),
+    drawn over its whole glass: (0, 0) is the photo's top-left glass corner."""
+    import json
+
+    hub.require_idle()
+    if payload.get("clear"):
+        (_ref_dir() / "sketch.json").unlink(missing_ok=True)
+    else:
+        try:
+            sk = refmod.clean_sketch(payload.get("sketch") or {})
+        except refmod.ReferenceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        sk["name"] = str(payload.get("name") or "reference sketch")
+        (_ref_dir() / "sketch.json").write_text(json.dumps(sk))
+    _refresh_scan()
+    return _ref_info()
+
+
 @app.post("/api/reference/gcode")
 def reference_gcode(payload: dict) -> dict:
     """The known toolpath for the reference substrate, as text."""
     hub.require_idle()
+    if payload.get("clear"):
+        (_ref_dir() / "toolpath.gcode").unlink(missing_ok=True)
+        _refresh_scan()
+        return _ref_info()
     text = str(payload.get("text") or "")
     try:
         refmod.gcode_stats(text)
@@ -2296,31 +2395,52 @@ def align_set_mount(sid: str, payload: dict) -> dict:
 
 
 @app.get("/api/align/substrate/{sid}/gcode")
-def align_substrate_gcode(sid: str) -> Response:
-    """The reference G-code moved onto this substrate's glass."""
+def align_substrate_gcode(sid: str, z: float | None = None) -> Response:
+    """This substrate's toolpath as G-code: the reference G-code file moved onto
+    its glass when there is one, otherwise its scrub plan (the reference sketch
+    on its glass, or its own pattern on its array) written out. z: contact Z
+    when the Scrub tab has none yet."""
     sc = _scan_or_400()
     i = _sid_index(sc, sid)
-    ready, missing = _ref_ready()
-    if not ready:
-        raise HTTPException(400, "The reference is not complete: " + ", ".join(missing))
-    if _camera_axes()[0] is None:
+    if _camera_axes()[0] is None or sc.get("result") is None:
         raise HTTPException(400, "Teach the camera points first.")
     info = (sc.get("mount_info") or [None] * (i + 1))[i]
-    if info is None:
-        raise HTTPException(400, f"{sid} has no glass corners yet: set them in the sketcher.")
-    mt = info["match"]
-    head = "\n".join([
-        f"; PAPA: reference toolpath moved onto substrate {sid}",
-        f"; scan {sc.get('scan_id', '-')} at {sc['time']}; glass corners {info['source']}",
-        f"; turned {mt.rotation_deg:+.3f} deg, centre moved {mt.shift_mm[0]:+.3f}, {mt.shift_mm[1]:+.3f} mm; "
-        f"fit {mt.rms_mm:.3f} mm; red dot {'found' if mt.red_found else 'NOT found'}",
-    ] + [f"; WARNING: {w}" for w in mt.warnings])
-    try:
-        text, _ = refmod.transform_gcode(_ref_gcode() or "", mt.R, mt.t, header=head)
-    except refmod.ReferenceError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    name = _ref_cfg().get("gcode_name") or "toolpath.gcode"
+    if _ref_gcode() is not None and _ref_ready()[0]:
+        if info is None:
+            raise HTTPException(400, f"{sid} has no glass corners yet: set them in the sketcher.")
+        mt = info["match"]
+        head = "\n".join([
+            f"; PAPA: reference toolpath moved onto substrate {sid}",
+            f"; scan {sc.get('scan_id', '-')} at {sc['time']}; glass corners {info['source']}",
+            f"; turned {mt.rotation_deg:+.3f} deg, centre moved {mt.shift_mm[0]:+.3f}, {mt.shift_mm[1]:+.3f} mm; "
+            f"fit {mt.rms_mm:.3f} mm; red dot {'found' if mt.red_found else 'NOT found'}",
+        ] + [f"; WARNING: {w}" for w in mt.warnings])
+        try:
+            text, _ = refmod.transform_gcode(_ref_gcode() or "", mt.R, mt.t, header=head)
+        except refmod.ReferenceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    else:
+        p, pattern = _substrate(sid)
+        st = alignmod.scrub_settings(_scrub_settings(), pattern, p)
+        if not st.get("start") or st["start"].get("z") is None:
+            if z is None:
+                raise HTTPException(400, "No contact Z yet: set it on the Scrub tab (Set start here) or give one.")
+            st["start"] = {"x": round(p.origin_mm[0], 4), "y": round(p.origin_mm[1], 4), "z": float(z)}
+        src = sc["result"].pattern_source.get(sid)
+        head = "\n".join([
+            f"; PAPA: {pattern.get('name') or 'pattern'} on substrate {sid}"
+            + (" (placed on its glass, matched to the reference)" if src == "reference" else " (placed on its array)"),
+            f"; scan {sc.get('scan_id', '-')} at {sc['time']}; origin X{p.origin_mm[0]:.3f} Y{p.origin_mm[1]:.3f}, "
+            f"turned {p.rotation_deg:+.3f} deg",
+        ] + [f"; WARNING: {w}" for w in p.warnings])
+        try:
+            text = scrubmod.to_gcode(st, hub.machine.axes, header=head)
+        except scrubmod.ScrubError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        name = "scrub.gcode"
     return Response(text, media_type="text/plain",
-                    headers={"Content-Disposition": f'attachment; filename="{sid}_{_ref_cfg().get("gcode_name") or "toolpath.gcode"}"'})
+                    headers={"Content-Disposition": f'attachment; filename="{sid}_{name}"'})
 
 
 @app.post("/api/align/settings")

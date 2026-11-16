@@ -62,10 +62,18 @@ by the same turn and shift.
    (`reference.red_corner`); override it with the Red dot corner list.
 3. **Placement**: where that glass sat on the printer for the G-code (left
    edge X, front edge Y, size; square to the printer). Default 162.5, 162.1, 25.
-4. **G-code file** (G21 mm; G90/G91, G0/G1/G2/G3). G20 and G92 X/Y are refused.
+4. **Toolpath**, either or both:
+   - a **bridge sketch** (.json from the sketcher) drawn over the whole glass,
+     (0, 0) at the photo's top-left glass corner, x right, y down. Each scanned
+     substrate without its own sketch then *runs* this sketch placed on its glass
+     (`reference.glass_placement`), with Scrub / Routine 1, and its G-code ↓
+     writes that scrub plan out (`scrub.to_gcode`; asks for a contact Z if the
+     Scrub tab has none).
+   - a **G-code file** (G21 mm; G90/G91, G0/G1/G2/G3; G20 and G92 X/Y are
+     refused). When loaded, G-code ↓ gives this file moved onto the glass.
 
 Stored under `reference:` in `calibration.yaml` and in `<state>/reference/`
-(photo.jpg, toolpath.gcode).
+(photo.jpg, sketch.json, toolpath.gcode).
 
 On each scan (needs the camera points), every substrate's glass is estimated
 from its array, using the same glass-to-array layout as on the reference, unless

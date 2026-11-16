@@ -252,3 +252,50 @@ def gcode_stats(text: str) -> GcodeStats:
     ys = [v for s in segs for v in (s["y0"], s["y1"])]
     zs = [s["z"] for s in segs if s["cut"] and s["z"] is not None]
     return GcodeStats(len(segs), (min(xs), max(xs)), (min(ys), max(ys)), min(zs) if zs else None)
+
+
+# ---- a bridge sketch drawn on the reference glass ---------------------------------
+
+def sketch_frame(placement: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The reference sketch's frame in printer mm: origin at the reference
+    photo's top-left glass corner, local x along the photo's right, local y
+    along the photo's down (unit vectors)."""
+    c = reference_mm(placement)
+    ux, uy = c[1] - c[0], c[3] - c[0]
+    return c[0], ux / np.linalg.norm(ux), uy / np.linalg.norm(uy)
+
+
+def glass_placement(placement: dict, m: Match, local_x: tuple[float, float],
+                    local_y: tuple[float, float]) -> dict[str, Any]:
+    """Where the reference sketch lands on a new glass: origin (printer mm),
+    rotation_deg for geometry.to_machine (machine axes local_x / local_y given
+    as unit vectors), the new glass corners in sketch order (TL, TR, BR, BL)
+    and any warning."""
+    o, ux, uy = sketch_frame(placement)
+    o2, ux2, uy2 = m.R @ o + m.t, m.R @ ux, m.R @ uy
+    bx, by = np.asarray(local_x, float), np.asarray(local_y, float)
+    rot = math.degrees(math.atan2(bx[0] * ux2[1] - bx[1] * ux2[0], float(bx @ ux2)))
+    th = math.radians(rot)
+    Rr = np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+    warns = []
+    if float((Rr @ by) @ uy2) < 0.9:
+        warns.append("The printer's local Y axis (machine.yaml axes) runs the other way from the reference "
+                     "photo's down direction, so the sketch would land mirrored. Check axes in machine.yaml.")
+    corners = reference_mm(placement) @ m.R.T + m.t
+    return {"origin": o2.tolist(), "rotation_deg": rot, "corners": corners.tolist(), "warnings": warns}
+
+
+def clean_sketch(payload: dict) -> dict:
+    """A bridge-sketcher export, without its picture."""
+    if not isinstance(payload, dict) or "bridges" not in payload:
+        raise ReferenceError("That is not a bridge-sketcher file (no bridges in it).")
+    sub = payload.get("substrate") or payload.get("area") or {}
+    try:
+        w, h = float(sub.get("w")), float(sub.get("h"))
+        bridges = [{"id": str(b.get("id", f"B{i + 1}")), "cx": float(b["cx"]), "cy": float(b["cy"]),
+                    "l": float(b["l"]), "w": float(b["w"])} for i, b in enumerate(payload["bridges"])]
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ReferenceError("The sketch needs a substrate size and bridges with cx, cy, l, w.") from exc
+    if not (0 < w <= 100 and 0 < h <= 100):
+        raise ReferenceError("The sketch's substrate size must be between 0 and 100 mm.")
+    return {"area": {"w": w, "h": h}, "bridges": bridges, "units": payload.get("units", "mm")}

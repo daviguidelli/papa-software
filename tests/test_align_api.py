@@ -274,3 +274,43 @@ def test_reference_flow_moves_the_gcode_onto_each_substrate(aligned, monkeypatch
     assert j["array"][0] == [320, 505]
     s1 = next(s for s in a.get("/api/align").json()["scan"]["substrates"] if s["id"] == "S1")
     assert s1["mount"]["source"] == "set by hand"
+
+
+def test_reference_sketch_lands_on_each_glass(aligned, monkeypatch, tmp_path):
+    import json
+
+    from papa.ops.geometry import to_machine
+
+    a = aligned
+    monkeypatch.setattr(a.server, "STATE_DIR", tmp_path)
+    a.post("/api/reference/photo", json={"image": _data_url("tests/data/reference_substrate.png")})
+    a.post("/api/reference/corners", json={"corners": [[323, 463], [663, 463], [663, 806], [323, 806]]})
+    a.post("/api/reference/placement", json={"x_min": 162.5, "y_min": 162.1, "size": 25})
+    sk = json.load(open("tests/data/reference_bridges.json"))
+    assert a.post("/api/reference/sketch", json={"sketch": {"bridges": []}}).status_code == 400
+    j = a.post("/api/reference/sketch", json={"sketch": sk, "name": "bridges_2026-11-16"}).json()
+    assert j["ready"] and j["sketch"]["bridges"] == 8 and j["sketch"]["warning"] is None
+
+    subs = a.post("/api/align/scan", json={"save": False}).json()["scan"]["substrates"]
+    assert all(s["glass_placed"] and s["pattern_name"].startswith("Reference sketch") for s in subs)
+    assert all(s["pattern_mm"] == [25, 25] for s in subs)
+    sc = a.server.hub.align_scan
+    axes = a.server.hub.machine.axes
+    for i, s in enumerate(subs):
+        mt = sc["mount_info"][i]["match"]
+        for b in sk["bridges"]:                       # reference bridge, moved like the glass
+            ref = np.array([162.5 + b["cx"], 162.1 + 25 - b["cy"]])
+            want = mt.R @ ref + mt.t
+            got = to_machine(axes, *s["origin_mm"], b["cx"], b["cy"], s["rotation_deg"])
+            assert got == pytest.approx(want.tolist(), abs=1e-3)       # API rounds to 4 dp
+
+    r = a.get("/api/align/substrate/S1/gcode")
+    assert r.status_code == 400 and "contact Z" in r.json()["error"]
+    r = a.get("/api/align/substrate/S1/gcode", params={"z": 4.5})
+    assert r.status_code == 200 and "S1_scrub.gcode" in r.headers["content-disposition"]
+    assert "matched to the reference" in r.text and "G1 Z4.500" in r.text
+
+    # a substrate's own sketch still wins over the reference
+    a.post("/api/align/pattern", json={"targets": ["S2"], "sketch": SKETCH, "name": "own"})
+    s2 = next(s for s in a.get("/api/align").json()["scan"]["substrates"] if s["id"] == "S2")
+    assert not s2["glass_placed"] and s2["pattern_name"] == "own"

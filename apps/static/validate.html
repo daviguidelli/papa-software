@@ -471,7 +471,7 @@
           <li><b>Photo</b> of the reference substrate, from straight above (phone is fine; JPEG or PNG, or HEIC in Safari): <input type="file" id="rfFile" accept="image/*,.heic,.heif"></li>
           <li><b>Click its 4 glass corners</b> in the photo (any order). The red dot corner is found by itself; change it below if it is wrong.</li>
           <li><b>Where that glass sat on the printer</b> when the G-code was made.</li>
-          <li><b>The G-code file</b> (mm, absolute or relative moves).</li>
+          <li><b>Its toolpath</b>: the bridge sketch of this substrate (.json from the sketcher, drawn over the whole glass with 0, 0 at the photo's top-left glass corner), or a G-code file.</li>
         </ol>
         <div style="position:relative;margin-top:10px;max-width:640px;background:#111;border:1px solid var(--line);border-radius:4px" id="rfWrap" hidden>
           <img id="rfImg" alt="Reference substrate photo" style="width:100%;display:block;cursor:crosshair">
@@ -490,11 +490,18 @@
           <button class="gold sm" id="rfPlSave">Save</button>
         </div>
         <div class="row" style="margin-top:10px;align-items:center">
-          <label style="flex:0 0 auto">G-code file<input type="file" id="rfGcode" accept=".gcode,.gc,.nc,.txt,text/plain"></label>
-          <span class="mono muted" id="rfGInfo" style="font-size:12.5px"></span>
+          <label style="flex:0 0 auto">Bridge sketch<input type="file" id="rfSketch" accept=".json,application/json"></label>
+          <span class="mono muted" id="rfSInfo" style="font-size:12.5px"></span>
+          <button class="sm" id="rfSClear" hidden>Remove</button>
         </div>
+        <div class="row" style="margin-top:10px;align-items:center">
+          <label style="flex:0 0 auto">or G-code file<input type="file" id="rfGcode" accept=".gcode,.gc,.nc,.txt,text/plain"></label>
+          <span class="mono muted" id="rfGInfo" style="font-size:12.5px"></span>
+          <button class="sm" id="rfGClear" hidden>Remove</button>
+        </div>
+        <p class="note muted" style="font-size:12px;margin-top:4px">With a sketch, each scanned substrate gets these bridges placed on its glass (turned and shifted like the glass) and runs with Scrub / Routine 1 or downloads as G-code. A G-code file, if loaded, is what the download gives instead (moved the same way). A substrate with its own sketch keeps its own.</p>
         <p class="note" id="rfMsg"></p>
-        <p class="note muted" style="font-size:12px">In the photo: gold = glass corners, red ring = red dot corner, green = electrode array (found by itself; click "electrode array corners" to fix it), orange = the G-code's cutting moves, grey = travel. New substrates' glass is estimated from their array the same way as on this one; set a substrate's glass by hand in the sketcher if needed. Needs the camera points.</p>
+        <p class="note muted" style="font-size:12px">In the photo: gold = glass corners, red ring = red dot corner, pink = sketch bridges, green = electrode array (found by itself; click "electrode array corners" to fix it), orange = the G-code's cutting moves, grey = travel. New substrates' glass is estimated from their array the same way as on this one; set a substrate's glass by hand in the sketcher if needed. Needs the camera points.</p>
       </div>
     </details>
 
@@ -1232,7 +1239,8 @@ function alGlass(x){
   const g=x.mount;if(!g)return '';
   const w=(g.warnings||[]).map(esc).join(' ');
   return `<div style="clear:none;margin-top:6px" class="${w?'warn':'muted'}"><b>Glass vs reference</b> (${esc(g.source)}): turned ${(g.rotation_deg>=0?'+':'')+fmt(g.rotation_deg,2)}°, moved ${fmt(g.shift_mm[0],2)}, ${fmt(g.shift_mm[1],2)} mm · ${fmt(g.size_mm,2)} mm glass · red dot ${g.red_found?'found':'not found'}${w?' · '+w:''}
-    ${g.gcode_ready?` <a class="btn sm gold" href="/api/align/substrate/${x.id}/gcode" download>G-code ↓</a>`:' <span class="muted">(finish the reference below for G-code)</span>'}
+    ${x.glass_placed?' · <b>runs the reference sketch on this glass</b>':''}
+    ${g.gcode_ready?` <button class="sm gold" data-gcode="${x.id}" data-from="${x.gcode_from}">G-code ↓</button>`:' <span class="muted">(finish the reference below for G-code)</span>'}
     <a class="btn sm" href="/static/bridge_sketcher.html?substrate=${x.id}&glass=1">Set glass corners</a></div>`;
 }
 function alDrawPts(){
@@ -1287,7 +1295,9 @@ function paintRef(){
   $('#rfRed').value=r.red_corner==null?'':String(r.red_corner);$('#rfRed').disabled=!r.corners||S.busy;
   const pl=r.placement||{x_min:162.5,y_min:162.1,size:25};
   [['rfX','x_min'],['rfY','y_min'],['rfS','size']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el&&!el.dataset.edit)el.value=pl[k]});
-  const g=r.gcode;$('#rfGInfo').textContent=!g?'none yet':(g.error?g.name+': '+g.error:`${g.name} · ${g.moves} moves · X ${fmt(g.x[0],2)}–${fmt(g.x[1],2)}, Y ${fmt(g.y[0],2)}–${fmt(g.y[1],2)} mm · cutting at Z ${fmt(g.z_cut,2)}`);
+  const sk=r.sketch;$('#rfSInfo').textContent=sk?`${sk.name} · ${fmt(sk.w,1)} × ${fmt(sk.h,1)} mm · ${sk.bridges} bridges`+(sk.warning?' · '+sk.warning:''):'none';
+  $('#rfSInfo').className='mono '+(sk&&sk.warning?'warn':'muted');$('#rfSClear').hidden=!sk;$('#rfGClear').hidden=!r.gcode;
+  const g=r.gcode;$('#rfGInfo').textContent=!g?'none':(g.error?g.name+': '+g.error:`${g.name} · ${g.moves} moves · X ${fmt(g.x[0],2)}–${fmt(g.x[1],2)}, Y ${fmt(g.y[0],2)}–${fmt(g.y[1],2)} mm · cutting at Z ${fmt(g.z_cut,2)}`);
   const m=$('#rfMsg');
   if(r.ready){m.textContent='Reference ready.'+(!r.placement?'':'')+' Scan substrates: each row of the table gets "Glass vs reference" and a G-code download.'+((S.al&&!S.al.camera.fit)?' (The camera points are still needed for that.)':'');m.className='note good'}
   else{m.textContent='Still needed: '+r.missing.join(', ')+'.'+(r.photo&&!r.array_found?' The electrode array was not found by itself: choose "electrode array corners" and click its 4 corners.':'');m.className='note warn'}
@@ -1334,6 +1344,11 @@ function rfPhotoData(file){
 }
 $('#rfFile').onchange=e=>{const f=e.target.files[0];if(!f)return;rfClicks=[];
   run('Reference photo saved',async()=>{S.rf=await post('/api/reference/photo',{image:await rfPhotoData(f)});$('#rfWhat').value='glass';paintRef();e.target.value=''})};
+$('#rfSketch').onchange=e=>{const f=e.target.files[0];if(!f)return;
+  run('Reference sketch saved',async()=>{let sk;try{sk=JSON.parse(await f.text())}catch(x){throw new Error('That file is not a sketch (not JSON).')}
+    S.rf=await post('/api/reference/sketch',{sketch:sk,name:f.name.replace(/\.json$/i,'')});paintRef();loadAlign();e.target.value=''})};
+$('#rfSClear').onclick=()=>run('Reference sketch removed',async()=>{S.rf=await post('/api/reference/sketch',{clear:true});paintRef();loadAlign()});
+$('#rfGClear').onclick=()=>run('Reference G-code removed',async()=>{S.rf=await post('/api/reference/gcode',{clear:true});paintRef();loadAlign()});
 $('#rfGcode').onchange=e=>{const f=e.target.files[0];if(!f)return;
   run('Reference G-code saved',async()=>{S.rf=await post('/api/reference/gcode',{text:await f.text(),name:f.name});paintRef();loadAlign();e.target.value=''})};
 
@@ -1341,7 +1356,18 @@ $('#alScan').onclick=()=>run('Substrates scanned',async()=>{
   $('#alMsg').textContent='Taking a full-resolution photo and finding the arrays (a few seconds)…';$('#alMsg').className='note';
   const r=await post('/api/align/scan');$('#alMsg').textContent='';S.al=r;paintAlign()});
 $('#alAll').onchange=e=>{const subs=(S.al&&S.al.scan)?S.al.scan.substrates:[];alSel=new Set(e.target.checked?subs.map(x=>x.id):[]);paintAlign()};
+function alGcode(id,from){
+  let q='';
+  if(from==='plan'&&!(S.al.scrub_start&&S.al.scrub_start.z!=null)){
+    const z=prompt('No contact Z is set on the Scrub tab yet. Contact Z for this G-code (mm)?','4.5');
+    if(z===null)return;if(!isFinite(+z)||z===''){say('Contact Z must be a number','err');return}q='?z='+encodeURIComponent(z)}
+  run('G-code for '+id,async()=>{const r=await fetch('/api/align/substrate/'+id+'/gcode'+q);
+    if(!r.ok){let m='HTTP '+r.status;try{m=(await r.json()).error||m}catch(x){}throw new Error(m)}
+    const cd=r.headers.get('content-disposition')||'',fn=(cd.match(/filename="([^"]+)"/)||[])[1]||id+'.gcode';
+    const u=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=u;a.download=fn;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),2000)});
+}
 $('#alRows').onclick=e=>{
+  const gb=e.target.closest('[data-gcode]');if(gb){alGcode(gb.dataset.gcode,gb.dataset.from);return}
   const c=e.target.closest('[data-sel]');
   if(c){c.checked?alSel.add(c.dataset.sel):alSel.delete(c.dataset.sel);$('#alAll').checked=false;paintAlign();return}
   const sb=e.target.closest('[data-scrub]'),rb=e.target.closest('[data-routine]');
