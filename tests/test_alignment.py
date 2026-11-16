@@ -196,3 +196,21 @@ def test_scrub_runs_the_plan_rotated_about_the_array_corner():
     for w in want:
         assert min(math.dist(w, g) for g in got) < 2e-3
     assert xy
+
+
+def test_detects_the_real_array_in_lab_lighting():
+    """The corrected view of the PAPA plate from the real camera, with one
+    array on its holder (dimmer than the simulation: the holder reads about
+    140 grey), yellow caution labels and a blue part that must not count."""
+    import cv2
+    from pathlib import Path
+
+    from papa.vision import electrodes as el
+
+    img = cv2.imread(str(Path(__file__).parent / "data" / "real_plate_corrected.jpg"))
+    found = el.detect(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    assert len(found) == 1
+    c = found[0].corners
+    sides = [np.linalg.norm(c[i] - c[(i + 1) % 4]) for i in range(4)]
+    assert 60 < min(sides) and max(sides) < 90          # about 80 x 65 px in this picture
+    assert 440 < c[:, 0].mean() < 560 and 410 < c[:, 1].mean() < 520

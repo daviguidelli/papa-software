@@ -432,7 +432,7 @@
       </div>
       <p class="note" id="alMsg"></p>
       <img id="alImg" alt="Detected arrays with their placed toolpaths" style="width:100%;display:none;margin-top:10px;border:1px solid var(--line);border-radius:4px">
-      <p class="note" id="alLegend" hidden>Green outline: array as measured (dot = its top-left corner). White: scrub path. Gold: lifted hops. Red: bridges. Red outline: this array does not match its pattern. Arrows: printer +X and +Y.</p>
+      <p class="note" id="alLegend" hidden>The picture is square to the printer: right is exactly +X, up is exactly +Y, grid lines every 10 mm. Green outline: array as measured (dot = its top-left corner). White: scrub path. Gold: lifted hops. Red: bridges. Red outline: this array does not match its pattern. Arrows: printer +X and +Y.</p>
       <table style="margin-top:12px" id="alTab" hidden>
         <thead><tr><th><input type="checkbox" id="alAll" title="Select all"></th><th>Substrate</th><th>Pattern</th><th>Measured mm</th><th>Pattern mm</th><th>Turn °</th><th>Origin X, Y mm</th><th>Fit mm</th><th></th></tr></thead>
         <tbody id="alRows"></tbody>
@@ -447,7 +447,7 @@
     <details class="card fold" id="f-alpat" open>
       <summary><span class="label">Patterns · which sketch goes on which substrate</span></summary>
       <div class="fold-body">
-        <p class="note" style="margin-top:0">Fastest: press <b>Sketch</b> on a substrate's row. The sketcher opens on that substrate, zoomed in from the scan photo; draw the bridges and press Save to send them back here. Or tick substrates in the table above and give them a pattern below. A substrate without its own pattern uses the Scrub tab's sketch (<span class="mono" id="alScrubSk">–</span>).</p>
+        <p class="note" style="margin-top:0">Fastest: press <b>Sketch</b> on any row. The sketcher opens on the scanned substrates in order (S1, S2, …), each cut from the photo and straightened; draw the bridges, press Save &amp; next, and copy a sketch to the next substrate or any others when they are the same. Or tick substrates in the table above and give them a pattern below. A substrate without its own pattern uses the Scrub tab's sketch (<span class="mono" id="alScrubSk">–</span>).</p>
         <div class="row" style="align-items:flex-end">
           <label>Sketch file for the ticked substrates<input type="file" id="alFile" accept=".json,application/json"></label>
           <a class="btn sm" style="flex:0 0 auto;display:inline-flex;align-items:center" href="/static/bridge_sketcher.html" target="_blank">Open sketcher</a>

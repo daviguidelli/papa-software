@@ -39,7 +39,7 @@ class ElectrodeParams:
     min_fill: float = 0.55          # blob area / rotated-rectangle area
     max_aspect: float = 2.5         # long side / short side
     min_copper: float = 0.35        # copper pixels / rectangle area
-    min_surround_v: int = 140       # brightness around the array (white holder)
+    min_surround_v: int = 100       # brightness around the array (white holder; real lighting reads ~140)
 
     @classmethod
     def from_cfg(cls, d: dict | None) -> "ElectrodeParams":

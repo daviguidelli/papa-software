@@ -1454,41 +1454,48 @@ def _align_info() -> dict:
     return info
 
 
-def _draw_alignment(img: Any, result: alignmod.ScanResult, axes_fit: corrmod.PrinterAxes,
-                    only: str | None = None, offset: tuple[float, float] = (0.0, 0.0),
-                    scale: float = 1.0, overview: bool = True) -> Any:
-    """Draw on a BGR image of the corrected (straight-down) view, or a crop of
-    it moved by `offset` and enlarged by `scale`: each array as measured (green, red if it does not
-    match its pattern), its placed toolpath (white scrub, gold hops), its
-    bridges (red), and in the overview the labels and printer +X / +Y arrows."""
+def _draw_alignment(img: Any, result: alignmod.ScanResult, box: tuple[float, float, float, float],
+                    ppm: float, only: str | None = None, overview: bool = True) -> Any:
+    """Draw on a BGR printer view (see alignmod.printer_view: right = +X, up = +Y):
+    each array as measured (green, red if it does not match its pattern), its
+    placed toolpath (white scrub, gold hops), its bridges (red), and in the
+    overview the labels, a 10 mm printer grid and the +X / +Y arrows."""
     import cv2
     import numpy as np
 
     from papa.ops.geometry import to_machine
 
-    size = result.photo_size
-    t = max(1, round(img.shape[1] / 1500)) if overview else 1
-    off = np.asarray(offset, dtype=np.float64)
+    x0, x1, y0, y1 = box
+    H, W = img.shape[:2]
+    t = max(1, round(W / 1500)) if overview else 1
     st_patterns = _align_settings()["patterns"]
 
-    cview = corrmod.get_correction(size)
+    def at(mm: Any) -> Any:
+        m = np.asarray(mm, dtype=np.float64).reshape(-1, 2)
+        return np.c_[(m[:, 0] - x0) * ppm, (y1 - m[:, 1]) * ppm]
 
-    def at(photo_pts: Any) -> Any:                  # photo px -> px of the image drawn on
-        return (cview.to_corrected(np.asarray(photo_pts, dtype=np.float64).reshape(-1, 2)) - off) * scale
+    def view(mm: Any) -> Any:
+        return np.round(at(mm) * 8).astype(np.int32)                       # 3 bits subpixel
 
-    def view(photo_pts: Any) -> Any:
-        return np.round(at(photo_pts) * 8).astype(np.int32)                         # 3 bits subpixel
+    def local(pts: list[tuple[float, float]], p: alignmod.Placement) -> Any:
+        return [to_machine(hub.machine.axes, p.origin_mm[0], p.origin_mm[1], x, y, p.rotation_deg)
+                for x, y in pts]
 
-    def photo(local_pts: list[tuple[float, float]], p: alignmod.Placement) -> Any:
-        mm = [to_machine(hub.machine.axes, p.origin_mm[0], p.origin_mm[1], x, y, p.rotation_deg)
-              for x, y in local_pts]
-        return corrmod.mm_to_photo(mm, size, axes_fit)
+    if overview:                                    # printer grid: thin every 10 mm, labelled every 50
+        for gx in np.arange(np.ceil(x0 / 10) * 10, x1, 10):
+            u = int(round((gx - x0) * ppm))
+            major = abs(gx % 50) < 1e-6
+            cv2.line(img, (u, 0), (u, H), (90, 90, 90) if major else (55, 55, 55), 1)
+            if major:
+                cv2.putText(img, f"X{gx:g}", (u + 3, H - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4 * t, (150, 150, 150), t)
+        for gy in np.arange(np.ceil(y0 / 10) * 10, y1, 10):
+            v = int(round((y1 - gy) * ppm))
+            major = abs(gy % 50) < 1e-6
+            cv2.line(img, (0, v), (W, v), (90, 90, 90) if major else (55, 55, 55), 1)
+            if major:
+                cv2.putText(img, f"Y{gy:g}", (3, v - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4 * t, (150, 150, 150), t)
 
-    def seg_pts(x0: float, y0: float, x1: float, y1: float) -> list[tuple[float, float]]:
-        n = 8                                   # follow the lens curvature
-        return [(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n) for i in range(n + 1)]
-
-    for p, px in zip(result.placements, result.arrays_px):
+    for p in result.placements:
         if only is not None and p.id != only:
             continue
         pattern = st_patterns.get(p.id) or _scrub_tab_pattern()
@@ -1496,61 +1503,54 @@ def _draw_alignment(img: Any, result: alignmod.ScanResult, axes_fit: corrmod.Pri
             plan = scrubmod.plan(alignmod.scrub_settings(_scrub_settings(), pattern, p))
             for sg in plan["segments"]:
                 colour = (60, 190, 255) if sg["kind"] == "hop" else (255, 255, 255)
-                cv2.polylines(img, [view(photo(seg_pts(sg["x0"], sg["y0"], sg["x1"], sg["y1"]), p))],
+                cv2.polylines(img, [view(local([(sg["x0"], sg["y0"]), (sg["x1"], sg["y1"])], p))],
                               False, colour, 1, cv2.LINE_AA, shift=3)
             for b in plan["bridges"]:
-                x0, x1 = b["cx"] - b["l"] / 2, b["cx"] + b["l"] / 2
-                y0, y1 = b["cy"] - b["w"] / 2, b["cy"] + b["w"] / 2
-                ring = (seg_pts(x0, y0, x1, y0) + seg_pts(x1, y0, x1, y1)
-                        + seg_pts(x1, y1, x0, y1) + seg_pts(x0, y1, x0, y0))
-                cv2.polylines(img, [view(photo(ring, p))], True, (60, 60, 255), t, cv2.LINE_AA, shift=3)
+                bx0, bx1 = b["cx"] - b["l"] / 2, b["cx"] + b["l"] / 2
+                by0, by1 = b["cy"] - b["w"] / 2, b["cy"] + b["w"] / 2
+                ring = local([(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1)], p)
+                cv2.polylines(img, [view(ring)], True, (60, 60, 255), t, cv2.LINE_AA, shift=3)
         except scrubmod.ScrubError:
             pass
         colour = (80, 220, 80) if not p.warnings else (60, 60, 255)
-        cv2.polylines(img, [view(px)], True, colour, t, cv2.LINE_AA, shift=3)
-        o = at(px[0])[0]
-        cv2.circle(img, (int(o[0]), int(o[1])), 3 * t, colour, -1, cv2.LINE_AA)     # local origin
+        cv2.polylines(img, [view(p.corners_mm)], True, colour, t, cv2.LINE_AA, shift=3)
+        o = at(p.corners_mm[0])[0]
+        cv2.circle(img, (int(o[0]), int(o[1])), 3 * t, colour, -1, cv2.LINE_AA)     # pattern origin
         if overview:
-            q = at(px)
-            cv2.putText(img, f"{p.id} {p.rotation_deg:+.2f} deg", (int(q[:, 0].min()), int(q[:, 1].min()) - 6 * t),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45 * t, colour, t, cv2.LINE_AA)
-    if overview:   # printer axes at the image centre
-        c = corrmod.photo_to_mm([[size[0] / 2, size[1] / 2]], size, axes_fit)[0]
-        length = 0.12 * cview.output_size[0] * cview._step * axes_fit.mm_per_plate_px
-        p0, ex, ey = corrmod.mm_to_photo([c, c + [length, 0], c + [0, length]], size, axes_fit)
-        p0 = at(p0)[0]
-        for end, colour, label in ((ex, (0, 0, 255), "+X"), (ey, (0, 200, 0), "+Y")):
-            e = at(end)[0]
-            cv2.arrowedLine(img, tuple(map(int, p0)), tuple(map(int, e)), colour, t + 1, tipLength=0.12)
-            cv2.putText(img, label, tuple(map(int, e + 5 * t)), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6 * t, colour, t, cv2.LINE_AA)
+            q = at(p.corners_mm)
+            cv2.putText(img, f"{p.id}  {p.rotation_deg:+.2f} deg", (int(q[:, 0].min()), int(q[:, 1].min()) - 8 * t),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55 * t, colour, t, cv2.LINE_AA)
+    if overview:                                    # +X right and +Y up, exactly
+        L = int(0.1 * W)
+        ox, oy = int(0.04 * W), int(H - 0.06 * W)
+        cv2.arrowedLine(img, (ox, oy), (ox + L, oy), (0, 0, 255), t + 1, tipLength=0.12)
+        cv2.arrowedLine(img, (ox, oy), (ox, oy - L), (0, 200, 0), t + 1, tipLength=0.12)
+        cv2.putText(img, "+X", (ox + L + 5 * t, oy + 5 * t), cv2.FONT_HERSHEY_SIMPLEX, 0.6 * t, (0, 0, 255), t, cv2.LINE_AA)
+        cv2.putText(img, "+Y", (ox - 8 * t, oy - L - 8 * t), cv2.FONT_HERSHEY_SIMPLEX, 0.6 * t, (0, 200, 0), t, cv2.LINE_AA)
     return img
 
 
-def _closeups(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.PrinterAxes,
-              width: int = 360) -> dict[str, Any]:
-    """A sharp close-up per substrate: the camera crop enlarged first, then the
-    toolpath drawn at that size so the lines stay thin."""
+def _scan_views(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.PrinterAxes,
+                closeup_px: int = 360) -> tuple[Any, dict[str, Any]]:
+    """The overview and one close-up per substrate, both square to the printer."""
     import cv2
     import numpy as np
 
-    out = {}
-    c = corrmod.get_correction(rgb.shape[1::-1])
-    bgr = cv2.cvtColor(c.correct_image(rgb), cv2.COLOR_RGB2BGR)
-    for p, px in zip(result.placements, result.arrays_px):
-        q = c.to_corrected(np.asarray(px))
-        (x0, y0), (x1, y1) = q.min(0), q.max(0)
-        m = 0.3 * max(x1 - x0, y1 - y0)
-        x0, y0 = int(max(0, x0 - m)), int(max(0, y0 - m))
-        x1, y1 = int(min(bgr.shape[1], x1 + m)), int(min(bgr.shape[0], y1 + m))
-        if x1 <= x0 or y1 <= y0:
-            continue
-        k = width / (x1 - x0)
-        crop = cv2.resize(bgr[y0:y1, x0:x1], (width, max(1, round((y1 - y0) * k))),
-                          interpolation=cv2.INTER_CUBIC)
-        out[p.id] = _draw_alignment(crop, result, axes_fit, only=p.id, offset=(x0, y0), scale=k,
-                                    overview=False)
-    return out
+    box = alignmod.field_mm(result.photo_size, axes_fit)
+    ppm = min(2400 / (box[1] - box[0]), 2400 / (box[3] - box[2]),
+              1 / (corrmod.get_correction(result.photo_size)._step * axes_fit.mm_per_plate_px))
+    over = cv2.cvtColor(alignmod.printer_view(rgb, axes_fit, box, ppm), cv2.COLOR_RGB2BGR)
+    over = _draw_alignment(over, result, box, ppm)
+    crops = {}
+    for p in result.placements:
+        c = np.asarray(p.corners_mm)
+        (cx0, cy0), (cx1, cy1) = c.min(0), c.max(0)
+        m = 0.3 * max(cx1 - cx0, cy1 - cy0)
+        b = (cx0 - m, cx1 + m, cy0 - m, cy1 + m)
+        k = closeup_px / (b[1] - b[0])
+        img = cv2.cvtColor(alignmod.printer_view(rgb, axes_fit, b, k), cv2.COLOR_RGB2BGR)
+        crops[p.id] = _draw_alignment(img, result, b, k, only=p.id, overview=False)
+    return over, crops
 
 
 def _detect_preview(rgb: Any) -> dict:
@@ -1632,10 +1632,9 @@ async def align_scan(payload: dict | None = None) -> dict:
                                    _scrub_tab_pattern(), params)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        straight = corrmod.get_correction(rgb.shape[1::-1]).correct_image(rgb)   # straight-down view
-        drawn = _draw_alignment(cv2.cvtColor(straight, cv2.COLOR_RGB2BGR), result, axes_fit)
+        drawn, closeups = _scan_views(rgb, result, axes_fit)    # square to the printer's X and Y
         crops = {}
-        for sid, crop in _closeups(rgb, result, axes_fit).items():
+        for sid, crop in closeups.items():
             ok, cb = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
             crops[sid] = "data:image/jpeg;base64," + base64.b64encode(cb.tobytes()).decode()
         w = drawn.shape[1]

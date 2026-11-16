@@ -244,3 +244,30 @@ def rectify(rgb: np.ndarray, machine_axes: dict[str, str], printer_axes: corr.Pr
     mapx = photo[:, 0].reshape(H, W).astype(np.float32)
     mapy = photo[:, 1].reshape(H, W).astype(np.float32)
     return cv2.remap(rgb, mapx, mapy, cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT)
+
+
+def field_mm(photo_size: tuple[int, int], printer_axes: corr.PrinterAxes) -> tuple[float, float, float, float]:
+    """Printer X/Y box (x0, x1, y0, y1) that the camera frame covers."""
+    w, h = photo_size
+    t = np.linspace(0, 1, 60)
+    border = np.vstack([np.c_[t * (w - 1), 0 * t], np.c_[t * (w - 1), 0 * t + h - 1],
+                        np.c_[0 * t, t * (h - 1)], np.c_[0 * t + w - 1, t * (h - 1)]])
+    mm = printer_axes.plate_to_mm(corr.get_correction(photo_size).to_plate(border))
+    return float(mm[:, 0].min()), float(mm[:, 0].max()), float(mm[:, 1].min()), float(mm[:, 1].max())
+
+
+def printer_view(rgb: np.ndarray, printer_axes: corr.PrinterAxes, box: tuple[float, float, float, float],
+                 px_per_mm: float) -> np.ndarray:
+    """The plate as seen square to the printer: image right is exactly +X and
+    image up is exactly +Y. `box` is (x0, x1, y0, y1) in printer mm; pixel
+    (u, v) is at X = x0 + (u + 0.5) / px_per_mm, Y = y1 - (v + 0.5) / px_per_mm."""
+    import cv2
+
+    x0, x1, y0, y1 = box
+    W, H = max(1, int(round((x1 - x0) * px_per_mm))), max(1, int(round((y1 - y0) * px_per_mm)))
+    X, Y = np.meshgrid(x0 + (np.arange(W) + 0.5) / px_per_mm, y1 - (np.arange(H) + 0.5) / px_per_mm)
+    size = (rgb.shape[1], rgb.shape[0])
+    photo = corr.get_correction(size).from_plate(printer_axes.mm_to_plate(np.c_[X.ravel(), Y.ravel()]))
+    return cv2.remap(rgb, photo[:, 0].reshape(H, W).astype(np.float32),
+                     photo[:, 1].reshape(H, W).astype(np.float32), cv2.INTER_CUBIC,
+                     borderMode=cv2.BORDER_CONSTANT)
