@@ -23,6 +23,7 @@
   <button class="mode" role="tab" data-mode="manual" aria-selected="true">Manual test &amp; calibration</button>
   <button class="mode" role="tab" data-mode="auto" aria-selected="false">Autonomous</button>
   <button class="mode" role="tab" data-mode="scrub" aria-selected="false">Scrub</button>
+  <button class="mode" role="tab" data-mode="align" aria-selected="false">Substrates</button>
 </nav><button class="danger" id="estop">E-STOP</button></div></div></header>
 
 <div class="wrap"><div class="layout">
@@ -402,6 +403,80 @@
           <label>Lift mm<input type="number" id="cLift" min="0.5" max="50" step="0.5"></label>
         </div>
         <div class="row" style="margin-top:10px"><button class="gold sm" id="cSave">Save settings</button></div>
+      </div>
+    </details>
+  </div>
+
+  <!-- ============ SUBSTRATES (camera alignment) ============ -->
+  <div id="modeAlign" class="stack" hidden>
+    <div class="card" id="alMain">
+      <p class="label">Camera alignment</p>
+      <h2>Scan the <em>substrates</em></h2>
+      <p class="note" style="margin-top:0">Takes one photo, finds every copper electrode array, and places each substrate's pattern on its array: turned and shifted to match it, at the sketched size. The sketch's top-left corner is the array's top-left corner (local +x runs to machine <span class="mono" id="alAxX">+X</span>, local +y to <span class="mono" id="alAxY">−Y</span>).</p>
+      <div class="row" style="align-items:center">
+        <button class="gold" id="alScan">Scan substrates</button>
+        <span class="muted mono" id="alScanInfo" style="font-size:12.5px"></span>
+      </div>
+      <p class="note" id="alMsg"></p>
+      <img id="alImg" alt="Detected arrays with their placed toolpaths" style="width:100%;display:none;margin-top:10px;border:1px solid var(--line);border-radius:4px">
+      <p class="note" id="alLegend" hidden>Green outline: array as measured (dot = its top-left corner). White: scrub path. Gold: lifted hops. Red: bridges. Red outline: this array does not match its pattern. Arrows: printer +X and +Y.</p>
+      <table style="margin-top:12px" id="alTab" hidden>
+        <thead><tr><th><input type="checkbox" id="alAll" title="Select all"></th><th>Substrate</th><th>Pattern</th><th>Measured mm</th><th>Pattern mm</th><th>Turn °</th><th>Origin X, Y mm</th><th>Fit mm</th><th></th></tr></thead>
+        <tbody id="alRows"></tbody>
+      </table>
+      <div class="row" style="margin-top:14px;align-items:center">
+        <button class="danger sm" id="alStop" disabled>Stop after this move</button>
+        <span class="muted" style="font-size:12.5px">Scrub uses the swab already in the jaws. Routine 1 grips a swab, scrubs, and disposes of it. Contact Z, speeds and swab size come from the Scrub tab.</span>
+      </div>
+      <div class="kv" style="margin-top:10px"><span>Progress</span><span id="alProg">–</span></div>
+    </div>
+
+    <details class="card fold" id="f-alpat" open>
+      <summary><span class="label">Patterns · which sketch goes on which substrate</span></summary>
+      <div class="fold-body">
+        <p class="note" style="margin-top:0">Tick substrates in the table above, then give them a pattern. A substrate without its own pattern uses the Scrub tab's sketch (<span class="mono" id="alScrubSk">–</span>).</p>
+        <div class="row" style="align-items:flex-end">
+          <label>Sketch file for the ticked substrates<input type="file" id="alFile" accept=".json,application/json"></label>
+          <a class="btn sm" style="flex:0 0 auto;display:inline-flex;align-items:center" href="/static/bridge_sketcher.html" target="_blank">Open sketcher</a>
+        </div>
+        <div class="row" style="margin-top:10px;align-items:flex-end">
+          <label>Copy the pattern of<select id="alCopyFrom"></select></label>
+          <button class="gold sm" id="alCopy">Copy to ticked</button>
+          <button class="sm" id="alClear">Ticked use the Scrub tab sketch</button>
+        </div>
+        <p class="note" id="alPatMsg"></p>
+      </div>
+    </details>
+
+    <details class="card fold" id="f-alcam">
+      <summary><span class="label">Camera points · camera to printer X/Y</span> <span class="chip" id="alCamChip"></span></summary>
+      <div class="fold-body">
+        <p class="note" style="margin-top:0">This ties the photo to the printer's X and Y. For each point: jog the swab tip exactly over a small mark on the plate (ideally at substrate height), refresh the photo if the tip is in the way of the mark, click the mark, then press Pair. Two points work, four spread over the plate are better, a fifth checks them.</p>
+        <div style="position:relative;margin-top:10px;background:#000;border:1px solid var(--line);border-radius:4px">
+          <img id="alCamImg" alt="Camera frame for clicking marks" style="width:100%;display:block;cursor:crosshair">
+          <svg id="alCamOv" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></svg>
+        </div>
+        <div class="row" style="margin-top:10px;align-items:center">
+          <button class="sm" id="alCamRefresh">Refresh photo</button>
+          <span class="mono muted" id="alClick" style="font-size:12.5px">Click a mark in the photo</span>
+          <button class="gold sm" id="alPair" disabled>Pair with gantry position</button>
+        </div>
+        <table style="margin-top:12px"><thead><tr><th>#</th><th>Pixel x, y</th><th>Printer X, Y mm</th><th>Off fit mm</th><th></th></tr></thead><tbody id="alPts"></tbody></table>
+        <div class="kv" style="margin-top:12px" id="alFit"></div>
+        <p class="note" id="alFitMsg"></p>
+        <div class="row" style="margin-top:8px"><button class="sm danger" id="alPtsClear">Clear all points</button></div>
+      </div>
+    </details>
+
+    <details class="card fold" id="f-altol">
+      <summary><span class="label">Checks</span></summary>
+      <div class="fold-body">
+        <div class="row" style="align-items:flex-end">
+          <label>Size tolerance mm<input type="number" id="alTol" min="0.01" max="5" step="0.05"></label>
+          <label>Largest turn °<input type="number" id="alRot" min="0.1" max="45" step="0.5"></label>
+          <button class="gold sm" id="alTolSave">Save</button>
+        </div>
+        <p class="note">A substrate whose measured array differs from its pattern by more than the tolerance, or is turned more than the largest turn, is flagged and will not run unless you confirm it. Arrays must sit within 45° of the nominal orientation for the top-left corner to be found.</p>
       </div>
     </details>
   </div>
@@ -998,12 +1073,132 @@ $('#r1Run').onclick=()=>run('Routine 1',async()=>{r1Cache='';await post('/api/ro
 $('#r1Stop').onclick=async()=>{try{await post('/api/routine1/stop');log('stop requested: it ends after the current move')}catch(e){say(String(e.message||e),'err')}};
 {const _paint3=paint;paint=function(){_paint3();if(S.mode==='auto')paintR1()}}
 
+/* ---------- substrates: camera alignment ---------- */
+let alTimer=null,alClick=null,alSel=new Set();
+const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function alRunning(){const a=S.al;return !!(a&&((a.scrub_status||{}).running||(a.routine_status||{}).running))}
+function paintAlign(){
+  const a=S.al;if(!a)return;
+  $('#alAxX').textContent=a.axes.local_x;$('#alAxY').textContent=a.axes.local_y;
+  const sc=a.scan,run=alRunning(),lock=run||S.busy;
+  $('#alScan').disabled=lock||!a.camera.fit;
+  $('#alScanInfo').textContent=!a.camera.fit?'Teach the camera points first (below)':(sc?`Scan ${sc.scan_id?('#'+sc.scan_id+' '):''}at ${sc.time} · ${sc.substrates.length} array${sc.substrates.length===1?'':'s'}`:'No scan yet');
+  $('#alScrubSk').textContent=`${fmt(a.scrub_tab.area.w,1)} × ${fmt(a.scrub_tab.area.h,1)} mm, ${a.scrub_tab.bridges} bridge${a.scrub_tab.bridges===1?'':'s'}`;
+  const m=$('#alMsg');
+  if(sc&&sc.warnings.length){m.textContent=sc.warnings.join(' ');m.className='note warn'}
+  else if(sc&&sc.stale){m.textContent='Patterns or checks changed since this photo: the numbers below are updated, the picture is not. Scan again to redraw.';m.className='note'}
+  else if(!m.dataset.keep){m.textContent='';m.className='note'}
+  $('#alImg').style.display=sc?'block':'none';if(sc&&$('#alImg').dataset.src!==sc.image){$('#alImg').src=sc.image;$('#alImg').dataset.src=sc.image}
+  $('#alLegend').hidden=!sc;
+  const subs=sc?sc.substrates:[];
+  $('#alTab').hidden=!subs.length;
+  const ids=subs.map(x=>x.id);alSel=new Set([...alSel].filter(i=>ids.includes(i)));
+  $('#alRows').innerHTML=subs.map(x=>{
+    const ok=!x.problems.length,err=x.size_error_mm.map(v=>(v>=0?'+':'')+fmt(v,2)).join(', ');
+    return `<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>
+      <td><b>${x.id}</b></td><td>${esc(x.pattern_name)}</td>
+      <td>${fmt(x.measured_mm[0],2)} × ${fmt(x.measured_mm[1],2)}<br><span class="${Math.max(...x.size_error_mm.map(Math.abs))>a.settings.size_tolerance_mm?'err':'muted'}">${err}</span></td>
+      <td>${fmt(x.pattern_mm[0],2)} × ${fmt(x.pattern_mm[1],2)}</td>
+      <td class="${Math.abs(x.rotation_deg)>a.settings.max_rotation_deg?'err':''}">${(x.rotation_deg>=0?'+':'')+fmt(x.rotation_deg,2)}</td>
+      <td>${fmt(x.origin_mm[0],2)}, ${fmt(x.origin_mm[1],2)}</td><td>${fmt(x.fit_rms_mm,3)}</td>
+      <td style="white-space:nowrap"><button class="sm" data-scrub="${x.id}" ${lock||!homedXY()?'disabled':''}>Scrub</button> <button class="sm gold" data-routine="${x.id}" ${lock||!homedXY()?'disabled':''}>Routine 1</button></td></tr>
+      <tr><td></td><td colspan="8" class="${ok?'good':'warn'}" style="padding-top:0;font-size:12px;text-align:left">${x.crop?`<img src="${x.crop}" alt="${x.id} close-up" style="float:left;width:300px;max-width:45%;margin:2px 14px 6px 0;border:1px solid var(--line);border-radius:3px">`:''}${ok?(x.plan?`Ready · ${x.plan.rows} rows, ${x.plan.hops} hops, ~${fmt(x.plan.est_s/60,1)} min`:'Ready'):x.problems.map(esc).join(' ')}</td></tr>`}).join('');
+  $('#alAll').checked=subs.length&&alSel.size===subs.length;
+  const opts=['<option value="">Scrub tab sketch</option>'].concat(subs.filter(x=>a.patterns[x.id]).map(x=>`<option value="${x.id}">${x.id} · ${esc(x.pattern_name)}</option>`));
+  const cf=$('#alCopyFrom'),cur=cf.value;cf.innerHTML=opts.join('');cf.value=[...cf.options].some(o=>o.value===cur)?cur:'';
+  ['#alCopy','#alClear','#alFile'].forEach(id=>$(id).disabled=lock||!alSel.size);
+  $('#alProg').textContent=a.scrub_status.running?`scrub ${a.scrub_status.done} / ${a.scrub_status.total} moves`:(a.routine_status.running?((a.routine_status.steps||[]).filter(s=>s.state==='done').length+' / '+(a.routine_status.steps||[]).length+' routine steps'):'–');
+  $('#alStop').disabled=!run;
+  // tolerance inputs
+  [['alTol','size_tolerance_mm'],['alRot','max_rotation_deg']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el)el.value=a.settings[k]});
+  // camera points
+  const f=a.camera.fit,errs=(f&&f.errors_mm)||[];
+  $('#alPts').innerHTML=a.camera.points.map((p,i)=>`<tr><td>${i+1}</td><td>${fmt(p.px[0],1)}, ${fmt(p.px[1],1)}</td><td>${fmt(p.mm[0],2)}, ${fmt(p.mm[1],2)}</td><td>${errs.length?fmt(errs[i],3):'–'}</td><td><button class="sm" data-delpt="${i}" ${lock?'disabled':''}>Delete</button></td></tr>`).join('')||'<tr><td colspan="5" class="muted">No points yet.</td></tr>';
+  $('#alFit').innerHTML=f?`<span>Printer +X in the photo</span><span>${fmt(f.x_axis_deg_in_image,2)}° from the image's x</span><span>Scale</span><span>${fmt(f.mm_per_square,3)} mm per checkerboard square</span>`+(f.xy_scale_diff_pct!=null?`<span>X vs Y</span><span>${fmt(f.xy_scale_diff_pct,2)} % scale, ${fmt(f.axes_off_square_deg,2)}° off square</span>`:''):'';
+  const fm=$('#alFitMsg');fm.textContent=f?(f.warnings.join(' ')):(a.camera.error||'');fm.className='note '+(f&&!f.warnings.length?'':'warn');
+  const chip=$('#alCamChip');chip.textContent=f?(f.warnings.length?'check points':a.camera.points.length+' points'):'not taught';chip.className='chip '+(f?(f.warnings.length?'warn':'ok'):'bad');
+  $('#alPair').disabled=lock||!alClick||!homedXY();
+  $('#alPtsClear').disabled=lock||!a.camera.points.length;
+  alDrawPts();
+}
+function alDrawPts(){
+  const img=$('#alCamImg'),ov=$('#alCamOv'),a=S.al;
+  if(!img.naturalWidth||!a){ov.innerHTML='';return}
+  ov.setAttribute('viewBox',`0 0 ${img.naturalWidth} ${img.naturalHeight}`);
+  const r=Math.max(6,img.naturalWidth/160),same=a.camera.photo_size[0]===img.naturalWidth;
+  let h=same?a.camera.points.map((p,i)=>`<circle cx="${p.px[0]}" cy="${p.px[1]}" r="${r}" fill="none" stroke="#93d5b1" stroke-width="${r/3}"/><text x="${p.px[0]+r*1.3}" y="${p.px[1]-r*1.3}" fill="#93d5b1" font-size="${r*2.2}" font-family="monospace">${i+1}</text>`).join(''):'';
+  if(alClick)h+=`<path d="M${alClick[0]-2*r} ${alClick[1]}H${alClick[0]+2*r}M${alClick[0]} ${alClick[1]-2*r}V${alClick[1]+2*r}" stroke="#ff6a1a" stroke-width="${r/3}"/>`;
+  ov.innerHTML=h;
+}
+async function loadAlign(){
+  try{S.al=await api('/api/align');if(alRunning()&&!alTimer)alWatch()}
+  catch(e){S.al=null;$('#alMsg').textContent='Alignment unavailable: '+e.message;$('#alMsg').className='note err'}
+  paintAlign();
+}
+function alWatch(){
+  paint();
+  alTimer=setInterval(async()=>{
+    try{
+      S.al=await api('/api/align');paintAlign();
+      setPos(await api('/api/machine/position'));paint();
+      if(!alRunning()){clearInterval(alTimer);alTimer=null;const st=S.al.scrub_status.error||S.al.routine_status.error;log(st?('stopped: '+st):'substrate finished',st?'err':'good');paint()}
+    }catch(e){}
+  },500);
+}
+function alCamLoad(){const img=$('#alCamImg');img.src='/api/camera/snapshot?width=4056&t='+Date.now()}
+$('#alCamImg').onload=alDrawPts;
+$('#alCamImg').onerror=()=>{$('#alClick').textContent='No camera frame. Check the camera on the Camera tab.'};
+$('#alCamImg').onclick=e=>{
+  const img=e.currentTarget,b=img.getBoundingClientRect();
+  alClick=[(e.clientX-b.left)*img.naturalWidth/b.width,(e.clientY-b.top)*img.naturalHeight/b.height];
+  $('#alClick').textContent=`Mark at ${fmt(alClick[0],1)}, ${fmt(alClick[1],1)} px of ${img.naturalWidth} × ${img.naturalHeight}`;
+  paintAlign();
+};
+$('#alCamRefresh').onclick=alCamLoad;
+$('#alPair').onclick=()=>run('Camera point paired',async()=>{
+  const img=$('#alCamImg');
+  S.al=await post('/api/align/camera/teach',{px:alClick,photo_size:[img.naturalWidth,img.naturalHeight]});alClick=null;$('#alClick').textContent='Click the next mark';paintAlign()});
+$('#alPts').onclick=e=>{const b=e.target.closest('[data-delpt]');if(!b)return;
+  run('Camera point deleted',async()=>{S.al=await post('/api/align/camera/delete',{index:+b.dataset.delpt});paintAlign()})};
+$('#alPtsClear').onclick=()=>{if(!confirm('Delete every camera point? Scans need at least 2.'))return;
+  run('Camera points cleared',async()=>{S.al=await post('/api/align/camera/delete',{all:true});paintAlign()})};
+$('#alScan').onclick=()=>run('Substrates scanned',async()=>{
+  $('#alMsg').textContent='Taking the photo and finding the arrays…';$('#alMsg').className='note';
+  S.al=await post('/api/align/scan');paintAlign()});
+$('#alAll').onchange=e=>{const subs=(S.al&&S.al.scan)?S.al.scan.substrates:[];alSel=new Set(e.target.checked?subs.map(x=>x.id):[]);paintAlign()};
+$('#alRows').onclick=e=>{
+  const c=e.target.closest('[data-sel]');
+  if(c){c.checked?alSel.add(c.dataset.sel):alSel.delete(c.dataset.sel);$('#alAll').checked=false;paintAlign();return}
+  const sb=e.target.closest('[data-scrub]'),rb=e.target.closest('[data-routine]');
+  if(!sb&&!rb)return;
+  const id=(sb||rb).dataset[sb?'scrub':'routine'],x=S.al.scan.substrates.find(s=>s.id===id);
+  let force=false;
+  if(x&&x.warnings.length){if(!confirm(`${id} does not match its pattern:\n\n${x.warnings.join('\n')}\n\nRun it anyway?`))return;force=true}
+  run((sb?'Scrub ':'Routine 1 on ')+id,async()=>{await post(sb?'/api/align/scrub':'/api/align/routine',{id,force});await loadAlign();alWatch()});
+};
+$('#alStop').onclick=async()=>{try{await post('/api/scrub/stop');await post('/api/routine1/stop');log('stop requested: it ends after the current move')}catch(e){say(String(e.message||e),'err')}};
+$('#alFile').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  const rd=new FileReader(),targets=[...alSel];
+  rd.onload=()=>run('Pattern set for '+targets.join(', '),async()=>{
+    const j=JSON.parse(rd.result);
+    if(!Array.isArray(j.bridges))throw new Error('This file has no bridges list. Use the sketcher export.');
+    S.al=await post('/api/align/pattern',{targets,sketch:j,name:f.name.replace(/\.json$/i,'')});paintAlign()});
+  rd.readAsText(f);e.target.value='';
+};
+$('#alCopy').onclick=()=>{const from=$('#alCopyFrom').value,targets=[...alSel];
+  run(`Copied ${from||'Scrub tab sketch'} to ${targets.join(', ')}`,async()=>{S.al=await post('/api/align/pattern',from?{targets,copy_from:from}:{targets,clear:true});paintAlign()})};
+$('#alClear').onclick=()=>{const targets=[...alSel];
+  run(`${targets.join(', ')} use the Scrub tab sketch`,async()=>{S.al=await post('/api/align/pattern',{targets,clear:true});paintAlign()})};
+$('#alTolSave').onclick=()=>run('Saved alignment checks',async()=>{S.al=await post('/api/align/settings',{size_tolerance_mm:+$('#alTol').value,max_rotation_deg:+$('#alRot').value});paintAlign()});
+{const _paint4=paint;paint=function(){_paint4();if(S.mode==='align')paintAlign()}}
+
 
 function setMode(m){
   S.mode=m;LS.set('mode',m);
   document.querySelectorAll('.mode').forEach(b=>b.setAttribute('aria-selected',b.dataset.mode===m));
-  $('#modeManual').hidden=m!=='manual';$('#modeAuto').hidden=m!=='auto';$('#modeScrub').hidden=m!=='scrub';
-  if(m==='auto'||m==='scrub'){if(S.tab!=='auto'&&S.tab!=='scrub')prevTab=S.tab;S.tab=m;setWatch(false);camStop();m==='auto'?(loadAuto(),loadR1()):loadScrub()}
+  $('#modeManual').hidden=m!=='manual';$('#modeAuto').hidden=m!=='auto';$('#modeScrub').hidden=m!=='scrub';$('#modeAlign').hidden=m!=='align';
+  if(m==='auto'||m==='scrub'||m==='align'){if(!['auto','scrub','align'].includes(S.tab))prevTab=S.tab;S.tab=m;setWatch(false);camStop();m==='auto'?(loadAuto(),loadR1()):m==='scrub'?loadScrub():(loadAlign(),alCamLoad())}
   else{const t=document.querySelector('.tab[data-tab="'+prevTab+'"]');S.tab='';if(t)t.click()}
 }
 document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{if(S.mode!==b.dataset.mode)setMode(b.dataset.mode)});
@@ -1011,7 +1206,7 @@ document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{if(S.mode!==b.datas
 /* ---------- start ---------- */
 setInterval(()=>{if(!S.busy)poll()},1500);
 setInterval(loadDev,15000);
-(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();if(['auto','scrub'].includes(LS.get('mode','manual')))setMode(LS.get('mode'));else if(S.tab==='cell')setWatch(true)})();
+(async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();if(['auto','scrub','align'].includes(LS.get('mode','manual')))setMode(LS.get('mode'));else if(S.tab==='cell')setWatch(true)})();
 </script>
 </body>
 </html>

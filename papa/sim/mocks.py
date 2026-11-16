@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -196,6 +197,12 @@ class MockCamera:
     loaded_swabs: tuple[str, ...] = ()
     px_per_mm: float = 5.0
     red_tape: bool = True
+    # Electrode arrays for the Substrates tab: drawn in printer mm through the
+    # camera points taught in calibration.yaml, so detection lands where the
+    # arrays were drawn. Empty (the default) leaves the frame as it was.
+    arrays: tuple = ()
+    axes: dict | None = None
+    printer_axes: Any = None          # callable returning a PrinterAxes, or None
 
     def frame(self) -> np.ndarray:
         img = np.full((self.height, self.width, 3), 24, dtype=np.uint8)
@@ -221,6 +228,15 @@ class MockCamera:
             sub = img[cy - rr:cy + rr + 1, cx - rr:cx + rr + 1]
             if sub.shape[:2] == mask.shape:
                 sub[mask] = (36, 108, 214)
+        if self.arrays and self.printer_axes is not None:
+            try:
+                pa = self.printer_axes()
+            except Exception:                              # noqa: BLE001
+                pa = None
+            if pa is not None:
+                from papa.sim.arrays import render
+                img = render(list(self.arrays), self.axes or {"local_x": "+X", "local_y": "-Y"},
+                             pa, (self.width, self.height), base=img)
         return img
 
     def close(self) -> None:

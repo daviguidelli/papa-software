@@ -6,8 +6,10 @@ rows, ends at the bottom-right. Each bridge is a keep-out rectangle grown by the
 swab radius plus a margin, so its corners come out rounded. Rows are cut where
 they cross a grown keep-out; the swab lifts and hops across each gap.
 
-Placement onto the machine is one function (`to_machine`) so a skew correction
-can later be a rotation plus offset applied there and nowhere else.
+Placement onto the machine is one function (`to_machine`). A substrate that sits
+turned is handled there and nowhere else: `rotation_deg` turns the whole plan
+about the start point (the pattern's local origin). The alignment step sets
+start.x, start.y and rotation_deg from the camera for each substrate.
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ DEFAULTS: dict[str, Any] = {
     "z_mm_s": 2.0,            # Z speed, down and up
     "lift_mm": 3.0,           # travel Z = contact Z + this
     "start": None,            # {"x","y","z","ref"} captured by jogging
+    "rotation_deg": 0.0,      # pattern turned about the start, + from +X toward +Y
     "area": {"w": 25.0, "h": 25.0},
     "bridges": [],            # [{"id","cx","cy","l","w"}] l along x, w along y
 }
@@ -199,7 +202,8 @@ def problems(settings: dict[str, Any], machine: Any, ref: str | None, floor: flo
         out.append("Travel Z would go above the Z limit; lower the lift.")
     w, h = float(st["area"]["w"]), float(st["area"]["h"])
     for lx, ly in ((0, 0), (w, 0), (w, h), (0, h)):
-        mx, my = to_machine(machine.axes, float(s["x"]), float(s["y"]), lx, ly)
+        mx, my = to_machine(machine.axes, float(s["x"]), float(s["y"]), lx, ly,
+                            float(st["rotation_deg"]))
         if not machine.in_limits(mx, my, z):
             out.append("The pattern area runs outside the machine limits from this start.")
             break
@@ -279,11 +283,12 @@ class ScrubRunner:
         tz = cz + float(st["lift_mm"])
         zs, ts, cs = float(st["z_mm_s"]), float(st["travel_mm_s"]), float(st["scrub_mm_s"])
         axes = self.machine.axes
+        rot = float(st.get("rotation_deg") or 0.0)
         self._lifted = False
         self._tz, self._zs = tz, zs
 
         def xy(lx: float, ly: float, speed: float) -> None:
-            mx, my = to_machine(axes, sx, sy, lx, ly)
+            mx, my = to_machine(axes, sx, sy, lx, ly, rot)
             pr().move(x=mx, y=my, speed_mm_s=speed)
 
         def z_to(z: float, lifted: bool) -> None:

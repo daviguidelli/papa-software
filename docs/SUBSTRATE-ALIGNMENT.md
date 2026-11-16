@@ -1,0 +1,71 @@
+# Substrate alignment (Substrates tab)
+
+One photo of the plate gives every substrate its own toolpath: the camera finds
+each copper electrode array, and that substrate's bridge sketch is turned and
+shifted to sit exactly on it before the scrub runs.
+
+## Flow
+
+1. **Photo.** `Scan substrates` takes one camera frame.
+2. **Find the arrays.** Copper-coloured areas are found in the corrected
+   (straight-down) view, and each array's four edges are measured to a
+   fraction of a pixel (`papa/vision/electrodes.py`).
+3. **Your geometry.** Each substrate has a pattern: the bridge sketcher's
+   export (array width × height, and the bridges as keep-outs). Substrates
+   without their own pattern use the Scrub tab's sketch. Tick substrates and
+   load a sketch file, or copy one substrate's pattern to others.
+4. **Compare.** The array's corners go to printer X/Y mm through the camera
+   calibration. The pattern is fitted onto them as a rotation plus a shift (it
+   keeps its sketched size). The table shows the measured size against the
+   pattern, the turn from the printer axes, where the pattern's top-left corner
+   lands, and how well the corners fit.
+5. **Place the toolpath.** The scrub plan is unchanged in the substrate frame.
+   It is placed on the machine at that corner and turned by that angle
+   (`rotation_deg` in `papa/ops/geometry.py:to_machine`). Contact Z, speeds and
+   swab size come from the Scrub tab. `Scrub` uses the swab already held;
+   `Routine 1` grips, scrubs and disposes.
+
+A substrate whose size differs from its pattern by more than the tolerance, or
+that is turned more than the limit (Checks), is flagged in red and runs only
+after you confirm.
+
+## Frames
+
+- The pattern's origin is the array's **top-left** corner, with local +x and
+  +y mapped to the machine by `axes` in `machine.yaml` (now `+X`, `-Y`).
+  Arrays need to sit within 45° of that orientation.
+- Turn angles are positive from printer +X toward +Y.
+
+## Calibration it needs
+
+- **Lens and tilt** (`papa/vision/correction.py`, from
+  `cameraUpdates/camera_correction`). Valid while focus, zoom, the camera
+  mount and the plate height stay as calibrated.
+- **Camera points** (the Camera points fold on the tab, Stage 6 in
+  `VALIDATION.md`). Jog the swab tip over a small mark, click the mark in the
+  photo, press Pair. Two points work; four spread over the plate plus a fifth to
+  check are better. The fit reports each point's error (limit 0.5 mm) and
+  whether X and Y agree in scale and squareness. Points are stored in
+  `calibration.yaml` under `detection.camera_to_machine`, with the frame size
+  they were clicked on. Teach them at substrate height if you can: raised parts
+  look slightly larger in the photo.
+
+## Detection settings
+
+Override any of the `ElectrodeParams` names in `calibration.yaml`:
+
+```yaml
+detection:
+  electrodes:
+    h_min: 5        # copper hue window (OpenCV 0-179)
+    h_max: 28
+    s_min: 45
+    min_area_frac: 0.0002
+```
+
+## Simulation
+
+`scripts/run-sim.sh` sets `PAPA_SIM_ARRAYS=1`, so the mock camera draws four
+arrays through the taught camera points. The simulated calibration's camera
+points are only for the old presence check and are not geometrically
+consistent; clear them and teach a few to see a clean fit.

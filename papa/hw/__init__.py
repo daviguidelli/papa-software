@@ -59,11 +59,35 @@ def make_gripper(machine: Machine, cal: Calibration) -> Any:
     )
 
 
+def _sim_arrays() -> tuple:
+    """Four electrode arrays near the simulated slide slots, a little turned."""
+    from papa.sim.arrays import SimArray
+
+    return (SimArray((155.0, 235.0), 12.0, 10.0, 0.0), SimArray((216.0, 236.0), 12.0, 10.0, 1.5),
+            SimArray((155.0, 176.0), 12.0, 10.0, -2.0), SimArray((215.0, 174.5), 12.0, 10.0, 0.8))
+
+
+def _sim_printer_axes() -> Any:
+    """The camera points currently in calibration.yaml, so the mock follows teaching."""
+    from papa.config import load_calibration
+    from papa.vision.correction import AxesError, PrinterAxes
+
+    try:
+        return PrinterAxes.from_detection(load_calibration().detection)
+    except AxesError:
+        return None
+
+
 def make_camera(machine: Machine | None = None) -> Any:
     if not is_real("camera"):
+        import os
+
         from papa.sim.mocks import MockCamera
 
-        return MockCamera()
+        if os.environ.get("PAPA_SIM_ARRAYS") != "1":
+            return MockCamera()
+        return MockCamera(arrays=_sim_arrays(), axes=machine.axes if machine is not None else None,
+                          printer_axes=_sim_printer_axes)
     from papa.hw.camera import PiCamera
 
     size = (machine.raw.get("camera_size") if machine is not None else None) or [1920, 1080]

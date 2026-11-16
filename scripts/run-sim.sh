@@ -14,4 +14,4 @@ echo
 echo "Ready. Open  http://localhost:8080/validate  in your browser."
 echo "Stop with Ctrl+C."
 echo
-PAPA_SIM=1 python -m apps.server
+PAPA_SIM=1 PAPA_SIM_ARRAYS=1 python -m apps.server

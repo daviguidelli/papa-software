@@ -24,6 +24,9 @@ from papa.ops.geometry import square, to_machine
 from papa.ops import autonomous as automod
 from papa.ops import scrub as scrubmod
 from papa.ops import routine as routinemod
+from papa.ops import alignment as alignmod
+from papa.vision import correction as corrmod
+from papa.vision.electrodes import ElectrodeParams
 from papa.ops.guard import Guard, GuardedPrinter, ZFloorError
 from papa.ops.jobs import STATE_DIR, Job
 from papa.ops.machine import Orchestrator, Status
@@ -110,6 +113,7 @@ class Hub:
         self.auto = automod.AutoRunner(lambda: self.printer, lambda: self.gripper, self.machine)
         self.scrub = scrubmod.ScrubRunner(lambda: self.printer, self.machine)
         self.routine = routinemod.RoutineRunner(self.auto, self.scrub, self.machine)
+        self.align_scan: dict[str, Any] | None = None   # last alignment scan, see /api/align
 
     @property
     def printer(self) -> Any:
@@ -1271,6 +1275,389 @@ def routine_run() -> dict:
 @app.post("/api/routine1/stop")
 def routine_stop() -> dict:
     hub.routine.stop()
+    return hub.routine.status.as_dict()
+
+
+# ---------- alignment: one scan, one placed toolpath per substrate ----------
+
+def _align_settings() -> dict:
+    return alignmod.merged(hub.cal.raw.get("alignment"))
+
+
+def _camera_axes() -> tuple[corrmod.PrinterAxes | None, str]:
+    try:
+        return corrmod.PrinterAxes.from_detection(hub.cal.detection), ""
+    except corrmod.AxesError as exc:
+        return None, str(exc)
+
+
+def _camera_points() -> dict:
+    m = dict(hub.cal.detection.get("camera_to_machine") or {})
+    return {"points_px": list(m.get("points_px") or []), "points_mm": list(m.get("points_mm") or []),
+            "photo_size": list(m.get("photo_size") or corrmod.GUI_PHOTO_SIZE)}
+
+
+def _scrub_tab_pattern() -> dict:
+    st = _scrub_settings()
+    return {"name": "Scrub tab sketch", "area": dict(st["area"]), "bridges": list(st["bridges"])}
+
+
+def _substrate(sid: str) -> tuple[alignmod.Placement, dict]:
+    if not hub.align_scan:
+        raise HTTPException(400, "Scan the substrates first.")
+    for p in hub.align_scan["result"].placements:
+        if p.id == sid:
+            pattern = _align_settings()["patterns"].get(sid) or _scrub_tab_pattern()
+            return p, pattern
+    raise HTTPException(404, f"no substrate {sid} in the last scan")
+
+
+def _align_wording(problem: str) -> str:
+    if problem.startswith("Jog to the top-left"):
+        return ("Set the contact Z first: on the Scrub tab, jog the swab down to contact height and press "
+                "Set start here. Only its Z is used; X and Y come from the camera.")
+    if problem.startswith("The pattern area runs outside"):
+        return "This substrate's toolpath runs outside the machine limits."
+    return problem
+
+
+def _substrate_scrub(sid: str, force: bool = False) -> dict:
+    p, pattern = _substrate(sid)
+    if p.warnings and not force:
+        raise HTTPException(400, f"{sid}: " + " ".join(p.warnings))
+    return alignmod.scrub_settings(_scrub_settings(), pattern, p)
+
+
+def _align_info() -> dict:
+    st = _align_settings()
+    axes, axes_err = _camera_axes()
+    pts = _camera_points()
+    info: dict[str, Any] = {
+        "axes": hub.machine.axes,
+        "settings": {k: st[k] for k in ("size_tolerance_mm", "max_rotation_deg")},
+        "patterns": {k: {"name": v.get("name", ""), "area": v["area"], "bridges": len(v.get("bridges") or [])}
+                     for k, v in st["patterns"].items()},
+        "scrub_tab": {"area": _scrub_settings()["area"], "bridges": len(_scrub_settings()["bridges"])},
+        "camera": {"points": [{"px": px, "mm": mm} for px, mm in zip(pts["points_px"], pts["points_mm"])],
+                   "photo_size": pts["photo_size"],
+                   "fit": axes.report() if axes else None, "error": axes_err},
+        "scan": None,
+        "scrub_start": _scrub_settings()["start"],
+        "scrub_status": hub.scrub.status.as_dict(),
+        "routine_status": hub.routine.status.as_dict(),
+    }
+    if hub.align_scan:
+        sc = hub.align_scan
+        d = sc["result"].as_dict()
+        for sub in d["substrates"]:
+            sid = sub["id"]
+            try:
+                stt = _substrate_scrub(sid, force=True)
+                bad = [_align_wording(b) for b in scrubmod.problems(stt, hub.machine, hub.guard.ref, hub.guard.floor)]
+                plan = scrubmod.plan(stt)
+                sub["plan"] = {k: plan[k] for k in ("rows", "hops", "scrub_mm", "est_s", "uncovered_pct")}
+            except (scrubmod.ScrubError, HTTPException) as exc:
+                bad = [str(getattr(exc, "detail", exc))]
+            sub["problems"] = list(sub["warnings"]) + bad
+            sub["crop"] = sc.get("crops", {}).get(sid)
+            pat = st["patterns"].get(sid)
+            sub["pattern_name"] = (pat or {}).get("name") or ("own pattern" if pat else "Scrub tab sketch")
+        info["scan"] = {**d, "time": sc["time"], "scan_id": sc.get("scan_id"), "image": sc["image"],
+                        "shown_scale": sc["shown_scale"], "stale": sc.get("stale", False)}
+    return info
+
+
+def _draw_alignment(img: Any, result: alignmod.ScanResult, axes_fit: corrmod.PrinterAxes,
+                    only: str | None = None, offset: tuple[float, float] = (0.0, 0.0),
+                    scale: float = 1.0, overview: bool = True) -> Any:
+    """Draw on a BGR image (the camera frame, or a crop of it moved by `offset`
+    and enlarged by `scale`): each array as measured (green, red if it does not
+    match its pattern), its placed toolpath (white scrub, gold hops), its
+    bridges (red), and in the overview the labels and printer +X / +Y arrows."""
+    import cv2
+    import numpy as np
+
+    from papa.ops.geometry import to_machine
+
+    size = result.photo_size
+    t = max(1, round(size[0] * scale / 1500)) if overview else 1
+    off = np.asarray(offset, dtype=np.float64)
+    st_patterns = _align_settings()["patterns"]
+
+    def view(photo_pts: Any) -> Any:
+        return np.round((np.asarray(photo_pts) - off) * scale * 8).astype(np.int32)   # 3 bits subpixel
+
+    def photo(local_pts: list[tuple[float, float]], p: alignmod.Placement) -> Any:
+        mm = [to_machine(hub.machine.axes, p.origin_mm[0], p.origin_mm[1], x, y, p.rotation_deg)
+              for x, y in local_pts]
+        return corrmod.mm_to_photo(mm, size, axes_fit)
+
+    def seg_pts(x0: float, y0: float, x1: float, y1: float) -> list[tuple[float, float]]:
+        n = 8                                   # follow the lens curvature
+        return [(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n) for i in range(n + 1)]
+
+    for p, px in zip(result.placements, result.arrays_px):
+        if only is not None and p.id != only:
+            continue
+        pattern = st_patterns.get(p.id) or _scrub_tab_pattern()
+        try:
+            plan = scrubmod.plan(alignmod.scrub_settings(_scrub_settings(), pattern, p))
+            for sg in plan["segments"]:
+                colour = (60, 190, 255) if sg["kind"] == "hop" else (255, 255, 255)
+                cv2.polylines(img, [view(photo(seg_pts(sg["x0"], sg["y0"], sg["x1"], sg["y1"]), p))],
+                              False, colour, 1, cv2.LINE_AA, shift=3)
+            for b in plan["bridges"]:
+                x0, x1 = b["cx"] - b["l"] / 2, b["cx"] + b["l"] / 2
+                y0, y1 = b["cy"] - b["w"] / 2, b["cy"] + b["w"] / 2
+                ring = (seg_pts(x0, y0, x1, y0) + seg_pts(x1, y0, x1, y1)
+                        + seg_pts(x1, y1, x0, y1) + seg_pts(x0, y1, x0, y0))
+                cv2.polylines(img, [view(photo(ring, p))], True, (60, 60, 255), t, cv2.LINE_AA, shift=3)
+        except scrubmod.ScrubError:
+            pass
+        colour = (80, 220, 80) if not p.warnings else (60, 60, 255)
+        cv2.polylines(img, [view(px)], True, colour, t, cv2.LINE_AA, shift=3)
+        o = (np.asarray(px[0]) - off) * scale
+        cv2.circle(img, (int(o[0]), int(o[1])), 3 * t, colour, -1, cv2.LINE_AA)     # local origin
+        if overview:
+            q = (np.asarray(px) - off) * scale
+            cv2.putText(img, f"{p.id} {p.rotation_deg:+.2f} deg", (int(q[:, 0].min()), int(q[:, 1].min()) - 6 * t),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45 * t, colour, t, cv2.LINE_AA)
+    if overview:   # printer axes at the image centre
+        c = corrmod.photo_to_mm([[size[0] / 2, size[1] / 2]], size, axes_fit)[0]
+        length = 0.12 * size[0] * corrmod.get_correction(size)._step * axes_fit.mm_per_plate_px
+        p0, ex, ey = corrmod.mm_to_photo([c, c + [length, 0], c + [0, length]], size, axes_fit)
+        p0 = (p0 - off) * scale
+        for end, colour, label in ((ex, (0, 0, 255), "+X"), (ey, (0, 200, 0), "+Y")):
+            e = (end - off) * scale
+            cv2.arrowedLine(img, tuple(map(int, p0)), tuple(map(int, e)), colour, t + 1, tipLength=0.12)
+            cv2.putText(img, label, tuple(map(int, e + 5 * t)), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6 * t, colour, t, cv2.LINE_AA)
+    return img
+
+
+def _closeups(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.PrinterAxes,
+              width: int = 360) -> dict[str, Any]:
+    """A sharp close-up per substrate: the camera crop enlarged first, then the
+    toolpath drawn at that size so the lines stay thin."""
+    import cv2
+    import numpy as np
+
+    out = {}
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    for p, px in zip(result.placements, result.arrays_px):
+        (x0, y0), (x1, y1) = np.asarray(px).min(0), np.asarray(px).max(0)
+        m = 0.3 * max(x1 - x0, y1 - y0)
+        x0, y0 = int(max(0, x0 - m)), int(max(0, y0 - m))
+        x1, y1 = int(min(bgr.shape[1], x1 + m)), int(min(bgr.shape[0], y1 + m))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        k = width / (x1 - x0)
+        crop = cv2.resize(bgr[y0:y1, x0:x1], (width, max(1, round((y1 - y0) * k))),
+                          interpolation=cv2.INTER_CUBIC)
+        out[p.id] = _draw_alignment(crop, result, axes_fit, only=p.id, offset=(x0, y0), scale=k,
+                                    overview=False)
+    return out
+
+
+async def _grab_rgb() -> Any:
+    """One full-size RGB frame, from this Pi's camera or the camera host."""
+    import cv2
+    import numpy as np
+
+    base = _camera_host()
+    if not base:
+        return await asyncio.to_thread(lambda: hub.camera.frame())
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.get(base + "/api/camera/snapshot", params={"width": 4056})
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"camera host {base} is unreachable ({type(exc).__name__})") from exc
+    if r.status_code != 200:
+        raise HTTPException(502, f"camera host answered {r.status_code}")
+    bgr = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR)
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+@app.get("/api/align")
+def align_info() -> dict:
+    return _align_info()
+
+
+@app.post("/api/align/scan")
+async def align_scan(payload: dict | None = None) -> dict:
+    """Photo of the plate -> every electrode array -> its pattern placed on it."""
+    import base64
+    import json
+
+    import cv2
+
+    hub.require_idle()
+    axes_fit, err = _camera_axes()
+    if axes_fit is None:
+        raise HTTPException(400, f"Teach the camera points first: {err}")
+    rgb = await _grab_rgb()
+
+    def work() -> dict:
+        params = ElectrodeParams.from_cfg(hub.cal.detection.get("electrodes"))
+        try:
+            result = alignmod.scan(rgb, hub.machine.axes, axes_fit, _align_settings(),
+                                   _scrub_tab_pattern(), params)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        drawn = _draw_alignment(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), result, axes_fit)
+        crops = {}
+        for sid, crop in _closeups(rgb, result, axes_fit).items():
+            ok, cb = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+            crops[sid] = "data:image/jpeg;base64," + base64.b64encode(cb.tobytes()).decode()
+        w = drawn.shape[1]
+        out_w = min(1600, w)
+        small = cv2.resize(drawn, (out_w, round(drawn.shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        scan = {"result": result, "time": time.strftime("%H:%M:%S"), "crops": crops,
+                "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode(),
+                "shown_scale": out_w / w}
+        if (payload or {}).get("save", True):
+            d, n = _next_scan_dir()
+            cv2.imwrite(str(d / "original.jpg"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(str(d / "aligned.jpg"), drawn)
+            (d / "alignment.json").write_text(json.dumps({"scan_id": n, **result.as_dict()}, indent=2))
+            scan["scan_id"] = n
+        return scan
+
+    hub.align_scan = await asyncio.to_thread(work)
+    return _align_info()
+
+
+@app.post("/api/align/settings")
+def align_settings(payload: dict) -> dict:
+    hub.require_idle()
+    ranges = {"size_tolerance_mm": (0.01, 5.0), "max_rotation_deg": (0.1, 45.0)}
+    updates = {}
+    for key, (lo, hi) in ranges.items():
+        if key in payload:
+            v = float(payload[key])
+            if not lo <= v <= hi:
+                raise HTTPException(400, f"{key} must be {lo:g} to {hi:g}")
+            updates[key] = v
+    if updates:
+        _patch_calibration({"alignment": updates})
+    _refresh_scan()
+    return _align_info()
+
+
+def _refresh_scan() -> None:
+    """Re-place the last scan's arrays after a pattern or setting change (no new photo)."""
+    if not hub.align_scan:
+        return
+    r: alignmod.ScanResult = hub.align_scan["result"]
+    st = _align_settings()
+    for i, p in enumerate(r.placements):
+        own = st["patterns"].get(p.id)
+        r.placements[i] = alignmod.place(p.id, hub.machine.axes, p.corners_mm, own or _scrub_tab_pattern(), st)
+        r.pattern_source[p.id] = "own" if own else "scrub tab"
+    hub.align_scan["stale"] = True      # the picture still shows the old toolpaths
+
+
+@app.post("/api/align/pattern")
+def align_pattern(payload: dict) -> dict:
+    """Give substrates a pattern. Body: targets ["S1", ...] and one of
+    sketch (a bridge-sketcher export), copy_from "S2", or clear true
+    (back to the Scrub tab sketch)."""
+    hub.require_idle()
+    targets = [str(t) for t in payload.get("targets") or []]
+    if not targets or not all(t.startswith("S") and t[1:].isdigit() for t in targets):
+        raise HTTPException(400, "targets must be substrate names like S1, S2")
+    patterns = dict(_align_settings()["patterns"])
+    if payload.get("clear"):
+        for t in targets:
+            patterns.pop(t, None)
+    else:
+        if payload.get("copy_from"):
+            src = patterns.get(str(payload["copy_from"]))
+            pattern = dict(src) if src else _scrub_tab_pattern()
+        elif payload.get("sketch"):
+            pattern = alignmod.pattern_from_sketch(payload["sketch"], str(payload.get("name") or ""))
+        else:
+            raise HTTPException(400, "send sketch, copy_from or clear")
+        try:
+            pattern["bridges"] = scrubmod.clean_bridges(pattern["bridges"])
+        except scrubmod.ScrubError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        w, h = pattern["area"]["w"], pattern["area"]["h"]
+        if not (1.0 <= w <= 100.0 and 1.0 <= h <= 100.0):
+            raise HTTPException(400, "the pattern area must be 1 to 100 mm on each side")
+        for t in targets:
+            patterns[t] = pattern
+    raw = dict(hub.cal.raw.get("alignment") or {})
+    raw["patterns"] = patterns
+    _patch_calibration({"alignment": raw})
+    _refresh_scan()
+    return _align_info()
+
+
+@app.post("/api/align/camera/teach")
+def align_teach(payload: dict) -> dict:
+    """Pair a clicked camera pixel with where the gantry is now (the tool tip
+    jogged over the same mark)."""
+    hub.require_idle()
+    try:
+        px = [float(payload["px"][0]), float(payload["px"][1])]
+        size = [int(payload["photo_size"][0]), int(payload["photo_size"][1])]
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        raise HTTPException(400, "send px [x, y] and photo_size [w, h]") from exc
+    if not corrmod.supported(size):
+        raise HTTPException(400, f"no lens calibration for {size[0]} x {size[1]} frames")
+    p = hub.printer.position()
+    if not all(a in p.homed for a in "xy"):
+        raise HTTPException(400, "Home X and Y first.")
+    pts = _camera_points()
+    if pts["points_px"] and list(pts["photo_size"]) != size:
+        raise HTTPException(400, f"the saved points were clicked on {pts['photo_size'][0]} x "
+                                 f"{pts['photo_size'][1]} frames; clear them to change size")
+    pts["points_px"].append([round(px[0], 2), round(px[1], 2)])
+    pts["points_mm"].append([round(p.x, 3), round(p.y, 3)])
+    pts["photo_size"] = size
+    _patch_calibration({"detection": {"camera_to_machine": pts}})
+    return _align_info()
+
+
+@app.post("/api/align/camera/delete")
+def align_teach_delete(payload: dict) -> dict:
+    hub.require_idle()
+    pts = _camera_points()
+    if payload.get("all"):
+        pts["points_px"], pts["points_mm"] = [], []
+    else:
+        i = int(payload.get("index", -1))
+        if not 0 <= i < len(pts["points_px"]):
+            raise HTTPException(400, "no such camera point")
+        del pts["points_px"][i]
+        del pts["points_mm"][i]
+    _patch_calibration({"detection": {"camera_to_machine": pts}})
+    return _align_info()
+
+
+@app.post("/api/align/scrub")
+def align_scrub(payload: dict) -> dict:
+    """Scrub one substrate with the swab already in the jaws."""
+    hub.require_idle()
+    st = _substrate_scrub(str(payload.get("id")), bool(payload.get("force")))
+    try:
+        hub.thread = hub.scrub.start(st, hub.guard.ref, hub.guard.floor)
+    except scrubmod.ScrubError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return hub.scrub.status.as_dict()
+
+
+@app.post("/api/align/routine")
+def align_routine(payload: dict) -> dict:
+    """Routine 1 (grip, scrub, dispose) on one substrate."""
+    hub.require_idle()
+    st = _substrate_scrub(str(payload.get("id")), bool(payload.get("force")))
+    try:
+        hub.thread = hub.routine.start(_auto_settings(), st, hub.guard.ref, hub.guard.floor)
+    except (routinemod.RoutineError, scrubmod.ScrubError) as exc:
+        raise HTTPException(400, str(exc)) from exc
     return hub.routine.status.as_dict()
 
 

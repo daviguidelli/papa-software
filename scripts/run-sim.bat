@@ -6,6 +6,7 @@ if not exist .venv (%PY% -m venv .venv)
 call .venv\Scripts\activate.bat
 pip install -q -r requirements.txt
 set PAPA_SIM=1
+set PAPA_SIM_ARRAYS=1
 echo.
 echo Ready. Open  http://localhost:8080/validate  in your browser.
 echo Stop with Ctrl+C.

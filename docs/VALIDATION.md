@@ -128,10 +128,10 @@ costs.
 
 ## Stage 6 — Camera ↔ gantry agreement
 
-Not scripted yet. Put the swab tip over a mark on the bed using the Jog page,
-read the machine position, and click the same mark in the camera image. Repeat
-for four corners; those pairs are the homography. Then check a fifth point that
-was not used. Pass: error under 0.5 mm.
+On the validation page: Substrates → Camera points. Put the swab tip over a
+mark on the bed, click the same mark in the photo, press Pair. Repeat for four
+points spread over the plate, then a fifth: the fit shows each point's error.
+Pass: every point under 0.5 mm. See `docs/SUBSTRATE-ALIGNMENT.md`.
 
 ## Stage 7 — First scribing
 
