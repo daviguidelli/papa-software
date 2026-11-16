@@ -198,8 +198,13 @@ def _camera_host() -> str:
     return os.environ.get("PAPA_CAMERA_URL", "").rstrip("/")
 
 
-def _grab_jpeg(width: int) -> bytes:
-    return encode_jpeg(hub.camera.frame(), width, "REAL" if cfgmod.is_real("camera") else "MOCK")
+def _grab_jpeg(width: int, corrected: bool = False) -> bytes:
+    rgb = hub.camera.frame()
+    label = "REAL" if cfgmod.is_real("camera") else "MOCK"
+    if corrected and corrmod.supported(rgb.shape[1::-1]):
+        rgb = corrmod.get_correction(rgb.shape[1::-1]).correct_image(rgb)
+        label += " CORRECTED"
+    return encode_jpeg(rgb, width, label)
 
 
 async def _probe_host(base: str) -> None:
@@ -213,26 +218,26 @@ async def _probe_host(base: str) -> None:
 
 
 @app.get("/api/camera/snapshot")
-async def camera_snapshot(width: int = 1280) -> Response:
+async def camera_snapshot(width: int = 1280, corrected: int = 0) -> Response:
     width = min(max(width, 160), 4056)
     base = _camera_host()
     if base:
         try:
             async with httpx.AsyncClient(timeout=15) as c:
-                r = await c.get(base + "/api/camera/snapshot", params={"width": width})
+                r = await c.get(base + "/api/camera/snapshot", params={"width": width, "corrected": corrected})
         except httpx.HTTPError as exc:
             raise HTTPException(502, f"camera host {base} is unreachable ({type(exc).__name__})") from exc
         if r.status_code != 200:
             raise HTTPException(502, f"camera host answered {r.status_code}")
         jpeg = r.content
     else:
-        jpeg = await asyncio.to_thread(_grab_jpeg, width)
+        jpeg = await asyncio.to_thread(_grab_jpeg, width, bool(corrected))
     return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/camera/stream")
 async def camera_stream(request: Request, width: int = 960, fps: float = 8.0,
-                        frames: int = 0) -> StreamingResponse:
+                        frames: int = 0, corrected: int = 0) -> StreamingResponse:
     """MJPEG for an <img>. `frames` caps the stream (0 is endless); tests use it."""
     global _streams
     width = min(max(width, 160), 1920)
@@ -253,7 +258,7 @@ async def camera_stream(request: Request, width: int = 960, fps: float = 8.0,
             while not await request.is_disconnected():
                 t0 = time.monotonic()
                 try:
-                    jpeg = await asyncio.to_thread(_grab_jpeg, width)
+                    jpeg = await asyncio.to_thread(_grab_jpeg, width, bool(corrected))
                 except Exception:                                  # noqa: BLE001
                     break
                 yield (f"--{BOUNDARY}\r\nContent-Type: image/jpeg\r\n"
@@ -271,7 +276,8 @@ async def camera_stream(request: Request, width: int = 960, fps: float = 8.0,
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None)) as c:
                 async with c.stream("GET", base + "/api/camera/stream",
-                                    params={"width": width, "fps": fps, "frames": frames}) as r:
+                                    params={"width": width, "fps": fps, "frames": frames,
+                                            "corrected": corrected}) as r:
                     async for chunk in r.aiter_raw():
                         yield chunk
         except httpx.HTTPError:
@@ -284,6 +290,72 @@ async def camera_stream(request: Request, width: int = 960, fps: float = 8.0,
         media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY}",
         headers={"Cache-Control": "no-store"},
     )
+
+
+# ---------- capture and correct (cameraUpdates/capturedCorrection, in the GUI) ----------
+
+def _captures_dir() -> Path:
+    d = STATE_DIR / "captures"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@app.post("/api/camera/capture")
+async def camera_capture(payload: dict | None = None) -> JSONResponse:
+    """Take a photo, save the original and the corrected (straight-down) view,
+    and optionally measure the 5 x 5 checkerboard. Full resolution by default."""
+    import base64
+
+    import cv2
+
+    body = payload or {}
+    remote = _camera_host()
+    if remote:
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as c:
+                r = await c.post(f"{remote}/api/camera/capture", json=body)
+            return JSONResponse(r.json(), status_code=r.status_code)
+        except httpx.HTTPError as exc:
+            return JSONResponse({"error": f"camera host {remote} unreachable: {exc}"}, status_code=502)
+
+    full = bool(body.get("full", True))
+
+    def work() -> dict:
+        rgb = hub.camera.still(corrmod.SENSOR_SIZE if full else None)
+        size = rgb.shape[1::-1]
+        if not corrmod.supported(size):
+            raise HTTPException(400, f"no lens calibration for {size[0]} x {size[1]} photos")
+        corrected = corrmod.get_correction(size).correct_image(rgb)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        d = _captures_dir()
+        orig_name, corr_name = f"{stamp}_original.jpg", f"{stamp}_corrected.jpg"
+        cv2.imwrite(str(d / orig_name), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 95])
+        bgr = cv2.cvtColor(corrected, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(str(d / corr_name), bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        out_w = min(1600, bgr.shape[1])
+        small = cv2.resize(bgr, (out_w, round(bgr.shape[0] * out_w / bgr.shape[1])), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        res = {"photo_size": list(size), "corrected_size": list(corrected.shape[1::-1]),
+               "original": orig_name, "corrected": corr_name, "saved_to": str(d),
+               "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()}
+        if body.get("check"):
+            res["check"] = corrmod.check_checkerboard(rgb)
+        return res
+
+    try:
+        return JSONResponse(await asyncio.to_thread(work))
+    except HTTPException:
+        raise
+    except Exception as exc:                                     # noqa: BLE001
+        return JSONResponse({"error": f"camera unavailable: {exc}"}, status_code=503)
+
+
+@app.get("/api/camera/captures/{name}")
+def camera_capture_file(name: str) -> FileResponse:
+    p = _captures_dir() / name
+    if "/" in name or "\\" in name or not name.endswith(".jpg") or not p.is_file():
+        raise HTTPException(404, "no such capture")
+    return FileResponse(p, media_type="image/jpeg", filename=name)
 
 
 # ---------- validation page ----------
@@ -1495,7 +1567,7 @@ async def _grab_rgb() -> Any:
 
     base = _camera_host()
     if not base:
-        return await asyncio.to_thread(lambda: hub.camera.frame())
+        return await asyncio.to_thread(lambda: hub.camera.still(corrmod.SENSOR_SIZE))
     try:
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.get(base + "/api/camera/snapshot", params={"width": 4056})
@@ -1543,7 +1615,7 @@ async def align_scan(payload: dict | None = None) -> dict:
         out_w = min(1600, w)
         small = cv2.resize(drawn, (out_w, round(drawn.shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
         ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        scan = {"result": result, "time": time.strftime("%H:%M:%S"), "crops": crops,
+        scan = {"result": result, "time": time.strftime("%H:%M:%S"), "crops": crops, "rgb": rgb,
                 "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode(),
                 "shown_scale": out_w / w}
         if (payload or {}).get("save", True):
@@ -1556,6 +1628,35 @@ async def align_scan(payload: dict | None = None) -> dict:
 
     hub.align_scan = await asyncio.to_thread(work)
     return _align_info()
+
+
+@app.get("/api/align/substrate/{sid}/sketch")
+def align_substrate_sketch(sid: str) -> dict:
+    """One substrate from the last scan, straightened and zoomed for the bridge
+    sketcher: its own pattern's size and bridges if it has one, otherwise the
+    measured array size and no bridges."""
+    import base64
+
+    import cv2
+
+    p, _ = _substrate(sid)
+    own = _align_settings()["patterns"].get(sid)
+    axes_fit, err = _camera_axes()
+    if axes_fit is None:
+        raise HTTPException(400, f"Teach the camera points first: {err}")
+    if own:
+        w, h = float(own["area"]["w"]), float(own["area"]["h"])
+        origin, rot, bridges = p.origin_mm, p.rotation_deg, list(own.get("bridges") or [])
+    else:
+        w, h = round(p.measured_mm[0], 2), round(p.measured_mm[1], 2)
+        place = alignmod.place(sid, hub.machine.axes, p.corners_mm, {"area": {"w": w, "h": h}}, {})
+        origin, rot, bridges = place.origin_mm, place.rotation_deg, []
+    ppm = min(40.0, 2400.0 / max(w, h))            # the sketcher's own scale
+    img = alignmod.rectify(hub.align_scan["rgb"], hub.machine.axes, axes_fit, origin, rot, w, h, ppm)
+    ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return {"id": sid, "w": w, "h": h, "px_per_mm": ppm, "bridges": bridges,
+            "pattern_name": (own or {}).get("name") or "",
+            "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()}
 
 
 @app.post("/api/align/settings")

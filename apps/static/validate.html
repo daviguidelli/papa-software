@@ -270,10 +270,23 @@
         <label>Width px<select id="camW"><option>640</option><option selected>960</option><option>1280</option><option>1920</option></select></label>
         <label>Frames/s<select id="camF"><option>2</option><option>5</option><option selected>8</option><option>12</option></select></label>
         <label style="flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="camGrid"> Grid</label>
+        <label style="flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="camCorr"> Corrected</label>
         <button id="camToggle">Pause</button>
         <button class="gold" id="camSnap">Save snapshot</button>
       </div>
       <details class="more"><summary>More info</summary><p class="note">The stream runs only while this tab is open. The stamp burned into the bottom-left says REAL, MOCK or REMOTE, the time, and the size of the source frame, so a frozen picture or a mocked camera is obvious. Focus is the manual ring on the lens. Lower the width or frame rate if the picture lags over Wi-Fi.</p></details>
+    </div>
+    <div class="card" id="camCap">
+      <p class="label">Capture and correct</p>
+      <p class="note" style="margin-top:0">Takes a photo, removes the lens distortion and camera tilt, and saves both the original and the straight-down corrected view on the Pi (in the captures folder). Same as capture_and_correct.py.</p>
+      <div class="row" style="align-items:center">
+        <label style="flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="capFull" checked> Full resolution (4056 × 3040)</label>
+        <label style="flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="capCheck"> Measure the 5 × 5 checkerboard</label>
+        <button class="gold" id="capBtn">Capture and correct</button>
+      </div>
+      <p class="note" id="capMsg"></p>
+      <img id="capImg" alt="Corrected view" style="width:100%;display:none;margin-top:10px;border:1px solid var(--line);border-radius:4px">
+      <div class="row" id="capLinks" style="margin-top:8px" hidden></div>
     </div>
     <details class="card fold" id="f-detect"><summary><span class="label">Substrate detection · red tape</span></summary><div class="fold-body">
       
@@ -434,7 +447,7 @@
     <details class="card fold" id="f-alpat" open>
       <summary><span class="label">Patterns · which sketch goes on which substrate</span></summary>
       <div class="fold-body">
-        <p class="note" style="margin-top:0">Tick substrates in the table above, then give them a pattern. A substrate without its own pattern uses the Scrub tab's sketch (<span class="mono" id="alScrubSk">–</span>).</p>
+        <p class="note" style="margin-top:0">Fastest: press <b>Sketch</b> on a substrate's row. The sketcher opens on that substrate, zoomed in from the scan photo; draw the bridges and press Save to send them back here. Or tick substrates in the table above and give them a pattern below. A substrate without its own pattern uses the Scrub tab's sketch (<span class="mono" id="alScrubSk">–</span>).</p>
         <div class="row" style="align-items:flex-end">
           <label>Sketch file for the ticked substrates<input type="file" id="alFile" accept=".json,application/json"></label>
           <a class="btn sm" style="flex:0 0 auto;display:inline-flex;align-items:center" href="/static/bridge_sketcher.html" target="_blank">Open sketcher</a>
@@ -837,7 +850,7 @@ $('#trPat').onclick=()=>trace('pattern');$('#trOut').onclick=()=>trace('outline'
 
 /* ---------- camera ---------- */
 let camOn=false,camTimer=null;
-const camUrl=()=>`/api/camera/stream?width=${$('#camW').value}&fps=${$('#camF').value}&t=${Date.now()}`;
+const camUrl=()=>`/api/camera/stream?width=${$('#camW').value}&fps=${$('#camF').value}&corrected=${$('#camCorr').checked?1:0}&t=${Date.now()}`;
 function camMsg(t){const m=$('#camMsg');m.textContent=t||'';m.style.display=t?'flex':'none'}
 function camStart(){
   camStop();camOn=true;camMsg('Connecting to the camera…');$('#camToggle').textContent='Pause';
@@ -853,6 +866,27 @@ $('#live').onerror=async()=>{
 $('#camToggle').onclick=()=>{if(camOn)camStop();else camStart()};
 $('#camW').onchange=$('#camF').onchange=()=>{if(S.tab==='cam')camStart()};
 $('#camGrid').onchange=e=>{$('#camGridOv').hidden=!e.target.checked};
+$('#camCorr').checked=LS.get('camCorr',false);
+$('#camCorr').onchange=e=>{LS.set('camCorr',e.target.checked);if(S.tab==='cam')camStart()};
+$('#capBtn').onclick=async()=>{
+  const m=$('#capMsg'),b=$('#capBtn');b.disabled=true;
+  m.textContent=$('#capFull').checked?'Taking a full-resolution photo and correcting it (a few seconds)…':'Capturing…';m.className='note';
+  try{
+    const r=await post('/api/camera/capture',{full:$('#capFull').checked,check:$('#capCheck').checked});
+    const img=$('#capImg');img.src=r.image;img.style.display='block';
+    let t=`Saved ${r.original} (${r.photo_size.join(' × ')}) and ${r.corrected} (${r.corrected_size.join(' × ')}) in ${r.saved_to}.`,cls='note good';
+    if('check' in r){
+      const c=r.check;
+      if(!c){t+=' Checkerboard not found: make sure the whole board is visible.';cls='note warn'}
+      else{t+=` Squares measure ${c.min_px} to ${c.max_px} px (average ${c.mean_px}, target ${c.target_px}). `+(c.matches?'This setup matches the calibration.':'This setup does NOT match the calibration: the focus, zoom or camera position may have changed, or the board is not flat on the plate.');if(!c.matches)cls='note warn'}
+    }
+    m.textContent=t;m.className=cls;
+    const L=$('#capLinks');L.hidden=false;
+    L.innerHTML=`<a class="btn sm" href="/api/camera/captures/${encodeURIComponent(r.corrected)}" download>Download corrected</a> <a class="btn sm" href="/api/camera/captures/${encodeURIComponent(r.original)}" download>Download original</a>`;
+    log('captured and corrected '+r.corrected,'good');
+  }catch(e){m.textContent=String(e.message||e);m.className='note err'}
+  finally{b.disabled=false}
+};
 $('#camSnap').onclick=async()=>{
   try{const r=await fetch('/api/camera/snapshot?width=1920');if(!r.ok){const j=await r.json();throw new Error(j.error||r.status)}
     const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download='papa_camera_'+new Date().toISOString().replace(/[:.]/g,'-')+'.jpg';a.click();log('snapshot saved','good')}
@@ -1103,7 +1137,7 @@ function paintAlign(){
       <td>${fmt(x.pattern_mm[0],2)} × ${fmt(x.pattern_mm[1],2)}</td>
       <td class="${Math.abs(x.rotation_deg)>a.settings.max_rotation_deg?'err':''}">${(x.rotation_deg>=0?'+':'')+fmt(x.rotation_deg,2)}</td>
       <td>${fmt(x.origin_mm[0],2)}, ${fmt(x.origin_mm[1],2)}</td><td>${fmt(x.fit_rms_mm,3)}</td>
-      <td style="white-space:nowrap"><button class="sm" data-scrub="${x.id}" ${lock||!homedXY()?'disabled':''}>Scrub</button> <button class="sm gold" data-routine="${x.id}" ${lock||!homedXY()?'disabled':''}>Routine 1</button></td></tr>
+      <td style="white-space:nowrap"><a class="btn sm" href="/static/bridge_sketcher.html?substrate=${x.id}" target="_blank">Sketch</a> <button class="sm" data-scrub="${x.id}" ${lock||!homedXY()?'disabled':''}>Scrub</button> <button class="sm gold" data-routine="${x.id}" ${lock||!homedXY()?'disabled':''}>Routine 1</button></td></tr>
       <tr><td></td><td colspan="8" class="${ok?'good':'warn'}" style="padding-top:0;font-size:12px;text-align:left">${x.crop?`<img src="${x.crop}" alt="${x.id} close-up" style="float:left;width:300px;max-width:45%;margin:2px 14px 6px 0;border:1px solid var(--line);border-radius:3px">`:''}${ok?(x.plan?`Ready · ${x.plan.rows} rows, ${x.plan.hops} hops, ~${fmt(x.plan.est_s/60,1)} min`:'Ready'):x.problems.map(esc).join(' ')}</td></tr>`}).join('');
   $('#alAll').checked=subs.length&&alSel.size===subs.length;
   const opts=['<option value="">Scrub tab sketch</option>'].concat(subs.filter(x=>a.patterns[x.id]).map(x=>`<option value="${x.id}">${x.id} · ${esc(x.pattern_name)}</option>`));

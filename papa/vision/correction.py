@@ -200,6 +200,28 @@ def get_correction(photo_size=CALIBRATED_SIZE) -> Correction:
     return _corrections[key]
 
 
+def check_checkerboard(rgb, inner_corners=(4, 4)) -> dict | None:
+    """Measure the 5 x 5 checkerboard's squares in the corrected view (as
+    capture_and_correct.py --check does). None if the board is not found."""
+    c = get_correction(rgb.shape[1::-1])
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE
+    found, corners = cv2.findChessboardCorners(gray, inner_corners, flags)
+    if not found:
+        return None
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 0.001)
+    window = 11 if rgb.shape[1] <= 2000 else 21
+    corners = cv2.cornerSubPix(gray, corners, (window, window), (-1, -1), criteria)
+    cols, rows = inner_corners
+    grid = c.to_corrected(corners.reshape(-1, 2)).reshape(rows, cols, 2)
+    sides = np.concatenate([np.linalg.norm(np.diff(grid, axis=1), axis=2).ravel(),
+                            np.linalg.norm(np.diff(grid, axis=0), axis=2).ravel()])
+    low, high, mean, target = float(sides.min()), float(sides.max()), float(sides.mean()), c.pixels_per_square
+    ok = abs(mean / target - 1) < 0.02 and high / low < 1.04
+    return {"min_px": round(low, 2), "max_px": round(high, 2), "mean_px": round(mean, 2),
+            "target_px": round(target, 1), "matches": bool(ok)}
+
+
 def supported(photo_size) -> bool:
     return tuple(int(v) for v in photo_size) in PHOTO_MODES
 

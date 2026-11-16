@@ -32,6 +32,16 @@ class PiCamera:
         """
         return np.ascontiguousarray(self._cam.capture_array("main")[:, :, ::-1])
 
+    def still(self, size: tuple[int, int] | None = None) -> np.ndarray:
+        """One RGB photo at `size` (e.g. the full 4056 x 3040), switching the
+        sensor mode for this capture only; the next frame() is back at the
+        live size. None or the live size is the same as frame()."""
+        if size is None or tuple(size) == tuple(self._cam.camera_configuration()["main"]["size"]):
+            return self.frame()
+        cfg = self._cam.create_still_configuration(main={"size": tuple(size), "format": "RGB888"})
+        arr = self._cam.switch_mode_and_capture_array(cfg, "main")
+        return np.ascontiguousarray(arr[:, :, ::-1])
+
     def close(self) -> None:
         self._cam.stop()
 
@@ -47,6 +57,11 @@ class LockedCamera:
     def frame(self) -> np.ndarray:
         with self._lock:
             return self._inner.frame()
+
+    def still(self, size: tuple[int, int] | None = None) -> np.ndarray:
+        with self._lock:
+            inner = self._inner
+            return inner.still(size) if hasattr(inner, "still") else inner.frame()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)

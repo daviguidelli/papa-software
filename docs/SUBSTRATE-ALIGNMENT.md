@@ -6,14 +6,17 @@ shifted to sit exactly on it before the scrub runs.
 
 ## Flow
 
-1. **Photo.** `Scan substrates` takes one camera frame.
+1. **Photo.** `Scan substrates` takes one full-resolution photo (4056 × 3040).
 2. **Find the arrays.** Copper-coloured areas are found in the corrected
    (straight-down) view, and each array's four edges are measured to a
    fraction of a pixel (`papa/vision/electrodes.py`).
-3. **Your geometry.** Each substrate has a pattern: the bridge sketcher's
-   export (array width × height, and the bridges as keep-outs). Substrates
-   without their own pattern use the Scrub tab's sketch. Tick substrates and
-   load a sketch file, or copy one substrate's pattern to others.
+3. **Your geometry.** Each substrate has a pattern: array width × height and
+   the bridges as keep-outs. Press **Sketch** on a substrate's row: the bridge
+   sketcher opens on that substrate, cut from the scan photo, straightened and
+   zoomed, with a dropdown to switch substrates. Draw the bridges and press
+   Save to send them back. Or tick substrates and load a sketch file, or copy
+   one substrate's pattern to others. Substrates without their own pattern use
+   the Scrub tab's sketch.
 4. **Compare.** The array's corners go to printer X/Y mm through the camera
    calibration. The pattern is fitted onto them as a rotation plus a shift (it
    keeps its sketched size). The table shows the measured size against the
@@ -69,3 +72,12 @@ detection:
 arrays through the taught camera points. The simulated calibration's camera
 points are only for the old presence check and are not geometrically
 consistent; clear them and teach a few to see a clean fit.
+
+## Capture and correct (Camera tab)
+
+The Camera tab's **Capture and correct** does what `capture_and_correct.py`
+did: a full-resolution photo, saved with its corrected straight-down view in
+`var/captures/`, with an optional 5 × 5 checkerboard check against the
+calibration (squares should measure about 270 px at full resolution). Both
+files can be downloaded from the page. The **Corrected** box shows the live
+view corrected too.

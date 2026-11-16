@@ -26,6 +26,7 @@ from typing import Any
 
 import numpy as np
 
+from papa.ops.geometry import axis_matrix as _axis
 from papa.ops.geometry import to_local, to_machine
 from papa.vision import correction as corr
 from papa.vision import electrodes as elec
@@ -219,3 +220,27 @@ def detect_only(rgb: np.ndarray, params: elec.ElectrodeParams | None = None) -> 
     out = [c.from_plate(c.corrected_to_plate(a.corners)) for a in found]
     out.sort(key=lambda px: (round(float(px[:, 1].mean()) / 100), float(px[:, 0].mean())))
     return out
+
+
+def rectify(rgb: np.ndarray, machine_axes: dict[str, str], printer_axes: corr.PrinterAxes,
+            origin_mm: list[float], rot_deg: float, w: float, h: float,
+            px_per_mm: float) -> np.ndarray:
+    """A straight-on picture of one substrate: exactly its w x h mm pattern area
+    (local frame, top-left origin, x right, y down) at px_per_mm, taken from a
+    camera photo through the lens model and the camera points."""
+    import cv2
+
+    W, H = max(1, int(round(w * px_per_mm))), max(1, int(round(h * px_per_mm)))
+    us = (np.arange(W) + 0.5) / px_per_mm
+    vs = (np.arange(H) + 0.5) / px_per_mm
+    U, V = np.meshgrid(us, vs)
+    (ax, ay), (bx, by) = _axis(machine_axes)
+    c, s = math.cos(math.radians(rot_deg)), math.sin(math.radians(rot_deg))
+    dx, dy = U * ax + V * bx, U * ay + V * by
+    mx = origin_mm[0] + c * dx - s * dy
+    my = origin_mm[1] + s * dx + c * dy
+    size = (rgb.shape[1], rgb.shape[0])
+    photo = corr.get_correction(size).from_plate(printer_axes.mm_to_plate(np.c_[mx.ravel(), my.ravel()]))
+    mapx = photo[:, 0].reshape(H, W).astype(np.float32)
+    mapy = photo[:, 1].reshape(H, W).astype(np.float32)
+    return cv2.remap(rgb, mapx, mapy, cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT)

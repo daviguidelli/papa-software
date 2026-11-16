@@ -121,6 +121,18 @@ kbd{font:10px var(--mono);border:1px solid var(--line2);padding:0 4px;color:var(
 </main>
 
 <aside id="panel">
+  <details id="sec-scan" open hidden>
+    <summary>0 &nbsp; From the scan</summary>
+    <div class="body">
+      <div class="note">Uses the last photo from the Substrates tab: pick a substrate and it opens zoomed in and straightened, sized to its measured array (or to its pattern, if it already has one). Sketch the bridges, then save them to that substrate.</div>
+      <label><span>Substrate</span><select id="fsSel" style="width:100%;background:#000;color:var(--tx);border:1px solid var(--line2);padding:8px;font:12px var(--mono)"></select></label>
+      <div class="row">
+        <button class="sm" id="fsRefresh">Refresh list</button>
+        <button class="pri sm" id="fsSave" disabled>Save to substrate</button>
+      </div>
+      <div class="stat" id="fsStat"></div>
+    </div>
+  </details>
   <details id="sec-image" open>
     <summary>1 &nbsp; Image</summary>
     <div class="body">
@@ -852,12 +864,62 @@ function updateUI(){
   $('#undo').disabled=!S.hist.length;$('#redo').disabled=!S.fut.length;
   $('#clearAll').disabled=!S.rects.length;
   syncProps();updateList();renderTools();updateStatus();
+  if(FS)fsStat();
 }
+
+
+/* ---------- from the scan (Substrates tab) ---------- */
+var FS={id:null,list:[]};
+async function fsList(){
+  let a;
+  try{const r=await fetch('/api/align');if(!r.ok)throw 0;a=await r.json()}catch(e){$('#sec-scan').hidden=true;return}
+  $('#sec-scan').hidden=false;
+  FS.list=(a.scan&&a.scan.substrates)||[];
+  const sel=$('#fsSel'),cur=FS.id||new URLSearchParams(location.search).get('substrate')||'';
+  sel.innerHTML=FS.list.length?'<option value="">Choose…</option>'+FS.list.map(s=>`<option value="${s.id}">${s.id} · ${(+s.measured_mm[0]).toFixed(2)} × ${(+s.measured_mm[1]).toFixed(2)} mm${a.patterns[s.id]?' · has a pattern':''}</option>`).join(''):'<option value="">No scan yet: scan on the Substrates tab</option>';
+  sel.disabled=!FS.list.length;
+  if(cur&&FS.list.some(s=>s.id===cur)){sel.value=cur;if(FS.id!==cur)await fsLoad(cur)}
+  fsStat();
+}
+function fsStat(){
+  $('#fsSave').disabled=!(FS.id&&S.mode==='sub');
+  $('#fsSave').textContent=FS.id?'Save to '+FS.id:'Save to substrate';
+  $('#fsStat').innerHTML=FS.id?`Editing <b>${FS.id}</b> · ${S.w} × ${S.h} mm · ${S.rects.length} bridge${S.rects.length===1?'':'s'}`:'';
+}
+async function fsLoad(id){
+  if(!id){FS.id=null;fsStat();return}
+  $('#fsStat').textContent='Loading '+id+'…';
+  try{
+    const r=await fetch('/api/align/substrate/'+encodeURIComponent(id)+'/sketch');const j=await r.json();
+    if(!r.ok)throw new Error(j.error||r.status);
+    pushHist();
+    S.sub=await loadImageURL(j.image);S.subURL=j.image;S.src=null;S.corners=[];S.subId=null;
+    S.w=j.w;S.h=j.h;$('#szw').value=S.w;$('#szh').value=S.h;
+    S.rects=(j.bridges||[]).map(b=>({id:S.nid++,cx:+b.cx,cy:+b.cy,l:+b.l,w:+b.w}));S.sel=null;
+    FS.id=id;setMode('sub');changed();toast(id+' loaded from the scan');
+    history.replaceState(null,'','?substrate='+encodeURIComponent(id));
+  }catch(e){toast('Could not load '+id+': '+(e.message||e));FS.id=null}
+  fsStat();
+}
+$('#fsSel').onchange=e=>fsLoad(e.target.value);
+$('#fsRefresh').onclick=fsList;
+$('#fsSave').onclick=async()=>{
+  const id=FS.id;if(!id)return;
+  const sketch={app:'papa-bridge-sketcher',version:1,units:'mm',substrate:{w:S.w,h:S.h},
+    bridges:S.rects.map((r,i)=>({id:'B'+(i+1),cx:r3(r.cx),cy:r3(r.cy),l:r3(r.l),w:r3(r.w)}))};
+  try{
+    const r=await fetch('/api/align/pattern',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targets:[id],sketch,name:id+' sketch'})});
+    const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);
+    toast('Saved '+S.rects.length+' bridge'+(S.rects.length===1?'':'s')+' to '+id);await fsList();
+  }catch(e){toast('Not saved: '+(e.message||e))}
+};
 
 /* ---------- init ---------- */
 (async()=>{
   updateUI();resize();
   await refreshLib();
+  await fsList();
+  if(FS.id)return;            // opened for a scanned substrate: skip the saved session
   const s=(await Store.list('session')).find(x=>x.id==='current');
   if(s&&s.img&&S.mode==='empty'){
     try{

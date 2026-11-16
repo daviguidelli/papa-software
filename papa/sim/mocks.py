@@ -239,5 +239,8 @@ class MockCamera:
                              pa, (self.width, self.height), base=img)
         return img
 
+    def still(self, size: tuple[int, int] | None = None) -> np.ndarray:
+        return self.frame()                 # the mock has one size
+
     def close(self) -> None:
         pass

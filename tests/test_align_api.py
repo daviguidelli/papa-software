@@ -134,3 +134,41 @@ def test_mismatched_substrate_needs_force(aligned):
     aligned.post("/api/align/settings", json={"size_tolerance_mm": 0.05})
     assert aligned.get("/api/align").json()["settings"]["size_tolerance_mm"] == 0.05
     assert aligned.post("/api/align/settings", json={"max_rotation_deg": 90}).status_code == 400
+
+
+def test_capture_saves_original_and_corrected(api, tmp_path, monkeypatch):
+    monkeypatch.setattr(api.server, "STATE_DIR", tmp_path)
+    j = api.post("/api/camera/capture", json={"check": True}).json()
+    assert (tmp_path / "captures" / j["original"]).exists() and (tmp_path / "captures" / j["corrected"]).exists()
+    assert j["corrected_size"] != j["photo_size"] and j["image"].startswith("data:image/jpeg;base64,")
+    assert j["check"] is None                               # no checkerboard in the mock frame
+    r = api.get(f"/api/camera/captures/{j['corrected']}")
+    assert r.status_code == 200 and r.content[:2] == b"\xff\xd8"
+    assert api.get("/api/camera/captures/nope.jpg").status_code == 404
+
+
+def test_live_view_can_be_corrected(api):
+    plain = api.get("/api/camera/snapshot", params={"width": 4056}).content
+    corrected = api.get("/api/camera/snapshot", params={"width": 4056, "corrected": 1}).content
+    import cv2
+    a = cv2.imdecode(np.frombuffer(plain, np.uint8), cv2.IMREAD_COLOR)
+    b = cv2.imdecode(np.frombuffer(corrected, np.uint8), cv2.IMREAD_COLOR)
+    assert a.shape[:2] == (1080, 1920) and b.shape[:2] == (1362, 2323)
+
+
+def test_sketcher_gets_each_substrate_straightened(aligned):
+    aligned.post("/api/align/scan", json={"save": False})
+    j = aligned.get("/api/align/substrate/S2/sketch").json()
+    assert j["w"] == pytest.approx(12, abs=0.35) and j["h"] == pytest.approx(10, abs=0.35) and j["bridges"] == []
+    import base64
+
+    import cv2
+    img = cv2.imdecode(np.frombuffer(base64.b64decode(j["image"].split(",", 1)[1]), np.uint8), cv2.IMREAD_COLOR)
+    assert img.shape[1] == round(j["w"] * j["px_per_mm"]) and img.shape[0] == round(j["h"] * j["px_per_mm"])
+    # the straightened area is the array: mostly copper-coloured, not plate
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    assert ((hsv[:, :, 0] < 30) & (hsv[:, :, 1] > 60)).mean() > 0.3
+    aligned.post("/api/align/pattern", json={"targets": ["S2"], "sketch": SKETCH})
+    j = aligned.get("/api/align/substrate/S2/sketch").json()
+    assert (j["w"], j["h"]) == (12.0, 10.0) and len(j["bridges"]) == 1
+    assert aligned.get("/api/align/substrate/S9/sketch").status_code == 404
