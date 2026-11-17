@@ -1563,10 +1563,10 @@ def _align_info() -> dict:
                                                     "gcode_ready": _ref_ready()[0]}
             sub["gcode_from"] = ("reference G-code" if _ref_gcode() is not None and _ref_ready()[0] and mi is not None
                                  else "plan")
-            sub["glass_placed"] = sub.get("pattern_source") == "reference"
+            sub["glass_placed"] = sub.get("pattern_source") in ("reference", "glass")
             pat = st["patterns"].get(sid)
-            sub["pattern_name"] = ((pat or {}).get("name") or "own pattern") if pat else (
-                "Reference sketch (on the glass)" if sub["glass_placed"] else "Scrub tab sketch")
+            sub["pattern_name"] = (((pat or {}).get("name") or "own pattern") + (" (on the glass)" if sub["glass_placed"] else "")
+                                   ) if pat else ("Reference sketch (on the glass)" if sub["glass_placed"] else "Scrub tab sketch")
         info["scan"] = {**d, "time": sc["time"], "scan_id": sc.get("scan_id"), "image": sc["image"],
                         "timing": sc.get("timing"),
                         "shown_scale": sc["shown_scale"], "stale": sc.get("stale", False)}
@@ -1760,12 +1760,14 @@ def _glass_placements(sc: dict, result: alignmod.ScanResult) -> None:
     bx, by = axis_matrix(hub.machine.axes)
     for i, p in enumerate(result.placements):
         mi = (sc.get("mount_info") or [None] * len(result.placements))[i]
-        if mi is None or st["patterns"].get(p.id):
-            continue
+        own = st["patterns"].get(p.id)
+        if mi is None or (own and own.get("frame") != "glass"):
+            continue                            # an own sketch drawn on the array stays on the array
         mt = mi["match"]
         g = refmod.glass_placement(r["placement"], mt, bx, by)
         c = np.asarray(g["corners"])
-        w, h = float(sk["area"]["w"]), float(sk["area"]["h"])
+        area = (own or sk)["area"]
+        w, h = float(area["w"]), float(area["h"])
         mw = float((np.linalg.norm(c[1] - c[0]) + np.linalg.norm(c[2] - c[3])) / 2)
         mh = float((np.linalg.norm(c[3] - c[0]) + np.linalg.norm(c[2] - c[1])) / 2)
         warns = list(mt.warnings) + g["warnings"]
@@ -1775,7 +1777,7 @@ def _glass_placements(sc: dict, result: alignmod.ScanResult) -> None:
         result.placements[i] = alignmod.Placement(
             p.id, c.tolist(), c.mean(0).tolist(), g["origin"], g["rotation_deg"], [mw, mh], [w, h],
             [mw - w, mh - h], mt.rms_mm, warns)
-        result.pattern_source[p.id] = "reference"
+        result.pattern_source[p.id] = "glass" if own else "reference"
 
 
 def _pattern_of(sid: str, result: alignmod.ScanResult | None = None) -> dict:
@@ -1912,9 +1914,21 @@ def align_substrate_sketch(sid: str) -> dict:
     own = st["patterns"].get(sid)
     bridges = list((own or {}).get("bridges") or [])
     axes_fit, _ = _camera_axes()
+    frame = "array"
     if sc.get("result") is not None and axes_fit is not None:
         p = next(x for x in sc["result"].placements if x.id == sid)
-        if own and own.get("drawn_on") != "camera view":
+        glass = sc["result"].pattern_source.get(sid) in ("reference", "glass")
+        if glass:
+            # the glass, turned the way the reference photo shows it; the sketch
+            # covers the whole glass with (0, 0) at its top-left corner
+            frame = "glass"
+            ref = _ref_sketch() or {}
+            area = (own or ref)["area"]
+            w, h = float(area["w"]), float(area["h"])
+            origin, rot = p.origin_mm, p.rotation_deg
+            if not own:
+                bridges = [dict(b) for b in ref.get("bridges") or []]
+        elif own and own.get("drawn_on") != "camera view":
             w, h = float(own["area"]["w"]), float(own["area"]["h"])
             origin, rot = p.origin_mm, p.rotation_deg
         else:
@@ -1938,6 +1952,7 @@ def align_substrate_sketch(sid: str) -> dict:
         size_known = False
     ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
     return {"id": sid, "w": w, "h": h, "px_per_mm": ppm, "bridges": bridges, "size_known": size_known,
+            "frame": frame, "from_reference": frame == "glass" and not own,
             "pattern_name": (own or {}).get("name") or "",
             "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()}
 
@@ -2468,25 +2483,63 @@ def _compare(sid: str, z: float | None = 1.0) -> dict:
 
     sc = _scan_or_400()
     i = _sid_index(sc, sid)
-    if sc.get("result") is None or sc["result"].pattern_source.get(sid) != "reference":
-        raise HTTPException(400, f"{sid} is not running the reference sketch (it has its own, or no glass match).")
+    src = sc["result"].pattern_source.get(sid) if sc.get("result") is not None else None
+    if src not in ("reference", "glass"):
+        raise HTTPException(400, f"{sid} is not placed on its glass (no glass match yet, or its own sketch was drawn on the "
+                                 "array): open it in the sketcher and save it again to compare it to the reference.")
     ref_st, sk = _ref_sketch_settings(z)
     p, pattern = _substrate(sid)
     new_st = alignmod.scrub_settings(_scrub_settings(), pattern, p)
     new_st["start"] = {"x": p.origin_mm[0], "y": p.origin_mm[1], "z": ref_st["start"]["z"]}
     mt = sc["mount_info"][i]["match"]
+    def at(st_x: float, st_y: float, rot: float, b: dict) -> tuple[float, float]:
+        return to_machine(hub.machine.axes, st_x, st_y, b["cx"], b["cy"], rot)
+
+    # pair each of this substrate's bridges with a reference bridge: same id
+    # when it is close, else the nearest unpaired one within 3 mm
+    ref_b, own_b = list(sk["bridges"]), list(pattern["bridges"])
+    pairs, free = {}, set(range(len(ref_b)))
+    for j, b in enumerate(own_b):
+        d = [(((b["cx"] - r_["cx"]) ** 2 + (b["cy"] - r_["cy"]) ** 2) ** 0.5, k) for k, r_ in enumerate(ref_b) if k in free]
+        same = next((k for k in free if ref_b[k]["id"] == b.get("id")), None)
+        k = same if same is not None and next(x for x, kk in d if kk == same) <= 3.0 else min(d, default=(9e9, None))[1]
+        if k is not None and next(x for x, kk in d if kk == k) <= 3.0:
+            pairs[j] = k
+            free.discard(k)
     bridges = []
-    for b in sk["bridges"]:
-        a = to_machine(hub.machine.axes, ref_st["start"]["x"], ref_st["start"]["y"], b["cx"], b["cy"], ref_st["rotation_deg"])
-        n = to_machine(hub.machine.axes, p.origin_mm[0], p.origin_mm[1], b["cx"], b["cy"], p.rotation_deg)
-        d = (n[0] - a[0], n[1] - a[1])
-        bridges.append({"id": b["id"], "ref": [round(a[0], 3), round(a[1], 3)], "new": [round(n[0], 3), round(n[1], 3)],
-                        "moved": [round(d[0], 3), round(d[1], 3)], "dist": round((d[0] ** 2 + d[1] ** 2) ** 0.5, 3)})
+    for j, b in enumerate(own_b):
+        n = at(p.origin_mm[0], p.origin_mm[1], p.rotation_deg, b)
+        row = {"id": b.get("id") or f"B{j + 1}", "new": [round(n[0], 3), round(n[1], 3)], "size": [b["l"], b["w"]]}
+        if j in pairs:
+            rb = ref_b[pairs[j]]
+            a = at(ref_st["start"]["x"], ref_st["start"]["y"], ref_st["rotation_deg"], rb)
+            # where the reference bridge lands on this glass with no edit: the glass move alone
+            g = at(p.origin_mm[0], p.origin_mm[1], p.rotation_deg, rb)
+            d = (n[0] - a[0], n[1] - a[1])
+            e = (b["cx"] - rb["cx"], b["cy"] - rb["cy"])
+            row.update({"ref_id": rb["id"], "ref": [round(a[0], 3), round(a[1], 3)],
+                        "moved": [round(d[0], 3), round(d[1], 3)], "dist": round((d[0] ** 2 + d[1] ** 2) ** 0.5, 3),
+                        "glass_only": [round(g[0], 3), round(g[1], 3)],
+                        "edit": [round(e[0], 3), round(e[1], 3)], "edit_mm": round((e[0] ** 2 + e[1] ** 2) ** 0.5, 3),
+                        "resized": [round(b["l"] - rb["l"], 3), round(b["w"] - rb["w"], 3)]})
+        else:
+            row.update({"ref_id": None, "added": True})
+        bridges.append(row)
+    removed = []
+    for k in sorted(free):
+        rb = ref_b[k]
+        a = at(ref_st["start"]["x"], ref_st["start"]["y"], ref_st["rotation_deg"], rb)
+        removed.append({"id": rb["id"], "ref": [round(a[0], 3), round(a[1], 3)]})
     r = _ref_cfg()["placement"]
     ref_glass = refmod.reference_mm(r)
-    return {"id": sid, "rotation_deg": round(mt.rotation_deg, 4), "shift_mm": [round(v, 4) for v in mt.shift_mm],
-            "red_found": mt.red_found, "warnings": list(mt.warnings), "bridges": bridges,
-            "max_move_mm": max((b["dist"] for b in bridges), default=0.0),
+    edited = [b for b in bridges if b.get("edit_mm", 0) > 0.0005 or any(abs(v) > 0.0005 for v in b.get("resized", [0, 0]))]
+    return {"id": sid, "source": src, "pattern_name": pattern.get("name") or "",
+            "rotation_deg": round(mt.rotation_deg, 4), "shift_mm": [round(v, 4) for v in mt.shift_mm],
+            "red_found": mt.red_found, "warnings": list(mt.warnings), "bridges": bridges, "removed": removed,
+            "edited": len(edited), "added": sum(1 for b in bridges if b.get("added")),
+            "max_edit_mm": max((b.get("edit_mm", 0.0) for b in bridges), default=0.0),
+            "max_move_mm": max((b.get("dist", 0.0) for b in bridges), default=0.0),
+            "ref_bridges": [[*at(ref_st["start"]["x"], ref_st["start"]["y"], ref_st["rotation_deg"], rb)] for rb in ref_b],
             "ref_glass": [[round(x, 3) for x in c] for c in ref_glass.tolist()],
             "new_glass": [[round(x, 3) for x in c] for c in p.corners_mm],
             "ref_segs": _machine_segs(ref_st), "new_segs": _machine_segs(new_st)}
@@ -2533,16 +2586,28 @@ def align_substrate_gcode(sid: str, z: float | None = None) -> Response:
         src = sc["result"].pattern_source.get(sid)
         lines = [
             f"; PAPA: {pattern.get('name') or 'pattern'} on substrate {sid}"
-            + (" (the REFERENCE toolpath, modified for this glass)" if src == "reference" else " (placed on its array)"),
+            + {"reference": " (the REFERENCE toolpath, modified for this glass)",
+               "glass": " (the reference toolpath with this substrate's own bridge edits, on its glass)"}.get(
+                src, " (placed on its array)"),
             f"; scan {sc.get('scan_id', '-')} at {sc['time']}; origin X{p.origin_mm[0]:.3f} Y{p.origin_mm[1]:.3f}, "
             f"turned {p.rotation_deg:+.3f} deg"]
-        if src == "reference":
+        if src in ("reference", "glass"):
             cmp_ = _compare(sid, st["start"]["z"])
             lines.append(f"; vs reference: glass turned {cmp_['rotation_deg']:+.3f} deg, centre moved "
                          f"{cmp_['shift_mm'][0]:+.3f}, {cmp_['shift_mm'][1]:+.3f} mm; red dot "
                          f"{'found' if cmp_['red_found'] else 'NOT found'}")
-            lines += [f";   {b['id']}: X{b['ref'][0]:.3f} Y{b['ref'][1]:.3f} -> X{b['new'][0]:.3f} Y{b['new'][1]:.3f} "
-                      f"(moved {b['moved'][0]:+.3f}, {b['moved'][1]:+.3f}; {b['dist']:.3f} mm)" for b in cmp_["bridges"]]
+            if src == "glass":
+                lines.append(f"; bridge edits vs reference: {cmp_['edited']} changed (up to {cmp_['max_edit_mm']:.3f} mm), "
+                             f"{cmp_['added']} added, {len(cmp_['removed'])} removed")
+            for b in cmp_["bridges"]:
+                if b.get("added"):
+                    lines.append(f";   {b['id']}: NEW (not in the reference) at X{b['new'][0]:.3f} Y{b['new'][1]:.3f}")
+                    continue
+                ed = (f"; edited {b['edit'][0]:+.3f}, {b['edit'][1]:+.3f} mm on the glass" if b["edit_mm"] > 0.0005 else "")
+                rs = (f"; resized {b['resized'][0]:+.3f} x {b['resized'][1]:+.3f}" if any(abs(v) > 0.0005 for v in b["resized"]) else "")
+                lines.append(f";   {b['id']}: X{b['ref'][0]:.3f} Y{b['ref'][1]:.3f} -> X{b['new'][0]:.3f} Y{b['new'][1]:.3f} "
+                             f"(moved {b['moved'][0]:+.3f}, {b['moved'][1]:+.3f}; {b['dist']:.3f} mm{ed}{rs})")
+            lines += [f";   {b['id']}: REMOVED (was X{b['ref'][0]:.3f} Y{b['ref'][1]:.3f})" for b in cmp_["removed"]]
         head = "\n".join(lines + [f"; WARNING: {w}" for w in p.warnings])
         try:
             text = scrubmod.to_gcode(st, hub.machine.axes, header=head)
@@ -2595,7 +2660,9 @@ def align_pattern(payload: dict) -> dict:
             pattern = dict(src) if src else _scrub_tab_pattern()
         elif payload.get("sketch"):
             pattern = alignmod.pattern_from_sketch(payload["sketch"], str(payload.get("name") or ""))
-            if hub.align_scan and hub.align_scan.get("result") is None:
+            if payload.get("frame") == "glass":
+                pattern["frame"] = "glass"      # drawn over the whole glass, like the reference sketch
+            elif hub.align_scan and hub.align_scan.get("result") is None:
                 pattern["drawn_on"] = "camera view"
         else:
             raise HTTPException(400, "send sketch, copy_from or clear")

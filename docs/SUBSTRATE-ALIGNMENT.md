@@ -75,6 +75,14 @@ by the same turn and shift.
      that toolpath and the one modified for its glass overlaid, plus where each
      bridge moved (`/api/align/substrate/<id>/compare`); the same per-bridge
      list is in the header of its G-code.
+     **Per-substrate geometry:** for a substrate with a glass match, the
+     sketcher shows its whole glass turned like the reference photo, starting
+     from the reference bridges (`frame: glass`). Move, resize, add or delete
+     bridges and Save: the substrate then runs its own bridges on its glass, and
+     Compare / the G-code header split each bridge's change into the glass move
+     and your edit (bridges paired by id, else nearest within 3 mm; added and
+     removed ones listed). A sketch drawn on the array (older patterns) stays on
+     the array and is not compared.
    - a **G-code file** (G21 mm; G90/G91, G0/G1/G2/G3; G20 and G92 X/Y are
      refused). When loaded, G-code ↓ gives this file moved onto the glass.
 

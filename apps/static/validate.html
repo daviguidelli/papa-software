@@ -446,9 +446,9 @@
         <p class="note" id="alCmpSum" style="margin-top:6px"></p>
         <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
           <svg id="alCmpSvg" style="flex:1 1 420px;max-width:560px;background:#0b0b0b;border:1px solid var(--line);border-radius:4px"></svg>
-          <table style="flex:1 1 320px"><thead><tr><th>Bridge</th><th>Reference X, Y</th><th>Modified X, Y</th><th>Moved mm</th></tr></thead><tbody id="alCmpRows"></tbody></table>
+          <table style="flex:1 1 360px"><thead><tr><th>Bridge</th><th>Reference X, Y</th><th>Modified X, Y</th><th>Moved mm</th><th>Your edit mm</th></tr></thead><tbody id="alCmpRows"></tbody></table>
         </div>
-        <p class="note muted" style="font-size:12px">Printer millimetres, seen from above (+X right, +Y up). Grey dashed = reference glass and toolpath (from the bridge sketch); orange = the same toolpath moved onto this substrate's glass (cyan). Squares are bridges.</p>
+        <p class="note muted" style="font-size:12px">Printer millimetres, seen from above (+X right, +Y up). Grey dashed = reference glass and toolpath (from the bridge sketch); orange = the same toolpath moved onto this substrate's glass (cyan). Squares are bridges: grey = reference, white = this substrate, green = added, red cross = removed. "Moved" is the total change of each bridge in printer mm; "Your edit" is the part that comes from this substrate's own sketch (on the glass), the rest is the glass being turned and shifted.</p>
       </div>
       <p class="note warn" id="alNeedPrinter" hidden></p>
       <div class="row" style="margin-top:14px;align-items:center">
@@ -1253,7 +1253,7 @@ function alGlass(x){
   const g=x.mount;if(!g)return '';
   const w=(g.warnings||[]).map(esc).join(' ');
   return `<div style="clear:none;margin-top:6px" class="${w?'warn':'muted'}"><b>Glass vs reference</b> (${esc(g.source)}): turned ${(g.rotation_deg>=0?'+':'')+fmt(g.rotation_deg,2)}°, moved ${fmt(g.shift_mm[0],2)}, ${fmt(g.shift_mm[1],2)} mm · ${fmt(g.size_mm,2)} mm glass · red dot ${g.red_found?'found':'not found'}${w?' · '+w:''}
-    ${x.glass_placed?` · <b>runs the reference sketch on this glass</b> <button class="sm" data-cmp="${x.id}">Compare to reference</button>`:''}
+    ${x.glass_placed?` · <b>${x.pattern_source==='glass'?'runs its own edit of the reference sketch on this glass':'runs the reference sketch on this glass'}</b> <button class="sm" data-cmp="${x.id}">Compare to reference</button> <a class="btn sm" href="/static/bridge_sketcher.html?substrate=${x.id}">${x.pattern_source==='glass'?'Edit its bridges':'Adjust bridges for '+x.id}</a>`:''}
     ${g.gcode_ready?` <button class="sm gold" data-gcode="${x.id}" data-from="${x.gcode_from}">G-code ↓</button>`:' <span class="muted">(finish the reference below for G-code)</span>'}
     <a class="btn sm" href="/static/bridge_sketcher.html?substrate=${x.id}&glass=1">Set glass corners</a></div>`;
 }
@@ -1386,17 +1386,26 @@ function alCompare(id){
   run('Compared '+id+' to the reference',async()=>{
     const c=await api('/api/align/substrate/'+id+'/compare');
     $('#alCmp').hidden=false;$('#alCmp').dataset.sid=id;$('#alCmpTitle').textContent=id+' · reference vs modified toolpath';
-    $('#alCmpSum').innerHTML=`Glass turned <b>${(c.rotation_deg>=0?'+':'')+fmt(c.rotation_deg,3)}°</b> and its centre moved <b>${fmt(c.shift_mm[0],3)}, ${fmt(c.shift_mm[1],3)} mm</b> from the reference, so every move of the toolpath is turned and shifted the same way. Bridges moved up to <b>${fmt(c.max_move_mm,3)} mm</b>. Red dot ${c.red_found?'found':'<span class="warn">NOT found</span>'}.`+(c.warnings.length?' <span class="warn">'+c.warnings.map(esc).join(' ')+'</span>':'');
-    $('#alCmpRows').innerHTML=c.bridges.map(b=>`<tr><td>${esc(b.id)}</td><td class="mono">${fmt(b.ref[0],2)}, ${fmt(b.ref[1],2)}</td><td class="mono">${fmt(b.new[0],2)}, ${fmt(b.new[1],2)}</td><td class="mono">${fmt(b.moved[0],2)}, ${fmt(b.moved[1],2)} (${fmt(b.dist,2)})</td></tr>`).join('');
-    const pts=[...c.ref_glass,...c.new_glass];c.ref_segs.concat(c.new_segs).forEach(s=>{pts.push([s[0],s[1]],[s[2],s[3]])});
+    const own=c.source==='glass';
+    $('#alCmpSum').innerHTML=`Glass turned <b>${(c.rotation_deg>=0?'+':'')+fmt(c.rotation_deg,3)}°</b> and its centre moved <b>${fmt(c.shift_mm[0],3)}, ${fmt(c.shift_mm[1],3)} mm</b> from the reference, so every move of the toolpath is turned and shifted the same way.`
+      +(own?` On top of that, this substrate's own sketch (<b>${esc(c.pattern_name||'own')}</b>) changes the geometry: <b>${c.edited}</b> bridge${c.edited===1?'':'s'} moved or resized (up to <b>${fmt(c.max_edit_mm,3)} mm</b>), <b>${c.added}</b> added, <b>${c.removed.length}</b> removed.`
+             :' It runs the reference bridges unchanged (open it in the sketcher to adjust them for this substrate).')
+      +` Bridges moved up to <b>${fmt(c.max_move_mm,3)} mm</b> in total. Red dot ${c.red_found?'found':'<span class="warn">NOT found</span>'}.`+(c.warnings.length?' <span class="warn">'+c.warnings.map(esc).join(' ')+'</span>':'');
+    const xy=v=>v?`${fmt(v[0],2)}, ${fmt(v[1],2)}`:'–';
+    $('#alCmpRows').innerHTML=c.bridges.map(b=>b.added
+        ?`<tr><td>${esc(b.id)}</td><td>–</td><td class="mono">${xy(b.new)}</td><td class="good">added</td><td class="good">new bridge</td></tr>`
+        :`<tr><td>${esc(b.id)}${b.ref_id&&b.ref_id!==b.id?' <span class="muted">('+esc(b.ref_id)+')</span>':''}</td><td class="mono">${xy(b.ref)}</td><td class="mono">${xy(b.new)}</td><td class="mono">${fmt(b.dist,2)}</td><td class="mono ${b.edit_mm>0.0005||b.resized.some(v=>Math.abs(v)>0.0005)?'warn':'muted'}">${b.edit_mm>0.0005?fmt(b.edit[0],2)+', '+fmt(b.edit[1],2):'–'}${b.resized.some(v=>Math.abs(v)>0.0005)?' · size '+fmt(b.resized[0],2)+' × '+fmt(b.resized[1],2):''}</td></tr>`).join('')
+      +c.removed.map(b=>`<tr><td>${esc(b.id)}</td><td class="mono">${xy(b.ref)}</td><td>–</td><td class="bad">removed</td><td class="bad">deleted</td></tr>`).join('');
+    const pts=[...c.ref_glass,...c.new_glass,...c.ref_bridges];c.ref_segs.concat(c.new_segs).forEach(s=>{pts.push([s[0],s[1]],[s[2],s[3]])});
     const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]),pad=3,x0=Math.min(...xs)-pad,x1=Math.max(...xs)+pad,y0=Math.min(...ys)-pad,y1=Math.max(...ys)+pad;
     const W=x1-x0,H=y1-y0,P=(x,y)=>`${(x-x0).toFixed(3)},${(y1-y).toFixed(3)}`,k=Math.max(W,H)/400;
     const poly=(c4,col,dash)=>`<polygon points="${c4.map(p=>P(p[0],p[1])).join(' ')}" fill="none" stroke="${col}" stroke-width="${2*k}" ${dash?`stroke-dasharray="${4*k}"`:''}/>`;
     const segs=(ss,col,dash)=>ss.map(s=>`<line x1="${(s[0]-x0).toFixed(3)}" y1="${(y1-s[1]).toFixed(3)}" x2="${(s[2]-x0).toFixed(3)}" y2="${(y1-s[3]).toFixed(3)}" stroke="${col}" stroke-width="${1.2*k}" ${dash?`stroke-dasharray="${3*k}"`:''} opacity="${dash?0.7:0.95}"/>`).join('');
     const sq=(p,col)=>`<rect x="${(p[0]-x0-0.5).toFixed(3)}" y="${(y1-p[1]-0.5).toFixed(3)}" width="1" height="1" fill="none" stroke="${col}" stroke-width="${1.5*k}"/>`;
     $('#alCmpSvg').setAttribute('viewBox',`0 0 ${W.toFixed(3)} ${H.toFixed(3)}`);
-    $('#alCmpSvg').innerHTML=poly(c.ref_glass,'#8a8a8a',true)+segs(c.ref_segs,'#9a9a9a',true)+c.bridges.map(b=>sq(b.ref,'#bbbbbb')).join('')
-      +poly(c.new_glass,'#3fd0e0',false)+segs(c.new_segs,'#ff8a2a',false)+c.bridges.map(b=>sq(b.new,'#ffffff')).join('');
+    $('#alCmpSvg').innerHTML=poly(c.ref_glass,'#8a8a8a',true)+segs(c.ref_segs,'#9a9a9a',true)+c.ref_bridges.map(p=>sq(p,'#bbbbbb')).join('')
+      +c.removed.map(b=>`<path d="M${(b.ref[0]-x0-0.8).toFixed(3)},${(y1-b.ref[1]-0.8).toFixed(3)}l1.6,1.6m0,-1.6l-1.6,1.6" stroke="#ff4d4d" stroke-width="${1.5*k}"/>`).join('')
+      +poly(c.new_glass,'#3fd0e0',false)+segs(c.new_segs,'#ff8a2a',false)+c.bridges.map(b=>sq(b.new,b.added?'#4dff88':'#ffffff')).join('');
     $('#alCmp').scrollIntoView({behavior:'smooth',block:'nearest'});
   });
 }

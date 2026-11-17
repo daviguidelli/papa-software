@@ -326,6 +326,31 @@ def test_reference_sketch_lands_on_each_glass(aligned, monkeypatch, tmp_path):
     g = a.get("/api/align/substrate/S2/gcode", params={"z": 4.5}).text
     assert "REFERENCE toolpath, modified for this glass" in g and ";   B8: X" in g
 
+    # this substrate's own geometry, drawn on its glass from the reference bridges
+    j = a.get("/api/align/substrate/S3/sketch").json()
+    assert j["frame"] == "glass" and j["from_reference"] and (j["w"], j["h"]) == (25, 25) and len(j["bridges"]) == 8
+    edited = [dict(b) for b in j["bridges"]]
+    edited[1]["cx"] += 0.4                                   # B2 moved 0.4 mm along x
+    edited[4]["l"] = 1.5                                     # B5 longer
+    del edited[6]                                            # B7 gone
+    edited.append({"id": "B9", "cx": 5.0, "cy": 20.0, "l": 1, "w": 1})
+    for i, b in enumerate(edited):                           # the sketcher renumbers on save
+        b["id"] = f"B{i + 1}"
+    a.post("/api/align/pattern", json={"targets": ["S3"], "name": "S3 edit", "frame": "glass",
+                                       "sketch": {"substrate": {"w": 25, "h": 25}, "bridges": edited}})
+    s3 = next(s for s in a.get("/api/align").json()["scan"]["substrates"] if s["id"] == "S3")
+    assert s3["glass_placed"] and s3["pattern_source"] == "glass" and s3["pattern_name"] == "S3 edit (on the glass)"
+    c = a.get("/api/align/substrate/S3/compare").json()
+    assert c["source"] == "glass" and c["edited"] == 2 and c["added"] == 1 and [r["id"] for r in c["removed"]] == ["B7"]
+    by = {b.get("ref_id"): b for b in c["bridges"]}
+    assert by["B2"]["edit"] == pytest.approx([0.4, 0.0], abs=1e-6) and by["B5"]["resized"] == pytest.approx([0.5, 0.0])
+    assert by["B8"]["id"] == "B7" and by["B8"]["edit_mm"] == pytest.approx(0, abs=1e-6)   # renumbered, still paired
+    mt = a.server.hub.align_scan["mount_info"][2]["match"]
+    b2_moved_ref = (mt.R @ np.array([162.5 + 12.247 + 0.4, 162.1 + 25 - 4.442]) + mt.t).tolist()
+    assert by["B2"]["new"] == pytest.approx(b2_moved_ref, abs=2e-3)         # glass move + the 0.4 mm edit
+    g = a.get("/api/align/substrate/S3/gcode", params={"z": 4.5}).text
+    assert "own bridge edits" in g and "2 changed" in g and "B7: REMOVED" in g and "NEW (not in the reference)" in g
+
     # a substrate's own sketch still wins over the reference
     a.post("/api/align/pattern", json={"targets": ["S2"], "sketch": SKETCH, "name": "own"})
     s2 = next(s for s in a.get("/api/align").json()["scan"]["substrates"] if s["id"] == "S2")

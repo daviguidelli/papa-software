@@ -162,6 +162,7 @@ kbd{font:10px var(--mono);border:1px solid var(--line2);padding:0 4px;color:var(
       <div id="fsTargets" style="display:flex;flex-wrap:wrap;gap:6px 12px;font:11px var(--mono)"></div>
       <button class="sm" id="fsCopy" disabled>Copy to ticked</button>
       <div class="stat" id="fsStat"></div>
+      <p class="note" id="fsFrame" hidden style="margin:6px 0 0;color:#ffb35c"></p>
       <button class="sm" id="fsRefresh">Refresh after a new scan</button>
     </div>
   </details>
@@ -985,6 +986,12 @@ async function fsLoad(id){
     S.sub=await loadImageURL(j.image);S.subURL=j.image;S.src=null;S.corners=[];S.subId=null;
     S.w=j.w;S.h=j.h;$('#szw').value=S.w;$('#szh').value=S.h;FS.sizeKnown=!!j.size_known;
     S.rects=(j.bridges||[]).map(b=>({id:S.nid++,cx:+b.cx,cy:+b.cy,l:+b.l,w:+b.w}));S.sel=null;S.hist=[];S.fut=[];
+    FS.frame=j.frame||'array';
+    const fr=$('#fsFrame');fr.hidden=FS.frame!=='glass';
+    fr.textContent=FS.frame!=='glass'?'':(j.from_reference
+      ?'This is '+id+'\'s whole glass, turned like the reference photo. It starts with the reference bridges: move, resize, add or delete them to match this substrate, then Save. The G-code is then compared to the reference, bridge by bridge.'
+      :'This is '+id+'\'s whole glass, turned like the reference photo, with its own bridges. Its G-code is compared to the reference, bridge by bridge.');
+    if(j.from_reference)FS.dirty=false;
     FS.id=id;$('#fsSel').value=id;setMode('sub');changed();FS.dirty=false;
     history.replaceState(null,'','?substrate='+encodeURIComponent(id));
   }catch(e){toast('Could not load '+id+': '+(e.message||e))}
@@ -996,7 +1003,7 @@ function fsSketch(){
 }
 async function fsPost(targets){
   const r=await fetch('/api/align/pattern',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({targets,sketch:fsSketch(),name:FS.id+' sketch'})});
+    body:JSON.stringify({targets,sketch:fsSketch(),name:FS.id+' sketch',frame:FS.frame||'array'})});
   const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);
 }
 async function fsSave(){
