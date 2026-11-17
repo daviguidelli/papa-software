@@ -357,12 +357,26 @@ def _detect(rgb: np.ndarray, p: ElectrodeParams) -> list[Array]:
         ring = cv2.subtract(cv2.dilate(box, kernel), box)
         if cv2.mean(gray, mask=ring)[0] < p.min_surround_v:
             continue
-        if stripes(lines, corners) < p.min_stripes:
-            continue
         size = float(max(rw, rh))
         measured = measure(lines, corners.mean(0), size, copper_score(rgb, p))
         if measured is None:
             continue
+        # count the lines on the rough box, or, when that box also takes in a bit
+        # of a holder or shadow beside the array, on the exact outline
+        exact = np.asarray(measured[0], np.float32)
+        ew, eh = float(np.linalg.norm(exact[1] - exact[0])), float(np.linalg.norm(exact[3] - exact[0]))
+        if min(ew, eh) <= 0 or max(ew, eh) / min(ew, eh) > p.max_aspect or ew * eh < p.min_area_frac * w * h:
+            continue                # the exact outline must still look like an array
+        if stripes(lines, corners) < p.min_stripes:
+            if max(measured[1], stripes(lines, exact)) < p.min_stripes:
+                continue
+            inside = np.zeros(gray.shape, np.uint8)
+            cv2.fillPoly(inside, [np.round(exact).astype(np.int32)], 255)
+            cop = copper_mask(rgb, p)
+            if cv2.countNonZero(cv2.bitwise_and(cop, inside)) < 0.3 * max(1, cv2.countNonZero(inside)):
+                continue            # evenly striped but not copper: a vent grille, a printed label
+        if min(corners[:, 0].min(), corners[:, 1].min()) < 2 or corners[:, 0].max() > w - 3 or corners[:, 1].max() > h - 3:
+            continue                # cut off by the picture's edge
         corners = np.asarray(measured[0], dtype=np.float64)
         found.append(Array(corners, tuple(map(float, corners.mean(0))), float(copper)))
     found.sort(key=lambda a: -cv2.contourArea(a.corners.astype(np.float32)))

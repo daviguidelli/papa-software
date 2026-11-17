@@ -254,3 +254,19 @@ def test_full_resolution_search_is_fast_and_as_exact():
     assert len(fast) == len(slow) == 1
     assert np.abs(fast[0].corners - slow[0].corners).max() < 1.5      # px, on a ~210 px wide array
     assert took < 3.0
+
+
+def test_array_in_a_white_holder_with_vertical_lines_is_found():
+    """Scan #28: one substrate in a white holder, lines running up and down. The
+    rough blob takes in some holder, so the lines are counted on the exact
+    outline; the striped vent grille at the picture's edge is not an array."""
+    import cv2
+
+    from papa.vision import electrodes as el
+
+    bgr = cv2.imread("tests/data/real_holder_scan.png")
+    found = el.detect(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    assert len(found) == 1
+    c = found[0].corners
+    assert c[:, 0].min() == pytest.approx(1031, abs=10) and c[:, 0].max() == pytest.approx(1088, abs=6)
+    assert c[:, 1].min() == pytest.approx(1119, abs=6) and c[:, 1].max() == pytest.approx(1192, abs=6)
