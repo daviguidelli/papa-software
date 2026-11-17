@@ -2405,6 +2405,98 @@ def align_set_mount(sid: str, payload: dict) -> dict:
     return _align_info()
 
 
+def _ref_sketch_settings(z: float | None) -> tuple[dict, dict]:
+    """Scrub settings for the reference sketch exactly where the reference glass
+    sat (the known, unmodified toolpath), and the sketch."""
+    import numpy as np
+
+    from papa.ops.geometry import axis_matrix
+
+    sk, r = _ref_sketch(), _ref_cfg()
+    if sk is None or not r.get("placement") or not r.get("photo_corners"):
+        raise HTTPException(400, "Finish the reference first: photo, glass corners, placement and bridge sketch.")
+    same = refmod.Match(0.0, [0.0, 0.0], 0.0, float(r["placement"]["size"]), True, np.eye(2), np.zeros(2), [])
+    g = refmod.glass_placement(r["placement"], same, *axis_matrix(hub.machine.axes))
+    st = scrubmod.merged(_scrub_settings())
+    st.update({"area": dict(sk["area"]), "bridges": [dict(b) for b in sk["bridges"]], "rotation_deg": g["rotation_deg"]})
+    cz = (st.get("start") or {}).get("z")
+    if cz is None:
+        if z is None:
+            raise HTTPException(400, "No contact Z yet: set it on the Scrub tab (Set start here) or give one.")
+        cz = float(z)
+    st["start"] = {"x": round(g["origin"][0], 4), "y": round(g["origin"][1], 4), "z": float(cz)}
+    return st, sk
+
+
+def _machine_segs(st: dict) -> list[list[float]]:
+    """The contact moves of a scrub plan in printer mm: [[x0, y0, x1, y1], ...]."""
+    from papa.ops.geometry import to_machine
+
+    s, rot, out = st["start"], float(st.get("rotation_deg") or 0.0), []
+    for seg in scrubmod.plan(st)["segments"]:
+        if seg["kind"] == "hop":
+            continue
+        a = to_machine(hub.machine.axes, s["x"], s["y"], seg["x0"], seg["y0"], rot)
+        b = to_machine(hub.machine.axes, s["x"], s["y"], seg["x1"], seg["y1"], rot)
+        out.append([round(a[0], 3), round(a[1], 3), round(b[0], 3), round(b[1], 3)])
+    return out
+
+
+@app.get("/api/reference/gcode")
+def reference_gcode_download(z: float | None = None) -> Response:
+    """The known toolpath: the reference bridge sketch, unmodified, at the
+    reference glass's place on the printer. Each substrate's G-code is this one
+    turned and shifted onto its glass."""
+    st, sk = _ref_sketch_settings(z)
+    r = _ref_cfg()["placement"]
+    head = "\n".join([
+        f"; PAPA: REFERENCE toolpath from {sk.get('name') or 'the reference sketch'} (unmodified)",
+        f"; reference glass: left X{r['x_min']:g}, front Y{r['y_min']:g}, {r['size']:g} mm square to the printer",
+        f"; bridges: {len(sk['bridges'])}, sketch {sk['area']['w']:g} x {sk['area']['h']:g} mm",
+    ])
+    try:
+        text = scrubmod.to_gcode(st, hub.machine.axes, header=head)
+    except scrubmod.ScrubError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return Response(text, media_type="text/plain",
+                    headers={"Content-Disposition": 'attachment; filename="REFERENCE_scrub.gcode"'})
+
+
+def _compare(sid: str, z: float | None = 1.0) -> dict:
+    """Reference toolpath vs the one moved onto this substrate's glass."""
+    from papa.ops.geometry import to_machine
+
+    sc = _scan_or_400()
+    i = _sid_index(sc, sid)
+    if sc.get("result") is None or sc["result"].pattern_source.get(sid) != "reference":
+        raise HTTPException(400, f"{sid} is not running the reference sketch (it has its own, or no glass match).")
+    ref_st, sk = _ref_sketch_settings(z)
+    p, pattern = _substrate(sid)
+    new_st = alignmod.scrub_settings(_scrub_settings(), pattern, p)
+    new_st["start"] = {"x": p.origin_mm[0], "y": p.origin_mm[1], "z": ref_st["start"]["z"]}
+    mt = sc["mount_info"][i]["match"]
+    bridges = []
+    for b in sk["bridges"]:
+        a = to_machine(hub.machine.axes, ref_st["start"]["x"], ref_st["start"]["y"], b["cx"], b["cy"], ref_st["rotation_deg"])
+        n = to_machine(hub.machine.axes, p.origin_mm[0], p.origin_mm[1], b["cx"], b["cy"], p.rotation_deg)
+        d = (n[0] - a[0], n[1] - a[1])
+        bridges.append({"id": b["id"], "ref": [round(a[0], 3), round(a[1], 3)], "new": [round(n[0], 3), round(n[1], 3)],
+                        "moved": [round(d[0], 3), round(d[1], 3)], "dist": round((d[0] ** 2 + d[1] ** 2) ** 0.5, 3)})
+    r = _ref_cfg()["placement"]
+    ref_glass = refmod.reference_mm(r)
+    return {"id": sid, "rotation_deg": round(mt.rotation_deg, 4), "shift_mm": [round(v, 4) for v in mt.shift_mm],
+            "red_found": mt.red_found, "warnings": list(mt.warnings), "bridges": bridges,
+            "max_move_mm": max((b["dist"] for b in bridges), default=0.0),
+            "ref_glass": [[round(x, 3) for x in c] for c in ref_glass.tolist()],
+            "new_glass": [[round(x, 3) for x in c] for c in p.corners_mm],
+            "ref_segs": _machine_segs(ref_st), "new_segs": _machine_segs(new_st)}
+
+
+@app.get("/api/align/substrate/{sid}/compare")
+def align_substrate_compare(sid: str) -> dict:
+    return _compare(sid)
+
+
 @app.get("/api/align/substrate/{sid}/gcode")
 def align_substrate_gcode(sid: str, z: float | None = None) -> Response:
     """This substrate's toolpath as G-code: the reference G-code file moved onto
@@ -2439,12 +2531,19 @@ def align_substrate_gcode(sid: str, z: float | None = None) -> Response:
                 raise HTTPException(400, "No contact Z yet: set it on the Scrub tab (Set start here) or give one.")
             st["start"] = {"x": round(p.origin_mm[0], 4), "y": round(p.origin_mm[1], 4), "z": float(z)}
         src = sc["result"].pattern_source.get(sid)
-        head = "\n".join([
+        lines = [
             f"; PAPA: {pattern.get('name') or 'pattern'} on substrate {sid}"
-            + (" (placed on its glass, matched to the reference)" if src == "reference" else " (placed on its array)"),
+            + (" (the REFERENCE toolpath, modified for this glass)" if src == "reference" else " (placed on its array)"),
             f"; scan {sc.get('scan_id', '-')} at {sc['time']}; origin X{p.origin_mm[0]:.3f} Y{p.origin_mm[1]:.3f}, "
-            f"turned {p.rotation_deg:+.3f} deg",
-        ] + [f"; WARNING: {w}" for w in p.warnings])
+            f"turned {p.rotation_deg:+.3f} deg"]
+        if src == "reference":
+            cmp_ = _compare(sid, st["start"]["z"])
+            lines.append(f"; vs reference: glass turned {cmp_['rotation_deg']:+.3f} deg, centre moved "
+                         f"{cmp_['shift_mm'][0]:+.3f}, {cmp_['shift_mm'][1]:+.3f} mm; red dot "
+                         f"{'found' if cmp_['red_found'] else 'NOT found'}")
+            lines += [f";   {b['id']}: X{b['ref'][0]:.3f} Y{b['ref'][1]:.3f} -> X{b['new'][0]:.3f} Y{b['new'][1]:.3f} "
+                      f"(moved {b['moved'][0]:+.3f}, {b['moved'][1]:+.3f}; {b['dist']:.3f} mm)" for b in cmp_["bridges"]]
+        head = "\n".join(lines + [f"; WARNING: {w}" for w in p.warnings])
         try:
             text = scrubmod.to_gcode(st, hub.machine.axes, header=head)
         except scrubmod.ScrubError as exc:

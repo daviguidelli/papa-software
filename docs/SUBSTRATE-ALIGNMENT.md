@@ -69,6 +69,12 @@ by the same turn and shift.
      (`reference.glass_placement`), with Scrub / Routine 1, and its G-code ↓
      writes that scrub plan out (`scrub.to_gcode`; asks for a contact Z if the
      Scrub tab has none).
+     **Reference G-code ↓** (next to the sketch) writes the known, unmodified
+     toolpath: the sketch at the reference glass's place on the printer
+     (`/api/reference/gcode`). Each substrate's **Compare to reference** shows
+     that toolpath and the one modified for its glass overlaid, plus where each
+     bridge moved (`/api/align/substrate/<id>/compare`); the same per-bridge
+     list is in the header of its G-code.
    - a **G-code file** (G21 mm; G90/G91, G0/G1/G2/G3; G20 and G92 X/Y are
      refused). When loaded, G-code ↓ gives this file moved onto the glass.
 

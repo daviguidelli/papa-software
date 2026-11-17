@@ -438,6 +438,18 @@
         <thead><tr><th><input type="checkbox" id="alAll" title="Select all"></th><th>Substrate</th><th>Pattern</th><th>Measured mm</th><th>Pattern mm</th><th>Turn °</th><th>Origin X, Y mm</th><th>Fit mm</th><th></th></tr></thead>
         <tbody id="alRows"></tbody>
       </table>
+      <div class="card" id="alCmp" hidden style="margin-top:14px;padding:14px">
+        <div class="row" style="align-items:center;justify-content:space-between">
+          <span class="label" id="alCmpTitle">Reference vs modified</span>
+          <span><button class="sm gold" id="alCmpGcode">G-code ↓</button> <button class="sm" id="alCmpClose">Close</button></span>
+        </div>
+        <p class="note" id="alCmpSum" style="margin-top:6px"></p>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+          <svg id="alCmpSvg" style="flex:1 1 420px;max-width:560px;background:#0b0b0b;border:1px solid var(--line);border-radius:4px"></svg>
+          <table style="flex:1 1 320px"><thead><tr><th>Bridge</th><th>Reference X, Y</th><th>Modified X, Y</th><th>Moved mm</th></tr></thead><tbody id="alCmpRows"></tbody></table>
+        </div>
+        <p class="note muted" style="font-size:12px">Printer millimetres, seen from above (+X right, +Y up). Grey dashed = reference glass and toolpath (from the bridge sketch); orange = the same toolpath moved onto this substrate's glass (cyan). Squares are bridges.</p>
+      </div>
       <p class="note warn" id="alNeedPrinter" hidden></p>
       <div class="row" style="margin-top:14px;align-items:center">
         <button class="danger sm" id="alStop" disabled>Stop after this move</button>
@@ -493,6 +505,7 @@
           <label style="flex:0 0 auto">Bridge sketch<input type="file" id="rfSketch" accept=".json,application/json"></label>
           <span class="mono muted" id="rfSInfo" style="font-size:12.5px"></span>
           <button class="sm" id="rfSClear" hidden>Remove</button>
+          <button class="sm gold" id="rfRefG" hidden title="The known toolpath: this sketch, unmodified, where the reference glass sat">Reference G-code ↓</button>
         </div>
         <div class="row" style="margin-top:10px;align-items:center">
           <label style="flex:0 0 auto">or G-code file<input type="file" id="rfGcode" accept=".gcode,.gc,.nc,.txt,text/plain"></label>
@@ -1240,7 +1253,7 @@ function alGlass(x){
   const g=x.mount;if(!g)return '';
   const w=(g.warnings||[]).map(esc).join(' ');
   return `<div style="clear:none;margin-top:6px" class="${w?'warn':'muted'}"><b>Glass vs reference</b> (${esc(g.source)}): turned ${(g.rotation_deg>=0?'+':'')+fmt(g.rotation_deg,2)}°, moved ${fmt(g.shift_mm[0],2)}, ${fmt(g.shift_mm[1],2)} mm · ${fmt(g.size_mm,2)} mm glass · red dot ${g.red_found?'found':'not found'}${w?' · '+w:''}
-    ${x.glass_placed?' · <b>runs the reference sketch on this glass</b>':''}
+    ${x.glass_placed?` · <b>runs the reference sketch on this glass</b> <button class="sm" data-cmp="${x.id}">Compare to reference</button>`:''}
     ${g.gcode_ready?` <button class="sm gold" data-gcode="${x.id}" data-from="${x.gcode_from}">G-code ↓</button>`:' <span class="muted">(finish the reference below for G-code)</span>'}
     <a class="btn sm" href="/static/bridge_sketcher.html?substrate=${x.id}&glass=1">Set glass corners</a></div>`;
 }
@@ -1297,7 +1310,7 @@ function paintRef(){
   const pl=r.placement||{x_min:162.5,y_min:162.1,size:25};
   [['rfX','x_min'],['rfY','y_min'],['rfS','size']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el&&!el.dataset.edit)el.value=pl[k]});
   const sk=r.sketch;$('#rfSInfo').textContent=sk?`${sk.name} · ${fmt(sk.w,1)} × ${fmt(sk.h,1)} mm · ${sk.bridges} bridges`+(sk.warning?' · '+sk.warning:''):'none';
-  $('#rfSInfo').className='mono '+(sk&&sk.warning?'warn':'muted');$('#rfSClear').hidden=!sk;$('#rfGClear').hidden=!r.gcode;
+  $('#rfSInfo').className='mono '+(sk&&sk.warning?'warn':'muted');$('#rfSClear').hidden=!sk;$('#rfRefG').hidden=!(sk&&r.ready);$('#rfGClear').hidden=!r.gcode;
   const g=r.gcode;$('#rfGInfo').textContent=!g?'none':(g.error?g.name+': '+g.error:`${g.name} · ${g.moves} moves · X ${fmt(g.x[0],2)}–${fmt(g.x[1],2)}, Y ${fmt(g.y[0],2)}–${fmt(g.y[1],2)} mm · cutting at Z ${fmt(g.z_cut,2)}`);
   const m=$('#rfMsg');
   if(r.ready){m.textContent='Reference ready.'+(!r.placement?'':'')+' Scan substrates: each row of the table gets "Glass vs reference" and a G-code download.'+((S.al&&!S.al.camera.fit)?' (The camera points are still needed for that.)':'');m.className='note good'}
@@ -1348,6 +1361,7 @@ $('#rfFile').onchange=e=>{const f=e.target.files[0];if(!f)return;rfClicks=[];
 $('#rfSketch').onchange=e=>{const f=e.target.files[0];if(!f)return;
   run('Reference sketch saved',async()=>{let sk;try{sk=JSON.parse(await f.text())}catch(x){throw new Error('That file is not a sketch (not JSON).')}
     S.rf=await post('/api/reference/sketch',{sketch:sk,name:f.name.replace(/\.json$/i,'')});paintRef();loadAlign();e.target.value=''})};
+$('#rfRefG').onclick=()=>{const q=alZq();if(q===null)return;run('Reference G-code',()=>alDownload('/api/reference/gcode'+q,'REFERENCE_scrub.gcode'))};
 $('#rfSClear').onclick=()=>run('Reference sketch removed',async()=>{S.rf=await post('/api/reference/sketch',{clear:true});paintRef();loadAlign()});
 $('#rfGClear').onclick=()=>run('Reference G-code removed',async()=>{S.rf=await post('/api/reference/gcode',{clear:true});paintRef();loadAlign()});
 $('#rfGcode').onchange=e=>{const f=e.target.files[0];if(!f)return;
@@ -1357,6 +1371,37 @@ $('#alScan').onclick=()=>run('Substrates scanned',async()=>{
   $('#alMsg').textContent='Taking a full-resolution photo and finding the arrays (a few seconds)…';$('#alMsg').className='note';
   const r=await post('/api/align/scan');$('#alMsg').textContent='';S.al=r;paintAlign()});
 $('#alAll').onchange=e=>{const subs=(S.al&&S.al.scan)?S.al.scan.substrates:[];alSel=new Set(e.target.checked?subs.map(x=>x.id):[]);paintAlign()};
+function alZq(){
+  if(S.al&&S.al.scrub_start&&S.al.scrub_start.z!=null)return '';
+  const z=prompt('No contact Z is set on the Scrub tab yet. Contact Z for this G-code (mm)?','4.5');
+  if(z===null)return null;if(z===''||!isFinite(+z)){say('Contact Z must be a number','err');return null}return '?z='+encodeURIComponent(z);
+}
+async function alDownload(url,fallback){
+  const r=await fetch(url);
+  if(!r.ok){let m='HTTP '+r.status;try{m=(await r.json()).error||m}catch(x){}throw new Error(m)}
+  const cd=r.headers.get('content-disposition')||'',fn=(cd.match(/filename="([^"]+)"/)||[])[1]||fallback;
+  const u=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=u;a.download=fn;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),2000);
+}
+function alCompare(id){
+  run('Compared '+id+' to the reference',async()=>{
+    const c=await api('/api/align/substrate/'+id+'/compare');
+    $('#alCmp').hidden=false;$('#alCmp').dataset.sid=id;$('#alCmpTitle').textContent=id+' · reference vs modified toolpath';
+    $('#alCmpSum').innerHTML=`Glass turned <b>${(c.rotation_deg>=0?'+':'')+fmt(c.rotation_deg,3)}°</b> and its centre moved <b>${fmt(c.shift_mm[0],3)}, ${fmt(c.shift_mm[1],3)} mm</b> from the reference, so every move of the toolpath is turned and shifted the same way. Bridges moved up to <b>${fmt(c.max_move_mm,3)} mm</b>. Red dot ${c.red_found?'found':'<span class="warn">NOT found</span>'}.`+(c.warnings.length?' <span class="warn">'+c.warnings.map(esc).join(' ')+'</span>':'');
+    $('#alCmpRows').innerHTML=c.bridges.map(b=>`<tr><td>${esc(b.id)}</td><td class="mono">${fmt(b.ref[0],2)}, ${fmt(b.ref[1],2)}</td><td class="mono">${fmt(b.new[0],2)}, ${fmt(b.new[1],2)}</td><td class="mono">${fmt(b.moved[0],2)}, ${fmt(b.moved[1],2)} (${fmt(b.dist,2)})</td></tr>`).join('');
+    const pts=[...c.ref_glass,...c.new_glass];c.ref_segs.concat(c.new_segs).forEach(s=>{pts.push([s[0],s[1]],[s[2],s[3]])});
+    const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]),pad=3,x0=Math.min(...xs)-pad,x1=Math.max(...xs)+pad,y0=Math.min(...ys)-pad,y1=Math.max(...ys)+pad;
+    const W=x1-x0,H=y1-y0,P=(x,y)=>`${(x-x0).toFixed(3)},${(y1-y).toFixed(3)}`,k=Math.max(W,H)/400;
+    const poly=(c4,col,dash)=>`<polygon points="${c4.map(p=>P(p[0],p[1])).join(' ')}" fill="none" stroke="${col}" stroke-width="${2*k}" ${dash?`stroke-dasharray="${4*k}"`:''}/>`;
+    const segs=(ss,col,dash)=>ss.map(s=>`<line x1="${(s[0]-x0).toFixed(3)}" y1="${(y1-s[1]).toFixed(3)}" x2="${(s[2]-x0).toFixed(3)}" y2="${(y1-s[3]).toFixed(3)}" stroke="${col}" stroke-width="${1.2*k}" ${dash?`stroke-dasharray="${3*k}"`:''} opacity="${dash?0.7:0.95}"/>`).join('');
+    const sq=(p,col)=>`<rect x="${(p[0]-x0-0.5).toFixed(3)}" y="${(y1-p[1]-0.5).toFixed(3)}" width="1" height="1" fill="none" stroke="${col}" stroke-width="${1.5*k}"/>`;
+    $('#alCmpSvg').setAttribute('viewBox',`0 0 ${W.toFixed(3)} ${H.toFixed(3)}`);
+    $('#alCmpSvg').innerHTML=poly(c.ref_glass,'#8a8a8a',true)+segs(c.ref_segs,'#9a9a9a',true)+c.bridges.map(b=>sq(b.ref,'#bbbbbb')).join('')
+      +poly(c.new_glass,'#3fd0e0',false)+segs(c.new_segs,'#ff8a2a',false)+c.bridges.map(b=>sq(b.new,'#ffffff')).join('');
+    $('#alCmp').scrollIntoView({behavior:'smooth',block:'nearest'});
+  });
+}
+$('#alCmpClose').onclick=()=>{$('#alCmp').hidden=true};
+$('#alCmpGcode').onclick=()=>{const id=$('#alCmp').dataset.sid;if(id)alGcode(id,'plan')};
 function alGcode(id,from){
   let q='';
   if(from==='plan'&&!(S.al.scrub_start&&S.al.scrub_start.z!=null)){
@@ -1369,6 +1414,7 @@ function alGcode(id,from){
 }
 $('#alRows').onclick=e=>{
   const gb=e.target.closest('[data-gcode]');if(gb){alGcode(gb.dataset.gcode,gb.dataset.from);return}
+  const cb=e.target.closest('[data-cmp]');if(cb){alCompare(cb.dataset.cmp);return}
   const c=e.target.closest('[data-sel]');
   if(c){c.checked?alSel.add(c.dataset.sel):alSel.delete(c.dataset.sel);$('#alAll').checked=false;paintAlign();return}
   const sb=e.target.closest('[data-scrub]'),rb=e.target.closest('[data-routine]');

@@ -308,7 +308,23 @@ def test_reference_sketch_lands_on_each_glass(aligned, monkeypatch, tmp_path):
     assert r.status_code == 400 and "contact Z" in r.json()["error"]
     r = a.get("/api/align/substrate/S1/gcode", params={"z": 4.5})
     assert r.status_code == 200 and "S1_scrub.gcode" in r.headers["content-disposition"]
-    assert "matched to the reference" in r.text and "G1 Z4.500" in r.text
+    assert "modified for this glass" in r.text and "G1 Z4.500" in r.text
+
+    # the known, unmodified toolpath, and the comparison against it
+    assert a.get("/api/reference/gcode").status_code == 400            # no contact Z yet
+    r = a.get("/api/reference/gcode", params={"z": 4.5})
+    assert r.status_code == 200 and "REFERENCE toolpath" in r.text and "G1 Z4.500" in r.text
+    c = a.get("/api/align/substrate/S2/compare").json()
+    mt = sc["mount_info"][1]["match"]
+    assert len(c["bridges"]) == 8 and c["ref_segs"] and len(c["ref_segs"]) == len(c["new_segs"])
+    for b in c["bridges"]:
+        assert b["new"] == pytest.approx((mt.R @ np.array(b["ref"]) + mt.t).tolist(), abs=2e-3)
+    b1 = next(b for b in c["bridges"] if b["id"] == "B1")
+    assert b1["ref"] == pytest.approx([162.5 + 12.29, 162.1 + 25 - 0.916], abs=2e-3)
+    for (x0, y0, x1, y1), (u0, v0, u1, v1) in zip(c["ref_segs"], c["new_segs"]):   # same path, moved like the glass
+        assert [u0, v0] == pytest.approx((mt.R @ np.array([x0, y0]) + mt.t).tolist(), abs=5e-3)
+    g = a.get("/api/align/substrate/S2/gcode", params={"z": 4.5}).text
+    assert "REFERENCE toolpath, modified for this glass" in g and ";   B8: X" in g
 
     # a substrate's own sketch still wins over the reference
     a.post("/api/align/pattern", json={"targets": ["S2"], "sketch": SKETCH, "name": "own"})
