@@ -1561,7 +1561,8 @@ def _align_info() -> dict:
             mi = (sc.get("mount_info") or [None] * len(d["substrates"]))[int(sid[1:]) - 1]
             sub["mount"] = None if mi is None else {"source": mi["source"], **mi["match"].as_dict(),
                                                     "gcode_ready": _ref_ready()[0]}
-            sub["gcode_from"] = ("reference G-code" if _ref_gcode() is not None and _ref_ready()[0] and mi is not None
+            sub["gcode_from"] = ("reference G-code" if _ref_gcode() is not None and _ref_sketch() is None
+                                 and _ref_ready()[0] and mi is not None
                                  else "plan")
             sub["glass_placed"] = sub.get("pattern_source") in ("reference", "glass")
             pat = st["patterns"].get(sid)
@@ -2562,7 +2563,8 @@ def align_substrate_gcode(sid: str, z: float | None = None) -> Response:
         raise HTTPException(400, "Teach the camera points first.")
     info = (sc.get("mount_info") or [None] * (i + 1))[i]
     name = _ref_cfg().get("gcode_name") or "toolpath.gcode"
-    if _ref_gcode() is not None and _ref_ready()[0]:
+    # the bridge sketch wins: the G-code file is used only when there is no sketch
+    if _ref_gcode() is not None and _ref_sketch() is None and _ref_ready()[0]:
         if info is None:
             raise HTTPException(400, f"{sid} has no glass corners yet: set them in the sketcher.")
         mt = info["match"]

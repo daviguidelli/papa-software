@@ -512,7 +512,7 @@
           <span class="mono muted" id="rfGInfo" style="font-size:12.5px"></span>
           <button class="sm" id="rfGClear" hidden>Remove</button>
         </div>
-        <p class="note muted" style="font-size:12px;margin-top:4px">With a sketch, each scanned substrate gets these bridges placed on its glass (turned and shifted like the glass) and runs with Scrub / Routine 1 or downloads as G-code. A G-code file, if loaded, is what the download gives instead (moved the same way). A substrate with its own sketch keeps its own.</p>
+        <p class="note muted" style="font-size:12px;margin-top:4px">With a sketch, each scanned substrate gets these bridges placed on its glass (turned and shifted like the glass) and runs with Scrub / Routine 1 or downloads as G-code. The sketch always wins: a G-code file is only used (moved the same way) when no sketch is loaded. A substrate with its own sketch keeps its own.</p>
         <p class="note" id="rfMsg"></p>
         <p class="note muted" style="font-size:12px">In the photo: gold = glass corners, red ring = red dot corner, pink = sketch bridges, green = electrode array (found by itself; click "electrode array corners" to fix it), orange = the G-code's cutting moves, grey = travel. New substrates' glass is estimated from their array the same way as on this one; set a substrate's glass by hand in the sketcher if needed. Needs the camera points.</p>
       </div>
@@ -1311,7 +1311,7 @@ function paintRef(){
   [['rfX','x_min'],['rfY','y_min'],['rfS','size']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el&&!el.dataset.edit)el.value=pl[k]});
   const sk=r.sketch;$('#rfSInfo').textContent=sk?`${sk.name} · ${fmt(sk.w,1)} × ${fmt(sk.h,1)} mm · ${sk.bridges} bridges`+(sk.warning?' · '+sk.warning:''):'none';
   $('#rfSInfo').className='mono '+(sk&&sk.warning?'warn':'muted');$('#rfSClear').hidden=!sk;$('#rfRefG').hidden=!(sk&&r.ready);$('#rfGClear').hidden=!r.gcode;
-  const g=r.gcode;$('#rfGInfo').textContent=!g?'none':(g.error?g.name+': '+g.error:`${g.name} · ${g.moves} moves · X ${fmt(g.x[0],2)}–${fmt(g.x[1],2)}, Y ${fmt(g.y[0],2)}–${fmt(g.y[1],2)} mm · cutting at Z ${fmt(g.z_cut,2)}`);
+  const g=r.gcode;$('#rfGInfo').className='mono '+(g&&sk?'warn':'muted');$('#rfGInfo').textContent=!g?'none':(sk&&!g.error?'not used while the bridge sketch is loaded · ':'')+(g.error?g.name+': '+g.error:`${g.name} · ${g.moves} moves · X ${fmt(g.x[0],2)}–${fmt(g.x[1],2)}, Y ${fmt(g.y[0],2)}–${fmt(g.y[1],2)} mm · cutting at Z ${fmt(g.z_cut,2)}`);
   const m=$('#rfMsg');
   if(r.ready){m.textContent='Reference ready.'+(!r.placement?'':'')+' Scan substrates: each row of the table gets "Glass vs reference" and a G-code download.'+((S.al&&!S.al.camera.fit)?' (The camera points are still needed for that.)':'');m.className='note good'}
   else{m.textContent='Still needed: '+r.missing.join(', ')+'.'+(r.photo&&!r.array_found?' The electrode array was not found by itself: choose "electrode array corners" and click its 4 corners.':'');m.className='note warn'}

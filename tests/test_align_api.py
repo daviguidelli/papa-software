@@ -326,6 +326,14 @@ def test_reference_sketch_lands_on_each_glass(aligned, monkeypatch, tmp_path):
     g = a.get("/api/align/substrate/S2/gcode", params={"z": 4.5}).text
     assert "REFERENCE toolpath, modified for this glass" in g and ";   B8: X" in g
 
+    # a G-code file loaded as well does not replace the sketch
+    a.post("/api/reference/gcode", json={"text": "G21\nG90\nG0 X170 Y170\nG1 Z4.5\nG1 X180 F600\n", "name": "other.gcode"})
+    s2 = next(s for s in a.get("/api/align").json()["scan"]["substrates"] if s["id"] == "S2")
+    assert s2["gcode_from"] == "plan"
+    g = a.get("/api/align/substrate/S2/gcode", params={"z": 4.5})
+    assert "S2_scrub.gcode" in g.headers["content-disposition"] and "modified for this glass" in g.text
+    a.post("/api/reference/gcode", json={"clear": True})
+
     # this substrate's own geometry, drawn on its glass from the reference bridges
     j = a.get("/api/align/substrate/S3/sketch").json()
     assert j["frame"] == "glass" and j["from_reference"] and (j["w"], j["h"]) == (25, 25) and len(j["bridges"]) == 8
