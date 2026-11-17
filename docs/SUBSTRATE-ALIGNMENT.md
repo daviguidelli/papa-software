@@ -83,6 +83,11 @@ by the same turn and shift.
      and your edit (bridges paired by id, else nearest within 3 mm; added and
      removed ones listed). A sketch drawn on the array (older patterns) stays on
      the array and is not compared.
+     **Comparison report ↓** (in the Compare panel) saves one self-contained
+     HTML page (`/api/align/substrate/<id>/report`): the reference photo with
+     the sketch, the calibrated substrate's glass from the scan, both toolpaths
+     overlaid, the bridge table, the camera-calibration quality and both G-code
+     files. It opens anywhere without the Pi.
    - a **G-code file** (G21 mm; G90/G91, G0/G1/G2/G3; G20 and G92 X/Y are
      refused). When loaded, G-code ↓ gives this file moved onto the glass.
 

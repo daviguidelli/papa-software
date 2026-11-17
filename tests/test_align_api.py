@@ -359,6 +359,13 @@ def test_reference_sketch_lands_on_each_glass(aligned, monkeypatch, tmp_path):
     g = a.get("/api/align/substrate/S3/gcode", params={"z": 4.5}).text
     assert "own bridge edits" in g and "2 changed" in g and "B7: REMOVED" in g and "NEW (not in the reference)" in g
 
+    # the stand-alone comparison report
+    r = a.get("/api/align/substrate/S3/report", params={"z": 4.5})
+    assert r.status_code == 200 and "PAPA_S3_vs_reference.html" in r.headers["content-disposition"]
+    t = r.text
+    assert t.startswith("<!DOCTYPE html>") and "<svg" in t and "REFERENCE_scrub.gcode" in t and "S3_scrub.gcode" in t
+    assert t.count("<tr>") >= 10 and "removed" in t and "data:image/jpeg;base64," in t
+
     # a substrate's own sketch still wins over the reference
     a.post("/api/align/pattern", json={"targets": ["S2"], "sketch": SKETCH, "name": "own"})
     s2 = next(s for s in a.get("/api/align").json()["scan"]["substrates"] if s["id"] == "S2")

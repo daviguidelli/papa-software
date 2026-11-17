@@ -441,7 +441,7 @@
       <div class="card" id="alCmp" hidden style="margin-top:14px;padding:14px">
         <div class="row" style="align-items:center;justify-content:space-between">
           <span class="label" id="alCmpTitle">Reference vs modified</span>
-          <span><button class="sm gold" id="alCmpGcode">G-code ↓</button> <button class="sm" id="alCmpClose">Close</button></span>
+          <span><button class="sm gold" id="alCmpReport" title="One page with the original, the calibrated substrate, both toolpaths, the bridge table and both G-codes: opens anywhere, no Pi needed">Comparison report ↓</button> <button class="sm gold" id="alCmpGcode">G-code ↓</button> <button class="sm" id="alCmpClose">Close</button></span>
         </div>
         <p class="note" id="alCmpSum" style="margin-top:6px"></p>
         <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
@@ -1410,6 +1410,8 @@ function alCompare(id){
   });
 }
 $('#alCmpClose').onclick=()=>{$('#alCmp').hidden=true};
+$('#alCmpReport').onclick=()=>{const id=$('#alCmp').dataset.sid;if(!id)return;const q=alZq();if(q===null)return;
+  run('Comparison report for '+id,()=>alDownload('/api/align/substrate/'+id+'/report'+q,'PAPA_'+id+'_vs_reference.html'))};
 $('#alCmpGcode').onclick=()=>{const id=$('#alCmp').dataset.sid;if(id)alGcode(id,'plan')};
 function alGcode(id,from){
   let q='';

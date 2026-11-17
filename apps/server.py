@@ -2546,6 +2546,157 @@ def _compare(sid: str, z: float | None = 1.0) -> dict:
             "ref_segs": _machine_segs(ref_st), "new_segs": _machine_segs(new_st)}
 
 
+def _cmp_svg(c: dict) -> str:
+    """The reference vs modified toolpath picture of a comparison, as SVG."""
+    pts = [*c["ref_glass"], *c["new_glass"], *c["ref_bridges"]]
+    for sg in c["ref_segs"] + c["new_segs"]:
+        pts += [sg[:2], sg[2:]]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    x0, x1, y0, y1 = min(xs) - 3, max(xs) + 3, min(ys) - 3, max(ys) + 3
+    W, H = x1 - x0, y1 - y0
+    k = max(W, H) / 400
+
+    def P(x: float, y: float) -> str:
+        return f"{x - x0:.3f},{y1 - y:.3f}"
+
+    def poly(c4: list, col: str, dash: bool) -> str:
+        d = f' stroke-dasharray="{4 * k:.3f}"' if dash else ""
+        return f'<polygon points="{" ".join(P(*q) for q in c4)}" fill="none" stroke="{col}" stroke-width="{2 * k:.3f}"{d}/>'
+
+    def segs(ss: list, col: str, dash: bool) -> str:
+        d = f' stroke-dasharray="{3 * k:.3f}" opacity="0.7"' if dash else ' opacity="0.95"'
+        return "".join(f'<line x1="{a - x0:.3f}" y1="{y1 - b:.3f}" x2="{e - x0:.3f}" y2="{y1 - f:.3f}" stroke="{col}" '
+                       f'stroke-width="{1.2 * k:.3f}"{d}/>' for a, b, e, f in ss)
+
+    def sq(q: list, col: str) -> str:
+        return (f'<rect x="{q[0] - x0 - 0.5:.3f}" y="{y1 - q[1] - 0.5:.3f}" width="1" height="1" fill="none" '
+                f'stroke="{col}" stroke-width="{1.5 * k:.3f}"/>')
+
+    out = [poly(c["ref_glass"], "#8a8a8a", True), segs(c["ref_segs"], "#9a9a9a", True)]
+    out += [sq(q, "#bbbbbb") for q in c["ref_bridges"]]
+    out += [f'<path d="M{b["ref"][0] - x0 - 0.8:.3f},{y1 - b["ref"][1] - 0.8:.3f}l1.6,1.6m0,-1.6l-1.6,1.6" stroke="#ff4d4d" '
+            f'stroke-width="{1.5 * k:.3f}"/>' for b in c["removed"]]
+    out += [poly(c["new_glass"], "#3fd0e0", False), segs(c["new_segs"], "#ff8a2a", False)]
+    out += [sq(b["new"], "#4dff88" if b.get("added") else "#ffffff") for b in c["bridges"]]
+    return (f'<svg viewBox="0 0 {W:.3f} {H:.3f}" xmlns="http://www.w3.org/2000/svg" '
+            f'style="width:100%;background:#0b0b0b;border-radius:6px">{"".join(out)}</svg>')
+
+
+@app.get("/api/align/substrate/{sid}/report")
+def align_substrate_report(sid: str, z: float | None = None) -> Response:
+    """A self-contained page for showing the comparison anywhere: the original
+    (bridge sketch on the reference glass) next to this calibrated substrate,
+    both toolpaths overlaid, the per-bridge table, the calibration quality and
+    both G-code files."""
+    import base64
+    import html as h
+
+    import cv2
+    import numpy as np
+
+    sc = _scan_or_400()
+    zz = z if z is not None else ((_scrub_settings().get("start") or {}).get("z"))
+    if zz is None:
+        raise HTTPException(400, "No contact Z yet: set it on the Scrub tab (Set start here) or give one.")
+    c = _compare(sid, float(zz))
+    ref = _ref_info()
+    sk = _ref_sketch() or {}
+    p, pattern = _substrate(sid)
+
+    # the new substrate's glass, turned like the reference, with its bridges drawn on
+    view = align_substrate_sketch(sid)
+    raw = base64.b64decode(view["image"].split(",", 1)[1])
+    img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    ppm = float(view["px_per_mm"])
+    t = max(1, int(round(img.shape[1] / 300)))
+    for b in pattern["bridges"]:
+        x0_, y0_ = (b["cx"] - b["l"] / 2) * ppm, (b["cy"] - b["w"] / 2) * ppm
+        cv2.rectangle(img, (int(x0_), int(y0_)), (int(x0_ + b["l"] * ppm), int(y0_ + b["w"] * ppm)), (255, 0, 255), t + 1)
+    new_img = _jpeg(img, 88)
+
+    ref_gc = reference_gcode_download(float(zz)).body.decode()
+    new_gc = align_substrate_gcode(sid, float(zz)).body.decode()
+    fit = (_align_info().get("camera") or {}).get("fit") or {}
+    errs = fit.get("errors_mm") or []
+
+    def dl(text: str, name: str) -> str:
+        u = "data:text/plain;base64," + base64.b64encode(text.encode()).decode()
+        return f'<a class="btn" download="{h.escape(name)}" href="{u}">{h.escape(name)} ↓</a>'
+
+    def xy(v: list | None) -> str:
+        return "–" if not v else f"{v[0]:.2f}, {v[1]:.2f}"
+
+    rows = []
+    for b in c["bridges"]:
+        if b.get("added"):
+            rows.append(f"<tr><td>{h.escape(b['id'])}</td><td>–</td><td>{xy(b['new'])}</td><td class=g>added</td><td class=g>new</td></tr>")
+            continue
+        ed = f"{b['edit'][0]:+.2f}, {b['edit'][1]:+.2f}" if b["edit_mm"] > 0.0005 else "–"
+        if any(abs(v) > 0.0005 for v in b["resized"]):
+            ed += f" · size {b['resized'][0]:+.2f} × {b['resized'][1]:+.2f}"
+        rows.append(f"<tr><td>{h.escape(b['id'])}</td><td>{xy(b['ref'])}</td><td>{xy(b['new'])}</td>"
+                    f"<td>{b['moved'][0]:+.2f}, {b['moved'][1]:+.2f} ({b['dist']:.2f})</td><td>{ed}</td></tr>")
+    rows += [f"<tr><td>{h.escape(b['id'])}</td><td>{xy(b['ref'])}</td><td>–</td><td class=r>removed</td><td class=r>deleted</td></tr>"
+             for b in c["removed"]]
+    own = c["source"] == "glass"
+    mi = (sc.get("mount_info") or [None] * (_sid_index(sc, sid) + 1))[_sid_index(sc, sid)]
+    glass_src = (mi or {}).get("source") or "-"
+    head_lines = [ln for ln in new_gc.splitlines() if ln.startswith(";")]
+    warn = c["warnings"] + p.warnings
+    page = f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PAPA · reference vs calibrated substrate {h.escape(sid)}</title>
+<style>
+body{{margin:0;background:#000;color:#e8e8e8;font:15px/1.55 -apple-system,Segoe UI,Helvetica,Arial,sans-serif}}
+main{{max-width:1180px;margin:0 auto;padding:32px 24px 60px}}
+h1{{font-size:26px;letter-spacing:.06em;margin:0 0 4px}} h2{{font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:#bbb;margin:34px 0 12px;border-top:1px solid #333;padding-top:18px}}
+.sub{{color:#999}} .grid{{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px}} .grid>*{{min-width:0}} @media(max-width:820px){{.grid{{grid-template-columns:1fr}}}}
+.card{{background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:16px}} .card img{{width:100%;border-radius:6px;display:block}}
+.k{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}} @media(max-width:820px){{.k{{grid-template-columns:repeat(2,1fr)}}}}
+.k div{{background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:12px}} .k b{{display:block;font-size:22px;color:#fff}} .k span{{color:#999;font-size:12px;letter-spacing:.08em;text-transform:uppercase}}
+table{{width:100%;border-collapse:collapse;font:13px/1.4 ui-monospace,Menlo,monospace}} th,td{{padding:7px 8px;border-bottom:1px solid #222;text-align:left}} th{{color:#999;font-weight:500;font-family:inherit}}
+.g{{color:#4dff88}} .r{{color:#ff6b6b}} .w{{color:#ffb35c}} pre{{background:#0b0b0b;border:1px solid #222;border-radius:6px;padding:12px;overflow:auto;max-height:360px;font:12px/1.45 ui-monospace,Menlo,monospace}}
+.btn{{display:inline-block;border:1px solid #d9b45b;color:#d9b45b;padding:7px 12px;border-radius:4px;text-decoration:none;margin:4px 8px 4px 0;font-size:13px}}
+.leg span{{display:inline-block;margin-right:14px;font-size:12.5px;color:#aaa}} .leg i{{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px}}
+</style></head><body><main>
+<h1>Reference vs calibrated substrate {h.escape(sid)}</h1>
+<div class="sub">PAPA substrate alignment · scan #{h.escape(str(sc.get('scan_id', '-')))} at {h.escape(str(sc['time']))} · toolpath from {h.escape(sk.get('name') or 'the bridge sketch')}</div>
+
+<div class="k" style="margin-top:22px">
+<div><span>Glass turned</span><b>{c['rotation_deg']:+.3f}°</b></div>
+<div><span>Glass moved</span><b>{c['shift_mm'][0]:+.2f}, {c['shift_mm'][1]:+.2f} mm</b></div>
+<div><span>Bridge edits</span><b>{c['edited'] if own else 0} changed · {c['added']} added · {len(c['removed'])} removed</b></div>
+<div><span>Red dot</span><b class="{'' if c['red_found'] else 'w'}">{'found' if c['red_found'] else 'not found'}</b></div>
+</div>
+{"".join(f'<p class="w">⚠ {h.escape(x)}</p>' for x in dict.fromkeys(warn))}
+
+<h2>1 · Original and calibrated substrate</h2>
+<div class="grid">
+<div class="card"><b>Original: reference substrate</b><p class="sub" style="margin:4px 0 10px">Your photo with the bridge sketch ({len(sk.get('bridges') or [])} bridges, {sk.get('area', {}).get('w', 0):g} × {sk.get('area', {}).get('h', 0):g} mm) drawn in pink; gold = glass corners, red ring = red dot.</p><img src="{ref.get('photo') or ''}" alt="Reference substrate"></div>
+<div class="card"><b>Calibrated: {h.escape(sid)} from the camera</b><p class="sub" style="margin:4px 0 10px">Its glass cut from the scan, straightened in printer millimetres and turned like the reference; the bridges it runs in pink ({'its own edited sketch' if own else 'the reference bridges, unchanged'}).</p><img src="{new_img}" alt="Calibrated substrate"></div>
+</div>
+
+<h2>2 · Toolpaths on the printer (mm, seen from above)</h2>
+<div class="card">{_cmp_svg(c)}
+<div class="leg" style="margin-top:10px"><span><i style="background:#9a9a9a"></i>reference glass + toolpath (original)</span><span><i style="background:#3fd0e0"></i>{h.escape(sid)}'s glass (measured)</span><span><i style="background:#ff8a2a"></i>modified toolpath</span><span>□ bridges · <span class="g">green</span> added · <span class="r">×</span> removed</span></div></div>
+
+<h2>3 · Bridge by bridge (printer X, Y mm)</h2>
+<div class="card"><table><thead><tr><th>Bridge</th><th>Original</th><th>Calibrated</th><th>Moved (total)</th><th>Sketch edit</th></tr></thead><tbody>{"".join(rows)}</tbody></table>
+<p class="sub" style="font-size:12.5px">Moved = original → calibrated position. Sketch edit = the part that comes from changing the bridges for this substrate; the rest is the glass being turned and shifted (measured by the camera).</p></div>
+
+<h2>4 · How it was measured</h2>
+<div class="card"><p style="margin-top:0">Camera → printer calibration: <b>{fit.get('points', 0)}</b> camera points, largest error <b>{(max(errs) if errs else 0):.2f} mm</b>{', X/Y scale differ ' + format(fit.get('xy_scale_diff_pct', 0), '.2f') + ' %' if fit.get('xy_scale_diff_pct') is not None else ''}. Glass corners: {h.escape(glass_src)}.</p>
+<p class="sub">Every pixel of the fixed camera is turned into printer X/Y with those points; the substrate's glass corners are measured in each scan and matched to the reference glass (the red dot fixes which way round). The bridges are placed from that measured corner, so the toolpath follows the glass.</p></div>
+
+<h2>5 · G-code</h2>
+<div class="grid">
+<div class="card"><b>Original (reference)</b><div>{dl(ref_gc, 'REFERENCE_scrub.gcode')}</div><pre>{h.escape(chr(10).join(ref_gc.splitlines()[:40]))}{chr(10) + '…' if len(ref_gc.splitlines()) > 40 else ''}</pre></div>
+<div class="card"><b>Calibrated ({h.escape(sid)})</b><div>{dl(new_gc, f'{sid}_scrub.gcode')}</div><pre>{h.escape(chr(10).join(head_lines + [ln for ln in new_gc.splitlines() if not ln.startswith(';')][:40 - min(len(head_lines), 30)]))}{chr(10) + '…'}</pre></div>
+</div>
+</main></body></html>"""
+    return Response(page, media_type="text/html",
+                    headers={"Content-Disposition": f'attachment; filename="PAPA_{sid}_vs_reference.html"'})
+
+
 @app.get("/api/align/substrate/{sid}/compare")
 def align_substrate_compare(sid: str) -> dict:
     return _compare(sid)
