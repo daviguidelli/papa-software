@@ -39,6 +39,8 @@ class ZCalResult:
 
 
 
+SLOW_FROM_N = 0.3     # first touch: switch to fine steps
+FINE_STEP_MM = 0.1
 MAX_JUMP_N = 3.0      # a real 0.25 mm step stays under this; glitches are hundreds of N
 GLITCH_RETRIES = 10
 
@@ -107,10 +109,13 @@ def calibrate_z(
     prev_f = 0.0
     cross: tuple[float, float, float, float] | None = None
     while travelled < max_travel_mm:
-        printer.move_relative(dz=-step_mm, speed_mm_s=approach_speed_mm_s)
-        travelled += step_mm
+        # Big steps through air, small ones once the swab starts to touch, so
+        # the fast approach cannot overshoot into the abort force.
+        step = step_mm if prev_f < SLOW_FROM_N else min(step_mm, FINE_STEP_MM)
+        printer.move_relative(dz=-step, speed_mm_s=approach_speed_mm_s)
+        travelled += step
         steps += 1
-        z_now = prev_z - step_mm
+        z_now = prev_z - step
         try:
             force = _steady_force(loadcell, prev_f)
         except Exception:

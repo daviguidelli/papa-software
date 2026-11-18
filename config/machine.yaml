@@ -26,7 +26,7 @@ speeds_mm_s:
 zcal:
   target_force_n: 1.1
   abort_force_n: 3.0
-  step_mm: 0.25
+  step_mm: 0.5
   max_travel_mm: 8.0
   settle_readings: 3     # consecutive readings above target before accepting
   backoff_mm: 0.5
