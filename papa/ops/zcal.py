@@ -66,6 +66,7 @@ def calibrate_z(
     printer.move(x=cell_x, y=cell_y, speed_mm_s=travel_speed_mm_s)
     if printer.position().z > z_safe + 1e-6:
         printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
+    getattr(loadcell, "settle", lambda: True)()   # skip the start-up spikes before zeroing
     loadcell.tare()
 
     travelled = 0.0

@@ -47,9 +47,30 @@ class HX711LoadCell:
 
     def read_counts(self) -> int:
         with self._bus:                      # one 24-bit read at a time, even with a sampler running
-            return self._read_counts()
+            for attempt in range(3):         # a dropped read (chip reset) is retried, not fatal
+                try:
+                    return self._read_counts()
+                except TimeoutError:
+                    if attempt == 2:
+                        raise
+            raise TimeoutError("HX711 not ready")
+
+    def wake(self, timeout_s: float = 12.0) -> None:
+        """CLK low and keep asking until the chip answers. After it has been idle
+        or reset it can take several seconds before DAT goes low."""
+        t0 = time.monotonic()
+        while True:
+            self._lg.gpio_write(self._h, self.clk, 0)
+            try:
+                self.read_counts()
+                return
+            except TimeoutError:
+                if time.monotonic() - t0 > timeout_s:
+                    raise
+                time.sleep(0.2)
 
     def _read_counts(self) -> int:
+        self._lg.gpio_write(self._h, self.clk, 0)    # CLK high > 60 us = power-down; make sure it is low
         deadline = time.time() + 1.0
         while not self._ready():
             if time.time() > deadline:
@@ -71,6 +92,7 @@ class HX711LoadCell:
         """Wait out the start-up swing. After a power dip or a long idle the chip
         outputs wild values (hundreds of N) for a second or two. Read and discard
         until the last `window` readings agree, then report whether they did."""
+        self.wake()
         tol = max(300.0, abs(self.scale) * 5.0)          # about 0.05 N
         t0, reads = time.monotonic(), []
         while time.monotonic() - t0 < timeout_s:

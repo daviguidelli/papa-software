@@ -3188,7 +3188,7 @@ def _loadcell_alive() -> None:
     """Read the cell once before any motion, so a dead wire stops the run at the
     start, not after the head has travelled to the cell."""
     try:
-        hub.loadcell.read_counts()
+        getattr(hub.loadcell, "wake", hub.loadcell.read_counts)()
         settle = getattr(hub.loadcell, "settle", None)
         steady = settle() if settle else True
     except Exception as exc:                               # noqa: BLE001
