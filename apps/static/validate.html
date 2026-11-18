@@ -491,7 +491,22 @@
         <span class="muted mono" id="alScanInfo" style="font-size:12.5px"></span> <a id="alPhotoDl" href="/api/align/photo" style="font-size:12.5px;margin-left:8px">Download full-size scan photo ↓</a>
       </div>
       <p class="note" id="alMsg"></p>
-      <img id="alImg" alt="Detected arrays with their placed toolpaths" style="width:100%;display:none;margin-top:10px;border:1px solid var(--line);border-radius:4px">
+      <div id="alImgWrap" style="display:flex;gap:14px;align-items:flex-start;margin-top:10px;flex-wrap:wrap">
+      <img id="alImg" alt="Detected arrays with their placed toolpaths" style="flex:3 1 480px;min-width:0;width:100%;display:none;border:1px solid var(--line);border-radius:4px">
+      <aside id="alSlotPanel" class="card" hidden style="flex:1 1 240px;max-width:340px;padding:12px">
+        <p class="label" style="margin:0 0 6px">Slot map</p>
+        <p class="note" style="margin:0 0 8px;font-size:12.5px">Each holder has a fixed number. Click slots to choose where the template runs.</p>
+        <div id="alSlotGrid" style="display:grid;gap:6px"></div>
+        <label class="muted" style="display:block;margin-top:10px;font-size:12.5px">Template (the substrate you automated)
+          <select id="alSlotSrc" style="width:100%;margin-top:4px"></select></label>
+        <p class="mono muted" id="alSlotStep" style="font-size:12px;margin:8px 0"></p>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <button id="alSlotAll">All slots</button><button id="alSlotFilled">Slots with a substrate</button><button id="alSlotNone">None</button>
+        </div>
+        <button class="gold" id="alSlotGo" style="width:100%;margin-top:8px">G-code: template on chosen slots ↓</button>
+        <p class="note" id="alSlotGoMsg" style="font-size:12.5px;margin:6px 0 0"></p>
+      </aside>
+      </div>
       <div class="row" id="alSlotRow" style="align-items:center;margin-top:8px;gap:8px" hidden>
         <span class="muted" style="font-size:12.5px">Slots</span>
         <label class="muted" style="font-size:12.5px">rows <input id="alSlotR" type="number" min="1" max="20" value="3" style="width:52px"></label>
@@ -1381,7 +1396,7 @@ function paintAlign(){
   else if(sc&&sc.stale){m.textContent='Patterns or checks changed since this photo: the numbers below are updated, the picture is not. Scan again to redraw.';m.className='note'}
   else if(!m.dataset.keep){m.textContent='';m.className='note'}
   const shown=sc?sc.image:null;
-  $('#alImg').style.display=shown?'block':'none';$('#alSlotRow').hidden=!shown;if(shown&&$('#alImg').dataset.src!==shown){$('#alImg').src=shown;$('#alImg').dataset.src=shown}
+  $('#alImg').style.display=shown?'block':'none';$('#alSlotRow').hidden=!shown;alSlotPaint();if(shown&&$('#alImg').dataset.src!==shown){$('#alImg').src=shown;$('#alImg').dataset.src=shown}
   $('#alLegend').hidden=!sc;
   if(sc&&sc.pixel_only&&sc.substrates.length&&!sc.warnings.length){m.textContent='Arrays found and labelled. Press Sketch to draw the bridges on each one. Sizes in mm, turns and toolpaths appear once the camera points are taught (below).';m.className='note'}
   const subs=sc?sc.substrates:[];
@@ -1561,7 +1576,7 @@ function alZq(){
 }
 async function alDownload(url,fallback){
   const r=await fetch(url);
-  if(!r.ok){let m='HTTP '+r.status;try{m=(await r.json()).error||m}catch(x){}throw new Error(m)}
+  if(!r.ok){let m='HTTP '+r.status;try{const j=await r.json();m=j.error||j.detail||m}catch(x){}throw new Error(m)}
   const cd=r.headers.get('content-disposition')||'',fn=(cd.match(/filename="([^"]+)"/)||[])[1]||fallback;
   const u=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=u;a.download=fn;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),2000);
 }
@@ -1608,7 +1623,7 @@ function alGcode(id,from){
     const z=prompt('No contact Z is set on the Scrub tab yet. Contact Z for this G-code (mm)?','4.5');
     if(z===null)return;if(!isFinite(+z)||z===''){say('Contact Z must be a number','err');return}q='?z='+encodeURIComponent(z)}
   run('G-code for '+id,async()=>{const r=await fetch('/api/align/substrate/'+id+'/gcode'+q);
-    if(!r.ok){let m='HTTP '+r.status;try{m=(await r.json()).error||m}catch(x){}throw new Error(m)}
+    if(!r.ok){let m='HTTP '+r.status;try{const j=await r.json();m=j.error||j.detail||m}catch(x){}throw new Error(m)}
     const cd=r.headers.get('content-disposition')||'',fn=(cd.match(/filename="([^"]+)"/)||[])[1]||id+'.gcode';
     const u=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=u;a.download=fn;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),2000)});
 }
@@ -1721,6 +1736,43 @@ $('#alImg').addEventListener('click',e=>{if(!alSlotPts)return;const b=e.target.g
   if(alSlotPts.length===4){const pts=alSlotPts;alSlotPts=null;$('#alImg').style.cursor='';
     alSlotSend({rows:+$('#alSlotR').value,cols:+$('#alSlotC').value,points:pts})}});
 alSlotLoad();
+
+// ---- slot map panel ----
+let alSlotPick=null;
+function alSlotPaint(){
+  const a=S.al,sm=a&&a.slot_map,shown=a&&a.scan&&a.scan.image;
+  $('#alSlotPanel').hidden=!(sm&&shown);if(!sm||!shown)return;
+  const subs=(a.scan.substrates||[]);
+  const filled=sm.cells.filter(c=>c.sid).map(c=>c.slot);
+  if(!alSlotPick)alSlotPick=new Set(filled);
+  const sel=$('#alSlotSrc'),prev=sel.value;
+  sel.innerHTML=sm.cells.filter(c=>c.sid).map(c=>`<option value="${c.sid}">Slot ${c.slot} · ${c.sid}</option>`).join('')||'<option value="">no substrate in the grid</option>';
+  if([...sel.options].some(o=>o.value===prev))sel.value=prev;
+  const src=sel.value,srcCell=sm.cells.find(c=>c.sid===src);
+  $('#alSlotGrid').style.gridTemplateColumns=`repeat(${sm.cols},1fr)`;
+  $('#alSlotGrid').innerHTML=sm.cells.map(c=>{
+    const on=alSlotPick.has(c.slot),tpl=c.sid&&c.sid===src,sub=subs.find(x=>x.id===c.sid);
+    const d=srcCell&&srcCell.centre_mm&&c.centre_mm?[c.centre_mm[0]-srcCell.centre_mm[0],c.centre_mm[1]-srcCell.centre_mm[1]]:null;
+    const bad=sub&&sub.problems&&sub.problems.length;
+    return `<button data-slot="${c.slot}" title="${d?`shift from the template: X ${fmt(d[0],2)}, Y ${fmt(d[1],2)} mm`:''}" style="aspect-ratio:1;padding:4px;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-start;text-align:left;
+      border:${on?'2px solid #3cc8e6':'1px solid var(--line)'};background:${tpl?'rgba(212,175,55,.18)':c.sid?'rgba(80,220,80,.10)':'transparent'}">
+      <b style="font-size:18px;color:#3cc8e6">${c.slot}</b>
+      <span class="mono" style="font-size:11px;${c.sid?(bad?'color:var(--bad)':'color:#5ad65a'):'color:var(--muted)'}">${c.sid?c.sid+(tpl?' ★':''):'empty'}</span>
+      <span class="mono muted" style="font-size:10px">${d&&!tpl?`${d[0]>=0?'+':''}${fmt(d[0],1)}, ${d[1]>=0?'+':''}${fmt(d[1],1)}`:tpl?'template':''}</span></button>`}).join('');
+  const cs=sm.col_step_mm,rs=sm.row_step_mm;
+  $('#alSlotStep').innerHTML=cs||rs?`one column: X ${cs?fmt(cs[0],2):'–'}, Y ${cs?fmt(cs[1],2):'–'} mm<br>one row: X ${rs?fmt(rs[0],2):'–'}, Y ${rs?fmt(rs[1],2):'–'} mm`:'Teach the camera points to get the X/Y shift between slots.';
+  $('#alSlotGo').disabled=!src||!alSlotPick.size||!(cs||rs);
+  $('#alSlotGoMsg').textContent=src?`${src} (slot ${srcCell.slot}) is the template; it runs on ${alSlotPick.size} slot${alSlotPick.size===1?'':'s'}: ${[...alSlotPick].sort((x,y)=>x-y).join(', ')||'–'}.`:'';
+}
+$('#alSlotGrid').onclick=e=>{const b=e.target.closest('[data-slot]');if(!b)return;const k=+b.dataset.slot;
+  alSlotPick.has(k)?alSlotPick.delete(k):alSlotPick.add(k);alSlotPaint()};
+$('#alSlotSrc').onchange=alSlotPaint;
+$('#alSlotAll').onclick=()=>{alSlotPick=new Set(S.al.slot_map.cells.map(c=>c.slot));alSlotPaint()};
+$('#alSlotFilled').onclick=()=>{alSlotPick=new Set(S.al.slot_map.cells.filter(c=>c.sid).map(c=>c.slot));alSlotPaint()};
+$('#alSlotNone').onclick=()=>{alSlotPick=new Set();alSlotPaint()};
+$('#alSlotGo').onclick=()=>{const src=$('#alSlotSrc').value;if(!src||!alSlotPick.size)return;const q=alZq();if(q===null)return;
+  const t=[...alSlotPick].sort((x,y)=>x-y).join(',');
+  run(`G-code: ${src} on slots ${t}`,()=>alDownload(`/api/align/slots/gcode?source=${src}&targets=${t}`+(q?'&'+q.slice(1):''),'slots.gcode'))};
 </script>
 </body>
 </html>

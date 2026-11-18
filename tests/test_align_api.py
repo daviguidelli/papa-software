@@ -435,3 +435,39 @@ def test_slots_need_four_corners(aligned):
     assert r.status_code == 400
     aligned.post("/api/align/slots", json={"clear": True})
     assert aligned.post("/api/align/slots", json={"rows": 3, "cols": 3}).status_code == 400
+
+
+def test_template_gcode_repeated_on_other_slots(aligned):
+    """The slot map gives every slot's centre and the X/Y step; one substrate's
+    G-code repeated on other slots is the same moves shifted by the slot step."""
+    import re
+
+    a = aligned
+    a.post("/api/align/scan", json={"save": False})
+    srv, sc = a.server, a.server.hub.align_scan
+    cen = np.array([np.asarray(v).mean(0) for v in sc["views"]])
+    (x0, y0), (x1, y1) = cen.min(0) - 40, cen.max(0) + 40
+    box = srv._view_to_drawn(sc, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+    dh, dw = sc["drawn"].shape[:2]
+    j = a.post("/api/align/slots", json={"rows": 2, "cols": 3, "points": (box / [dw, dh]).tolist()}).json()
+    sm = j["slot_map"]
+    assert len(sm["cells"]) == 6 and sm["col_step_mm"] and sm["row_step_mm"]
+    assert any(c["sid"] for c in sm["cells"])
+    src = next(c for c in sm["cells"] if c["sid"])
+    other = next(c for c in sm["cells"] if c["slot"] != src["slot"])
+    one = a.get(f"/api/align/substrate/{src['sid']}/gcode", params={"z": 4.5})
+    assert one.status_code == 200, one.text
+    r = a.get("/api/align/slots/gcode", params={"source": src["sid"], "targets": f"{src['slot']},{other['slot']}", "z": 4.5})
+    assert r.status_code == 200, r.text
+    assert f"slot {other['slot']}: template shifted" in r.text
+
+    def xs(text):
+        return [float(m) for m in re.findall(r"^G[01][^;\n]*X(-?[\d.]+)", text, re.M)]
+
+    blocks = r.text.split("; ===== slot ")
+    x_same, x_moved = xs(blocks[1]), xs(blocks[2])
+    dx = other["centre_mm"][0] - src["centre_mm"][0]
+    assert x_same and len(x_same) == len(x_moved)
+    assert np.allclose(np.array(x_moved) - np.array(x_same), dx, atol=0.002)
+    assert a.get("/api/align/slots/gcode", params={"source": src["sid"], "targets": "99", "z": 4.5}).status_code == 400
+    a.post("/api/align/slots", json={"clear": True})

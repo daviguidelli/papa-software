@@ -1622,6 +1622,7 @@ def _align_info() -> dict:
         info["scan"] = {**d, "time": sc["time"], "scan_id": sc.get("scan_id"), "image": sc["image"],
                         "timing": sc.get("timing"),
                         "shown_scale": sc["shown_scale"], "stale": sc.get("stale", False)}
+    info["slot_map"] = _slot_map(hub.align_scan)
     return info
 
 
@@ -1995,6 +1996,86 @@ def _draw_slots(sc: dict, drawn: Any) -> None:
                         4 * t, cv2.LINE_AA)
             cv2.putText(drawn, txt, tuple(np.round(p).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, fs, colour,
                         2 * t, cv2.LINE_AA)
+
+
+def _slot_map(sc: dict | None) -> dict | None:
+    """The holder grid for the GUI's slot map: every slot with the substrate
+    found in it (if any) and, with camera points, its centre on the printer
+    and the X/Y step from one slot to the next."""
+    import cv2
+    import numpy as np
+
+    sl = _slots()
+    if not sl:
+        return None
+    rows, cols = int(sl["rows"]), int(sl["cols"])
+    owner = {}
+    if sc and sc.get("views") is not None:
+        for i, k in enumerate(sc.get("slots") or []):
+            if k is not None and k not in owner:
+                owner[k] = f"S{i + 1}"
+    centres = None
+    axes_fit, _ = _camera_axes()
+    if axes_fit is not None and sc is not None:
+        H = cv2.getPerspectiveTransform(np.float32([[0, 0], [cols, 0], [cols, rows], [0, rows]]),
+                                        np.float32(sl["corners"]))
+        uv = np.float64([[[c + 0.5, r + 0.5] for r in range(rows) for c in range(cols)]])
+        view = cv2.perspectiveTransform(uv, H)[0]
+        c = corrmod.get_correction(sc["rgb"].shape[1::-1])
+        centres = axes_fit.plate_to_mm(c.corrected_to_plate(view))
+    cells = []
+    for r in range(rows):
+        for cc in range(cols):
+            k = r * cols + cc + 1
+            cells.append({"slot": k, "row": r + 1, "col": cc + 1, "sid": owner.get(k),
+                          "centre_mm": None if centres is None else [round(float(v), 3) for v in centres[k - 1]]})
+    out = {"rows": rows, "cols": cols, "cells": cells}
+    if centres is not None:
+        g = centres.reshape(rows, cols, 2)
+        out["col_step_mm"] = [round(float(v), 3) for v in (g[:, 1:] - g[:, :-1]).reshape(-1, 2).mean(0)] if cols > 1 else None
+        out["row_step_mm"] = [round(float(v), 3) for v in (g[1:] - g[:-1]).reshape(-1, 2).mean(0)] if rows > 1 else None
+    return out
+
+
+@app.get("/api/align/slots/gcode")
+def align_slots_gcode(source: str, targets: str, z: float | None = None) -> Response:
+    """One substrate's toolpath (the template) repeated on other slots: its
+    G-code shifted in X and Y by the distance from its slot to each target
+    slot, run one slot after the other. targets: slot numbers, comma separated."""
+    import numpy as np
+
+    sc = _scan_or_400()
+    sm = _slot_map(sc)
+    if not sm:
+        raise HTTPException(400, "Set the slot grid first (Slots → Set slot grid).")
+    if "col_step_mm" not in sm:
+        raise HTTPException(400, "Teach the camera points first: the slot shifts are in printer mm.")
+    src_slot = _sub_slot(sc, source)
+    if src_slot is None:
+        raise HTTPException(400, f"{source} is not inside the slot grid.")
+    try:
+        want = [int(v) for v in targets.split(",") if v.strip()]
+    except ValueError as exc:
+        raise HTTPException(400, "targets: slot numbers like 1,2,5") from exc
+    n = sm["rows"] * sm["cols"]
+    if not want or any(not 1 <= k <= n for k in want):
+        raise HTTPException(400, f"Slots must be 1 to {n}.")
+    base = align_substrate_gcode(source, z).body.decode()
+    centre = {c["slot"]: np.asarray(c["centre_mm"]) for c in sm["cells"]}
+    parts = [f"; PAPA: template {source} (slot {src_slot}) repeated on slots {', '.join(map(str, want))}",
+             f"; one column = X{sm['col_step_mm'][0]:+.3f} Y{sm['col_step_mm'][1]:+.3f} mm" if sm.get("col_step_mm") else "",
+             f"; one row = X{sm['row_step_mm'][0]:+.3f} Y{sm['row_step_mm'][1]:+.3f} mm" if sm.get("row_step_mm") else ""]
+    for k in want:
+        d = centre[k] - centre[src_slot]
+        head = f"\n; ===== slot {k}: template shifted X{d[0]:+.3f} Y{d[1]:+.3f} mm ====="
+        try:
+            text, _ = refmod.transform_gcode(base, None, d, header=head)
+        except refmod.ReferenceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        parts.append(text)
+    name = f"slots_{'-'.join(map(str, want))}_from_{source}.gcode"
+    return Response("\n".join(p for p in parts if p) + "\n", media_type="text/plain",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/align/slots")
