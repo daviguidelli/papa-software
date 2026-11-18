@@ -74,3 +74,30 @@ def test_red_dot_found_in_the_reference_photo():
     img = cv2.cvtColor(cv2.imread(str(Path(__file__).parent / "data" / "reference_substrate.png")), cv2.COLOR_BGR2RGB)
     corners = [[323, 463], [663, 463], [663, 806], [323, 806]]       # the glass square, by eye
     assert rf.red_corner(img, corners) == 2
+
+
+def test_array_on_glass_turn_offset_and_swap():
+    import math
+
+    import numpy as np
+
+    from papa.ops import reference as refmod
+
+    glass = np.array([[0, 0], [25, 0], [25, 25], [0, 25]], float)
+    arr = np.array([[3, 8], [13, 8], [13, 18], [3, 18]], float)          # left of the glass centre
+    # new glass: turned 30 deg and moved; array moved 1 mm right and turned 2 deg on the glass
+    th = math.radians(30)
+    R = np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
+    t = np.array([100.0, 50.0])
+    a2 = math.radians(2)
+    R2 = np.array([[math.cos(a2), -math.sin(a2)], [math.sin(a2), math.cos(a2)]])
+    arr_on_glass = (arr - arr.mean(0)) @ R2.T + arr.mean(0) + [1.0, 0]
+    m = refmod.match(glass, 0, glass @ R.T + t, (glass @ R.T + t)[0], 25)
+    g = refmod.array_on_glass(glass, arr, arr_on_glass @ R.T + t, m)
+    assert g["rotation_deg"] == pytest.approx(2, abs=0.05)
+    assert g["offset_mm"] == pytest.approx([1, 0], abs=0.01)
+    assert g["swapped"] == []
+    # the same array on the right half of the glass: left/right swapped
+    mirrored = arr.copy(); mirrored[:, 0] = 25 - mirrored[:, 0]
+    g = refmod.array_on_glass(glass, arr, mirrored @ R.T + t, m)
+    assert g["swapped"] == ["left/right"]

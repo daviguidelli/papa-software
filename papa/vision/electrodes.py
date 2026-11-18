@@ -402,7 +402,7 @@ def _detect_all(rgb: np.ndarray, p: ElectrodeParams, coarse_width: int) -> list[
         inside = np.zeros(cop.shape, np.uint8)
         cv2.fillPoly(inside, [np.round(local).astype(np.int32)], 255)
         if cv2.countNonZero(cv2.bitwise_and(cop, inside)) >= 0.1 * max(1, cv2.countNonZero(inside)):
-            local = trim_to_copper(local, cop)            # same clean-up as on the small copy
+            local = grow_to_copper(trim_to_copper(local, cop), cop)   # same clean-up as on the small copy
         corners = local + [x0, y0]
         out.append(
             Array(
@@ -456,6 +456,52 @@ def trim_to_copper(corners: np.ndarray, cop: np.ndarray, min_frac: float = 0.15,
 
     def at(u: float, v: float) -> np.ndarray:
         u, v = u / n, v / n
+        return (1 - u) * (1 - v) * c[0] + u * (1 - v) * c[1] + u * v * c[2] + (1 - u) * v * c[3]
+
+    return np.array([at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)])
+
+
+def grow_to_copper(corners: np.ndarray, cop: np.ndarray, min_frac: float = 0.25, max_grow: float = 0.6,
+                   gap: float = 0.04, n: int = 120) -> np.ndarray:
+    """Push each side of an outline outward while the copper pattern goes on
+    (the strip just outside the side is still copper), so the box covers the
+    whole electrode pattern: line ends, pads and bus bars the line finder left
+    out. Stops at the first gap in the copper longer than `gap` of the side,
+    so a separate clip or clamp beyond a gap is not taken in.
+    corners in order around the box; returned in the same order."""
+    c = np.asarray(corners, np.float64)
+    g = max_grow
+    m = int(round(n * g))
+    N = n + 2 * m
+    dst = np.float32([[m, m], [m + n, m], [m + n, m + n], [m, m + n]])
+    M = cv2.getPerspectiveTransform(c.astype(np.float32), dst)
+    patch = cv2.warpPerspective(cop, M, (N, N), flags=cv2.INTER_NEAREST, borderValue=0).astype(np.float32) / 255.0
+    cols = np.convolve(patch[m:m + n, :].mean(0), np.ones(3) / 3, mode="same")   # across side 0 -> 1
+    rows = np.convolve(patch[:, m:m + n].mean(1), np.ones(3) / 3, mode="same")   # across side 0 -> 3
+    hole = max(1, int(round(gap * n)))
+
+    def reach(prof: np.ndarray, start: int, step: int) -> int:
+        last, i, miss = start, start, 0
+        while 0 <= i + step < N:
+            i += step
+            if prof[i] >= min_frac:
+                last, miss = i, 0
+            else:
+                miss += 1
+                if miss > hole:
+                    break
+        return last
+
+    u0, u1 = reach(cols, m, -1), reach(cols, m + n - 1, 1) + 1
+    v0, v1 = reach(rows, m, -1), reach(rows, m + n - 1, 1) + 1
+    small = max(2, int(round(0.03 * n)))            # under 3 %: the side is already at the copper's end
+    u0 = m if m - u0 <= small else u0
+    v0 = m if m - v0 <= small else v0
+    u1 = m + n if u1 - (m + n) <= small else u1
+    v1 = m + n if v1 - (m + n) <= small else v1
+
+    def at(u: float, v: float) -> np.ndarray:
+        u, v = (u - m) / n, (v - m) / n
         return (1 - u) * (1 - v) * c[0] + u * (1 - v) * c[1] + u * v * c[2] + (1 - u) * v * c[3]
 
     return np.array([at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)])
@@ -525,7 +571,7 @@ def _detect(rgb: np.ndarray, p: ElectrodeParams) -> list[Array]:
         inside = np.zeros(gray.shape, np.uint8)
         cv2.fillPoly(inside, [np.round(corners).astype(np.int32)], 255)
         if cv2.countNonZero(cv2.bitwise_and(cop_only, inside)) >= 0.1 * max(1, cv2.countNonZero(inside)):
-            corners = trim_to_copper(corners, cop_only)       # a copper array: drop non-copper edge strips
+            corners = grow_to_copper(trim_to_copper(corners, cop_only), cop_only)       # a copper array: drop non-copper edge strips
         found.append(Array(corners, tuple(map(float, corners.mean(0))), float(copper)))
     found.sort(key=lambda a: -cv2.contourArea(a.corners.astype(np.float32)))
     return found

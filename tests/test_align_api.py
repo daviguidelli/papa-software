@@ -319,6 +319,10 @@ def test_reference_sketch_lands_on_each_glass(aligned, monkeypatch, tmp_path):
     assert len(c["bridges"]) == 8 and c["ref_segs"] and len(c["ref_segs"]) == len(c["new_segs"])
     for b in c["bridges"]:
         assert b["new"] == pytest.approx((mt.R @ np.array(b["ref"]) + mt.t).tolist(), abs=2e-3)
+    og = c["on_glass"]                                     # glass estimated from the array: reference layout
+    assert og is not None and og["measured"] is False and og["swapped"] == []
+    assert og["rotation_deg"] == pytest.approx(0, abs=0.05) and og["offset_mm"] == pytest.approx([0, 0], abs=0.05)
+    assert "Array on its glass" in a.get("/api/align/substrate/S2/report", params={"z": 4.5}).text
     b1 = next(b for b in c["bridges"] if b["id"] == "B1")
     assert b1["ref"] == pytest.approx([162.5 + 12.29, 162.1 + 25 - 0.916], abs=2e-3)
     for (x0, y0, x1, y1), (u0, v0, u1, v1) in zip(c["ref_segs"], c["new_segs"]):   # same path, moved like the glass

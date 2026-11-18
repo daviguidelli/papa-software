@@ -490,6 +490,7 @@
           <span><button class="sm gold" id="alCmpReport" title="One page with the original, the calibrated substrate, both toolpaths, the bridge table and both G-codes: opens anywhere, no Pi needed">Comparison report ↓</button> <button class="sm gold" id="alCmpGcode">G-code ↓</button> <button class="sm" id="alCmpClose">Close</button></span>
         </div>
         <p class="note" id="alCmpSum" style="margin-top:6px"></p>
+      <p id="alCmpGlass" style="margin:8px 0"></p>
         <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
           <svg id="alCmpSvg" style="flex:1 1 420px;max-width:560px;background:#0b0b0b;border:1px solid var(--line);border-radius:4px"></svg>
           <table style="flex:1 1 360px"><thead><tr><th>Bridge</th><th>Reference X, Y</th><th>Modified X, Y</th><th>Moved mm</th><th>Your edit mm</th></tr></thead><tbody id="alCmpRows"></tbody></table>
@@ -1515,6 +1516,12 @@ function alCompare(id){
       +(own?` On top of that, this substrate's own sketch (<b>${esc(c.pattern_name||'own')}</b>) changes the geometry: <b>${c.edited}</b> bridge${c.edited===1?'':'s'} moved or resized (up to <b>${fmt(c.max_edit_mm,3)} mm</b>), <b>${c.added}</b> added, <b>${c.removed.length}</b> removed.`
              :' It runs the reference bridges unchanged (open it in the sketcher to adjust them for this substrate).')
       +` Bridges moved up to <b>${fmt(c.max_move_mm,3)} mm</b> in total. Red dot ${c.red_found?'found':'<span class="warn">NOT found</span>'}.`+(c.warnings.length?' <span class="warn">'+c.warnings.map(esc).join(' ')+'</span>':'');
+    const g=c.on_glass,lr=v=>v>=0?fmt(v,2)+' mm right':fmt(-v,2)+' mm left',ud=v=>v>=0?fmt(v,2)+' mm up':fmt(-v,2)+' mm down';
+    $('#alCmpGlass').innerHTML=!g?'<span class="muted">Array on the glass: set the reference photo\'s array outline (Reference fold) to compare where the array sits on the glass.</span>'
+      :`<b>Array on its glass vs the reference (JOST) substrate:</b> turned <b>${(g.rotation_deg>=0?'+':'')+fmt(g.rotation_deg,2)}°</b>, moved <b>${lr(g.offset_mm[0])}</b> and <b>${ud(g.offset_mm[1])}</b> (directions as in the reference photo). `
+       +`Reference array centre: ${lr(g.ref_from_glass_centre_mm[0])}, ${ud(g.ref_from_glass_centre_mm[1])} of the glass centre; this one: ${lr(g.new_from_glass_centre_mm[0])}, ${ud(g.new_from_glass_centre_mm[1])}. `
+       +(g.swapped.length?`<span class="bad"><b>The array is on the other side of the glass (${g.swapped.join(' and ')} swapped)</b>: the substrate is flipped or turned relative to the reference.</span> `:'<span class="good">Same side of the glass as the reference.</span> ')
+       +(g.measured?'':'<span class="warn">The glass corners are only estimated from the array, so this layout equals the reference by definition. Press <b>Set glass corners</b> for this substrate and click the 4 glass corners to measure it.</span>');
     const xy=v=>v?`${fmt(v[0],2)}, ${fmt(v[1],2)}`:'–';
     $('#alCmpRows').innerHTML=c.bridges.map(b=>b.added
         ?`<tr><td>${esc(b.id)}</td><td>–</td><td class="mono">${xy(b.new)}</td><td class="good">added</td><td class="good">new bridge</td></tr>`

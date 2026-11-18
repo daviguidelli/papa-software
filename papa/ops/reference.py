@@ -299,3 +299,32 @@ def clean_sketch(payload: dict) -> dict:
     if not (0 < w <= 100 and 0 < h <= 100):
         raise ReferenceError("The sketch's substrate size must be between 0 and 100 mm.")
     return {"area": {"w": w, "h": h}, "bridges": bridges, "units": payload.get("units", "mm")}
+
+
+def array_on_glass(ref_glass_mm: Any, ref_array_mm: Any, new_array_mm: Any, m: Match) -> dict[str, Any]:
+    """How a new substrate's electrode array sits on its glass compared with
+    the reference's array on the reference glass.
+
+    The new array is taken back into the reference glass's own frame through
+    the glass match m (new glass = R ref glass + t), so what is left is the
+    array's own turn and offset on the glass: rotation_deg (+ = counter-
+    clockwise as seen in the reference photo), offset_mm (+x = to the right,
+    +y = up, as in the reference photo), and whether it sits on the other
+    side of the glass (left/right or top/bottom swapped)."""
+    ref_g = np.asarray(ref_glass_mm, np.float64)
+    ref_a = np.asarray(ref_array_mm, np.float64)
+    back = (np.asarray(new_array_mm, np.float64) - m.t) @ m.R          # R^T (p - t), row form
+    side = float(np.mean([np.linalg.norm(ref_a[i] - ref_a[(i + 1) % 4]) for i in range(4)]))
+    turn = match(ref_a, 0, back, None, side, 1e9)
+    gc, rc, nc = ref_g.mean(0), ref_a.mean(0), back.mean(0)
+    off = nc - rc
+    ref_from_centre, new_from_centre = rc - gc, nc - gc
+    swapped = []
+    for k, name in ((0, "left/right"), (1, "top/bottom")):
+        if abs(ref_from_centre[k]) > 1.0 and np.sign(new_from_centre[k]) != np.sign(ref_from_centre[k]) \
+                and abs(new_from_centre[k]) > 0.5 * abs(ref_from_centre[k]):
+            swapped.append(name)
+    return {"rotation_deg": round(turn.rotation_deg, 3), "offset_mm": [round(float(v), 3) for v in off],
+            "ref_from_glass_centre_mm": [round(float(v), 3) for v in ref_from_centre],
+            "new_from_glass_centre_mm": [round(float(v), 3) for v in new_from_centre],
+            "swapped": swapped, "new_array_on_ref_glass": back.round(3).tolist()}

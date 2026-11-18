@@ -2588,8 +2588,10 @@ def _compare(sid: str, z: float | None = 1.0) -> dict:
         rb = ref_b[k]
         a = at(ref_st["start"]["x"], ref_st["start"]["y"], ref_st["rotation_deg"], rb)
         removed.append({"id": rb["id"], "ref": [round(a[0], 3), round(a[1], 3)]})
-    r = _ref_cfg()["placement"]
+    rc = _ref_cfg()
+    r = rc["placement"]
     ref_glass = refmod.reference_mm(r)
+    on_glass = _array_on_glass(sc, i, rc, ref_glass, mt)
     edited = [b for b in bridges if b.get("edit_mm", 0) > 0.0005 or any(abs(v) > 0.0005 for v in b.get("resized", [0, 0]))]
     return {"id": sid, "source": src, "pattern_name": pattern.get("name") or "",
             "rotation_deg": round(mt.rotation_deg, 4), "shift_mm": [round(v, 4) for v in mt.shift_mm],
@@ -2600,7 +2602,56 @@ def _compare(sid: str, z: float | None = 1.0) -> dict:
             "ref_bridges": [[*at(ref_st["start"]["x"], ref_st["start"]["y"], ref_st["rotation_deg"], rb)] for rb in ref_b],
             "ref_glass": [[round(x, 3) for x in c] for c in ref_glass.tolist()],
             "new_glass": [[round(x, 3) for x in c] for c in p.corners_mm],
-            "ref_segs": _machine_segs(ref_st), "new_segs": _machine_segs(new_st)}
+            "ref_segs": _machine_segs(ref_st), "new_segs": _machine_segs(new_st), "on_glass": on_glass}
+
+
+def _on_glass_html(c: dict) -> str:
+    """Report section: the array's turn and offset on its glass vs the reference."""
+    g = c.get("on_glass")
+    if not g:
+        return ""
+
+    def lr(v: float) -> str:
+        return f"{v:.2f} mm right" if v >= 0 else f"{-v:.2f} mm left"
+
+    def ud(v: float) -> str:
+        return f"{v:.2f} mm up" if v >= 0 else f"{-v:.2f} mm down"
+
+    o, rf, nf = g["offset_mm"], g["ref_from_glass_centre_mm"], g["new_from_glass_centre_mm"]
+    side = (f'<p class="w">⚠ The array is on the other side of the glass ({" and ".join(g["swapped"])} swapped): '
+            "the substrate is flipped or turned relative to the reference.</p>") if g["swapped"] else \
+        "<p>Same side of the glass as the reference.</p>"
+    est = "" if g.get("measured") else ('<p class="w">⚠ Glass corners estimated from the array: this layout equals '
+                                        "the reference by definition. Set the glass corners by hand to measure it.</p>")
+    return (f'<h2>Array on its glass vs the reference (JOST) substrate</h2><div class="card">'
+            f'<div class="k"><div><span>Turned on the glass</span><b>{g["rotation_deg"]:+.2f}°</b></div>'
+            f'<div><span>Moved left/right</span><b>{lr(o[0])}</b></div><div><span>Moved up/down</span><b>{ud(o[1])}</b></div></div>'
+            f'<p class="sub">Directions as in the reference photo. Reference array centre: {lr(rf[0])}, {ud(rf[1])} of the '
+            f'glass centre; this substrate: {lr(nf[0])}, {ud(nf[1])}.</p>{side}{est}</div>\n')
+
+
+def _array_on_glass(sc: dict, i: int, rc: dict, ref_glass: Any, mt: Any) -> dict | None:
+    """The array's turn and offset on its glass vs the reference's (see
+    refmod.array_on_glass), or None without a reference array outline. Only
+    meaningful when the glass corners were set by hand: a glass estimated from
+    the array has the reference layout by construction."""
+    import cv2
+    import numpy as np
+
+    if not rc.get("array_photo") or not rc.get("photo_corners"):
+        return None
+    axes_fit, _ = _camera_axes()
+    if axes_fit is None:
+        return None
+    c = corrmod.get_correction(sc["rgb"].shape[1::-1])
+    arr_mm = axes_fit.plate_to_mm(c.corrected_to_plate(np.asarray(sc["views"][i], np.float64)))
+    H = refmod.photo_to_mm(rc["photo_corners"], rc["placement"])
+    ref_arr = cv2.perspectiveTransform(np.float64([rc["array_photo"]]), H)[0]
+    out = refmod.array_on_glass(ref_glass, ref_arr, arr_mm, mt)
+    out["glass_source"] = sc["mount_info"][i].get("source")
+    out["measured"] = f"S{i + 1}" in sc.get("mount_manual", set())
+    out["ref_array"] = ref_arr.round(3).tolist()
+    return out
 
 
 def _cmp_svg(c: dict) -> str:
@@ -2732,6 +2783,7 @@ table{{width:100%;border-collapse:collapse;font:13px/1.4 ui-monospace,Menlo,mono
 <div class="card"><b>Calibrated: {h.escape(sid)} from the camera</b><p class="sub" style="margin:4px 0 10px">Its glass cut from the scan, straightened in printer millimetres and turned like the reference; the bridges it runs in pink ({'its own edited sketch' if own else 'the reference bridges, unchanged'}).</p><img src="{new_img}" alt="Calibrated substrate"></div>
 </div>
 
+{_on_glass_html(c)}
 <h2>2 · Toolpaths on the printer (mm, seen from above)</h2>
 <div class="card">{_cmp_svg(c)}
 <div class="leg" style="margin-top:10px"><span><i style="background:#9a9a9a"></i>reference glass + toolpath (original)</span><span><i style="background:#3fd0e0"></i>{h.escape(sid)}'s glass (measured)</span><span><i style="background:#ff8a2a"></i>modified toolpath</span><span>□ bridges · <span class="g">green</span> added · <span class="r">×</span> removed</span></div></div>
