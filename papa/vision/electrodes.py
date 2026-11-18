@@ -296,7 +296,72 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None, coarse_width: int 
     found is then measured on the full picture in a window around it, so the
     outline keeps full-resolution accuracy."""
     p = p or ElectrodeParams()
-    return _same_kind(_detect_all(rgb, p, coarse_width))
+    found = _same_kind(_detect_all(rgb, p, coarse_width))
+    if found:
+        return found
+    # nothing at the picture's own exposure: retry with exposure, white balance
+    # and noise evened out (a darker, tinted or noisy scan than the tuning ones)
+    fixed = denoise(normalize_light(rgb))
+    return _same_kind(_detect_all(fixed, p, coarse_width)) if fixed is not rgb else []
+
+
+# What the Pi camera's scans look like under the lights the thresholds were
+# tuned on: the bright part of the picture (holder, glass, clamps) is nearly
+# grey with a slight warm cast, and its 90th-percentile grey level is ~170.
+_REF_RG, _REF_BG, _REF_P90 = 0.98, 0.94, 170.0
+
+
+def noise_sigma(rgb: np.ndarray) -> float:
+    """Pixel noise in grey levels (Immerkaer's fast estimate on a centre crop)."""
+    g = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    h, w = g.shape
+    g = g[h // 4: h // 4 + min(h // 2, 1200), w // 4: w // 4 + min(w // 2, 1200)]
+    if g.size < 100:
+        return 0.0
+    k = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], np.float32)
+    r = np.abs(cv2.filter2D(g, -1, k))[1:-1, 1:-1]
+    return float(np.sqrt(np.pi / 2) * r.mean() / 6)
+
+
+def denoise(rgb: np.ndarray) -> np.ndarray:
+    """Smooth a noisy (dim-light, high-gain) scan before looking for lines;
+    clean scans pass through unchanged."""
+    s = noise_sigma(rgb)
+    if s < 3.0:
+        return rgb
+    return cv2.bilateralFilter(rgb, 7, 3.0 * s, 3)
+
+
+def normalize_light(rgb: np.ndarray) -> np.ndarray:
+    """Undo exposure and white-balance differences between scans, so the fixed
+    copper colour window and contrast thresholds see every scan the way they
+    see the scans they were tuned on. The bright background is brought to the
+    reference colour cast, then the whole picture is scaled so its bright end
+    sits at the reference level. Pictures already close are left alone."""
+    small = rgb if rgb.shape[1] <= 800 else cv2.resize(rgb, (800, int(rgb.shape[0] * 800 / rgb.shape[1])),
+                                                       interpolation=cv2.INTER_AREA)
+    g = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+    nz = g[g > 8]
+    if nz.size < 1000:
+        return rgb
+    lo, hi = np.percentile(nz, [60, 97])
+    m = (g >= lo) & (g <= hi)
+    if m.sum() < 500:
+        return rgb
+    r, gg, b = (float(small[..., i][m].mean()) for i in range(3))
+    if gg < 5:
+        return rgb
+    gain = np.array([_REF_RG * gg / max(r, 1), 1.0, _REF_BG * gg / max(b, 1)], np.float32)
+    gain = np.clip(gain, 0.6, 1.6)
+    p90 = float(np.percentile(nz, 90))
+    scale = float(np.clip(_REF_P90 / max(p90, 1), 0.5, 2.5))
+    if p90 > _REF_P90 and p90 < 225:      # bright but not clipped: leave close-up photos as they are
+        scale = 1.0
+    gain = gain * scale
+    if np.all(np.abs(gain - 1) < 0.04):
+        return rgb
+    lut = [np.clip(np.arange(256) * k, 0, 255).astype(np.uint8) for k in gain]
+    return np.dstack([cv2.LUT(rgb[..., i], lut[i]) for i in range(3)])
 
 
 def _same_kind(found: list[Array], frac: float = 0.25) -> list[Array]:

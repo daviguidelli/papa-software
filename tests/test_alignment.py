@@ -322,3 +322,27 @@ def test_scan38_small_array_with_clamp_parallel_to_its_lines(width):
     c = found[0].corners / f + [459, 304]
     assert c[:, 0].min() == pytest.approx(778, abs=4) and c[:, 0].max() == pytest.approx(815, abs=4)
     assert c[:, 1].min() == pytest.approx(561, abs=4) and c[:, 1].max() == pytest.approx(594, abs=4)
+
+
+@pytest.mark.parametrize("look", ["dark", "warm", "blue"])
+def test_array_found_under_other_lighting(look):
+    """A dimmer or differently white-balanced scan than the tuning ones still
+    finds the array (scan #38, upscaled to a camera-sized picture)."""
+    import cv2
+
+    from papa.vision import electrodes
+
+    img = cv2.imread("tests/data/real_scan38_screenshot.png")[304:912, 459:1251].astype(np.float32)
+    f = 3000 / img.shape[1]
+    img = cv2.resize(img, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
+    if look == "dark":
+        img *= 0.55
+    elif look == "warm":
+        img[..., 0] *= 0.85; img[..., 2] *= 1.12
+    else:
+        img[..., 0] *= 1.18; img[..., 2] *= 0.85
+    rgb = cv2.cvtColor(np.clip(img, 0, 255).astype(np.uint8), cv2.COLOR_BGR2RGB)
+    found = electrodes.detect(rgb)
+    assert len(found) == 1
+    cx, cy = found[0].center
+    assert abs(cx / f + 459 - 796) < 20 and abs(cy / f + 304 - 577) < 20
