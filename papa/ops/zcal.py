@@ -50,7 +50,17 @@ def _steady_force(loadcell, prev_f: float) -> float:
     import time
     last = None
     for _ in range(GLITCH_RETRIES):
-        f = loadcell.newtons()
+        try:
+            f = loadcell.newtons()
+        except TimeoutError:
+            # The chip dropped out for a moment. The head is stopped, so wait
+            # for it to come back (wake gives it up to 12 s) and read again.
+            wake = getattr(loadcell, "wake", None)
+            if wake is None:
+                raise
+            wake()
+            getattr(loadcell, "settle", lambda: True)()
+            f = loadcell.newtons()
         if abs(f - prev_f) <= MAX_JUMP_N:
             return f
         if last is not None and abs(f - last) <= 0.2:      # two agreeing reads: it is real
@@ -101,7 +111,11 @@ def calibrate_z(
         travelled += step_mm
         steps += 1
         z_now = prev_z - step_mm
-        force = _steady_force(loadcell, prev_f)
+        try:
+            force = _steady_force(loadcell, prev_f)
+        except Exception:
+            printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)       # never leave the head pressing
+            raise
 
         if force >= abort_force_n:
             printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
