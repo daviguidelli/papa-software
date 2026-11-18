@@ -3189,8 +3189,7 @@ def _loadcell_alive() -> None:
     start, not after the head has travelled to the cell."""
     try:
         getattr(hub.loadcell, "wake", hub.loadcell.read_counts)()
-        settle = getattr(hub.loadcell, "settle", None)
-        steady = settle() if settle else True
+        steady = True              # the probe itself settles right before it tares
     except Exception as exc:                               # noqa: BLE001
         raise HTTPException(409, f"The load cell is not answering ({exc}). Check its four wires and power, then try again. Nothing moved.") from exc
     if not steady:

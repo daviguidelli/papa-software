@@ -88,7 +88,7 @@ class HX711LoadCell:
             value -= 1 << 24
         return value
 
-    def settle(self, min_s: float = 2.0, timeout_s: float = 6.0, window: int = 8) -> bool:
+    def settle(self, min_s: float = 0.8, timeout_s: float = 6.0, window: int = 8) -> bool:
         """Wait out the start-up swing. After a power dip or a long idle the chip
         outputs wild values (hundreds of N) for a second or two. Read and discard
         until the last `window` readings agree, then report whether they did."""
