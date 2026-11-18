@@ -363,3 +363,25 @@ def test_scan48_array_on_white_holder_below_blue_clamp(width):
     c = found[0].corners / f
     assert 740 < c[:, 0].min() < 760 and 855 < c[:, 0].max() < 875
     assert 530 < c[:, 1].min() < 550 and 630 < c[:, 1].max() < 645
+
+
+@pytest.mark.parametrize("width", [2000, 5327])
+def test_caution_stickers_are_not_arrays(width):
+    """Scan #64 (screenshot): yellow-and-black CAUTION labels beside the plate
+    must not be taken for an array; the copper array must be found."""
+    import cv2
+    import numpy as np
+
+    from papa.vision import electrodes as el
+
+    pic = cv2.imread("tests/data/real_scan64_stickers.png")
+    f = width / pic.shape[1]
+    rgb = cv2.cvtColor(cv2.resize(pic, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC), cv2.COLOR_BGR2RGB)
+    found = el.detect(rgb)
+    assert len(found) == 1
+    c = found[0].corners / f
+    assert 312 < c[:, 0].min() < 324 and 350 < c[:, 0].max() < 362
+    for box in ((38, 190, 112, 232), (612, 178, 696, 232)):            # the two labels
+        x0, y0, x1, y1 = [v * f for v in box]
+        label = el.Array(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]), (0, 0), 0)
+        assert not el.is_electrode_array(rgb, label, el.ElectrodeParams())

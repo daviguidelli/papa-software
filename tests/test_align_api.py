@@ -381,3 +381,15 @@ def test_scan_photo_download_and_code_version(aligned):
     assert j["scan"]["timing"]["code"]
     r = aligned.get("/api/align/photo")
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and r.content[:2] == b"\xff\xd8"
+
+
+def test_last_scan_survives_a_restart(aligned):
+    import apps.server as srv
+
+    aligned.post("/api/align/scan", json={"save": False})
+    n = len(srv.hub.align_scan["views"])
+    assert n and (srv._last_scan_dir() / "state.json").is_file()
+    srv.hub.align_scan = None
+    srv._restore_scan()
+    assert srv.hub.align_scan is not None and len(srv.hub.align_scan["views"]) == n
+    assert aligned.get("/api/align").json()["scan"]["substrates"]

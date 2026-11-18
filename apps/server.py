@@ -193,6 +193,7 @@ hub = Hub()
 @app.on_event("startup")
 def _start_keepalive() -> None:
     threading.Thread(target=hub._keepalive, daemon=True, name="keepalive").start()
+    threading.Thread(target=_restore_scan, daemon=True, name="restore-scan").start()
 
 
 # ---------- pages ----------
@@ -1881,6 +1882,65 @@ def _render_scan(sc: dict) -> None:
     out_w = min(1600, w)
     small = cv2.resize(sc["drawn"], (out_w, round(sc["drawn"].shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
     sc["image"], sc["shown_scale"] = _jpeg(small), out_w / w
+    try:
+        _persist_scan(sc)
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"could not keep the scan for a restart: {exc}", flush=True)
+
+
+def _last_scan_dir() -> Path:
+    return STATE_DIR / "scans" / "last"
+
+
+def _persist_scan(sc: dict) -> None:
+    """Keep the live scan (photo, arrays, hand-set corners) on disk, so a
+    server restart or a software update does not lose it."""
+    import json
+
+    import cv2
+    import numpy as np
+
+    d = _last_scan_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    if sc.get("_kept_photo") is not id(sc["rgb"]):
+        tmp = d / "photo.tmp.jpg"
+        cv2.imwrite(str(tmp), cv2.cvtColor(sc["rgb"], cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 97])
+        tmp.replace(d / "photo.jpg")
+        sc["_kept_photo"] = id(sc["rgb"])
+    state = {"views": [np.asarray(v).tolist() for v in sc["views"]], "manual": sorted(sc.get("manual", set())),
+             "mounts": [None if m is None else np.asarray(m).tolist() for m in sc.get("mounts", [])],
+             "mount_manual": sorted(sc.get("mount_manual", set())), "time": sc.get("time"),
+             "scan_id": sc.get("scan_id"), "timing": sc.get("timing")}
+    (d / "state.tmp.json").write_text(json.dumps(state))
+    (d / "state.tmp.json").replace(d / "state.json")
+
+
+def _restore_scan() -> None:
+    """Bring back the last scan after a restart (see _persist_scan)."""
+    import json
+
+    import cv2
+    import numpy as np
+
+    d = _last_scan_dir()
+    if hub.align_scan or not (d / "state.json").is_file() or not (d / "photo.jpg").is_file():
+        return
+    try:
+        st = json.loads((d / "state.json").read_text())
+        bgr = cv2.imread(str(d / "photo.jpg"))
+        if bgr is None:
+            return
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        sc: dict[str, Any] = {"rgb": rgb, "_kept_photo": id(rgb), "manual": set(st.get("manual") or []),
+                              "time": st.get("time") or "", "scan_id": st.get("scan_id"), "timing": st.get("timing"),
+                              "views": [np.asarray(v, np.float64) for v in st.get("views") or []],
+                              "mounts": [None if m is None else np.asarray(m, np.float64) for m in st.get("mounts") or []],
+                              "mount_manual": set(st.get("mount_manual") or [])}
+        _render_scan(sc)
+        hub.align_scan = sc
+        print(f"restored scan #{st.get('scan_id')} from before the restart", flush=True)
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"could not restore the last scan: {exc}", flush=True)
 
 
 def _save_scan(sc: dict) -> None:

@@ -294,20 +294,63 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None, coarse_width: int 
     A big picture (a full-resolution scan) is searched on a smaller copy
     about coarse_width wide, which is many times faster, and each array
     found is then measured on the full picture in a window around it, so the
-    outline keeps full-resolution accuracy."""
+    outline keeps full-resolution accuracy.
+
+    Every find must look like an electrode array: several evenly spaced
+    parallel lines, in pale copper (not a strong yellow such as a CAUTION
+    label). If nothing passes, the search is repeated with the exposure and
+    white balance evened out, then on a smaller copy."""
     p = p or ElectrodeParams()
-    found = _same_kind(_detect_all(rgb, p, coarse_width))
-    if found:
-        return found
-    # nothing at the picture's own exposure: retry with exposure, white balance
-    # and noise evened out (a darker, tinted or noisy scan than the tuning ones)
-    fixed = denoise(normalize_light(rgb))
-    if fixed is not rgb:
-        found = _same_kind(_detect_all(fixed, p, coarse_width))
-    if not found and rgb.shape[1] > 1.5 * 1400 and coarse_width != 1400:
-        # last try: search a smaller copy (the size the scan is shown at on screen)
-        found = _same_kind(_detect_all(fixed, p, 1400))
-    return found
+    tries = [(rgb, coarse_width)]
+    fixed = None
+    for attempt in range(3):
+        if attempt == 1:
+            fixed = denoise(normalize_light(rgb))
+            if fixed is rgb:
+                continue
+            img, cw = fixed, coarse_width
+        elif attempt == 2:
+            if rgb.shape[1] <= 1.5 * 1400 or coarse_width == 1400:
+                break
+            img, cw = (fixed if fixed is not None else rgb), 1400
+        else:
+            img, cw = tries[0]
+        found = [a for a in _detect_all(img, p, cw) if is_electrode_array(img, a, p)]
+        if found:
+            return _same_kind(found)
+    return []
+
+
+MIN_LINES = 6          # evenly spaced lines a find must show (real arrays show 8 or more)
+LABEL_SAT = 140        # copper saturation above this, with a yellow hue, is a printed label
+LABEL_HUE = 25
+
+
+def is_electrode_array(rgb: np.ndarray, a: "Array", p: ElectrodeParams) -> bool:
+    """A find is kept only if it shows at least MIN_LINES evenly spaced lines
+    inside its outline and its copper is the pale gold of the electrodes,
+    not the strong yellow of a warning sticker."""
+    h, w = rgb.shape[:2]
+    c = np.asarray(a.corners, np.float64)
+    size = float(max(np.linalg.norm(c[1] - c[0]), np.linalg.norm(c[2] - c[1])))
+    k = max(3, int(round(p.close_frac * w)) | 1)
+    m = 0.5 * size + 2 * k
+    x0, y0 = int(max(0, c[:, 0].min() - m)), int(max(0, c[:, 1].min() - m))
+    x1, y1 = int(min(w, c[:, 0].max() + m)), int(min(h, c[:, 1].max() + m))
+    win = rgb[y0:y1, x0:x1]
+    if win.size == 0:
+        return False
+    local = c - [x0, y0]
+    inside = np.zeros(win.shape[:2], np.uint8)
+    cv2.fillPoly(inside, [np.round(local).astype(np.int32)], 255)
+    cop = cv2.bitwise_and(copper_mask(win, p), inside) > 0
+    if cop.sum() >= 20:
+        hsv = cv2.cvtColor(win, cv2.COLOR_RGB2HSV)
+        hue, sat = float(np.median(hsv[..., 0][cop])), float(np.median(hsv[..., 1][cop]))
+        if sat > LABEL_SAT and hue > LABEL_HUE:
+            return False                                   # a yellow printed label, not copper
+    lines = dark_lines(cv2.cvtColor(win, cv2.COLOR_RGB2GRAY), k)
+    return stripes(lines, local) >= MIN_LINES
 
 
 # What the Pi camera's scans look like under the lights the thresholds were
