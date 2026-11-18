@@ -3192,15 +3192,18 @@ def zhome_run(payload: dict | None = None) -> dict:
     lc, zc, sp = hub.cal.load_cell, hub.machine.zcal, hub.machine.speeds
     if hub.guard.floor is None:
         raise HTTPException(400, "Set a Z floor first (a few mm below the load cell) so the probe may descend")
-    if not (lc.get("xy_set") and lc.get("z_safe_set")):
-        raise HTTPException(400, "Capture the load cell XY and the probe start Z first")
+    st = _zhome_settings()
+    framed = st.get("ref") is not None and st["ref"] == hub.guard.ref
+    if not lc.get("xy_set"):
+        raise HTTPException(400, "Set the load cell position first (Set here on the Load cell row)")
+    if not framed and not lc.get("z_safe_set"):
+        raise HTTPException(400, "Set the load cell position first, with the tip 3 to 5 mm above the cell (Set here on the Load cell row)")
     if not getattr(hub.loadcell, "scaled", True):
         raise HTTPException(400, "Scale the load cell first (known mass, once)")
     p = hub.printer.position()
     if not all(a in p.homed for a in "xyz"):
         raise HTTPException(400, "Home X and Y and set Z first")
-    st = _zhome_settings()
-    if st.get("ref") is not None and st["ref"] == hub.guard.ref:
+    if framed:
         # the Z frame from the last Z home is still the one in use (also after a restart
         # and a Z restore), so start a fixed distance above the cell contact
         start_z = float(st["ref_z"]) + float(st["probe_start_mm"])

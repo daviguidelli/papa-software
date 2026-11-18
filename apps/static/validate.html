@@ -1330,7 +1330,7 @@ const SETUP=[
   ['swab1','Swab 1 · pickup',async()=>post('/api/auto/teach',{target:'pickup'})],
   ['swab2','Swab 2 · pickup',async()=>post('/api/auto/pickup2')],
   ['bin','Bin',async()=>post('/api/auto/teach',{target:'bin'})],
-  ['cell','Load cell',async()=>post('/api/loadcell/position',{capture_xy:true})]];
+  ['cell','Load cell · tip 3–5 mm above',async()=>post('/api/loadcell/position',{capture_xy:true,capture_z:true})]];
 let setupCache='';
 function paintSetup(){
   const z=zhData;if(!z||!z.positions)return;
