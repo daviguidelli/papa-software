@@ -393,3 +393,45 @@ def test_last_scan_survives_a_restart(aligned):
     srv._restore_scan()
     assert srv.hub.align_scan is not None and len(srv.hub.align_scan["views"]) == n
     assert aligned.get("/api/align").json()["scan"]["substrates"]
+
+
+def test_slots_number_each_holder_position(aligned):
+    """A 1 x 4 slot grid over the whole picture: each array gets the slot its
+    centre falls in, S1, S2, ... follow the slots, and the numbers reach the
+    table, the picture, the G-code header and survive a new scan."""
+    a = aligned
+    a.post("/api/align/slots", json={"clear": True})
+    j = a.post("/api/align/scan", json={"save": False}).json()
+    assert all(s.get("slot") is None for s in j["scan"]["substrates"])
+    srv, sc = a.server, a.server.hub.align_scan
+    cen = np.array([np.asarray(v).mean(0) for v in sc["views"]])
+    (x0, y0), (x1, y1) = cen.min(0) - 40, cen.max(0) + 40       # a grid just around the arrays
+    box = srv._view_to_drawn(sc, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+    dh, dw = sc["drawn"].shape[:2]
+    pts = (box / [dw, dh]).tolist()
+    r = a.post("/api/align/slots", json={"rows": 1, "cols": 4, "points": pts})
+    assert r.status_code == 200, r.text
+    assert r.json()["slots"]["rows"] == 1 and len(r.json()["slots"]["corners"]) == 4
+    j = a.post("/api/align/scan", json={"save": False}).json()
+    subs = j["scan"]["substrates"]
+    slots = [s["slot"] for s in subs]
+    assert all(isinstance(k, int) and 1 <= k <= 4 for k in slots)
+    assert slots == sorted(slots)                                 # S1, S2, ... in slot order
+    assert len(set(slots)) > 1                                     # arrays in different places differ
+    assert slots == srv._slot_of_views(srv.hub.align_scan["views"])
+    g = a.get(f"/api/align/substrate/{subs[0]['id']}/gcode", params={"z": 4.5})
+    if g.status_code == 200:
+        assert f"slot {slots[0]}" in g.text.splitlines()[0] or any(f"slot {slots[0]}" in l for l in g.text.splitlines()[:3])
+    # changing only rows/cols keeps the clicked corners
+    r = a.post("/api/align/slots", json={"rows": 2, "cols": 4})
+    assert r.json()["slots"]["rows"] == 2
+    a.post("/api/align/slots", json={"clear": True})
+    assert a.get("/api/align/slots").json()["slots"] is None
+
+
+def test_slots_need_four_corners(aligned):
+    aligned.post("/api/align/scan", json={"save": False})
+    r = aligned.post("/api/align/slots", json={"rows": 3, "cols": 3, "points": [[0, 0], [1, 1]]})
+    assert r.status_code == 400
+    aligned.post("/api/align/slots", json={"clear": True})
+    assert aligned.post("/api/align/slots", json={"rows": 3, "cols": 3}).status_code == 400

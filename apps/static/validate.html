@@ -492,6 +492,14 @@
       </div>
       <p class="note" id="alMsg"></p>
       <img id="alImg" alt="Detected arrays with their placed toolpaths" style="width:100%;display:none;margin-top:10px;border:1px solid var(--line);border-radius:4px">
+      <div class="row" id="alSlotRow" style="align-items:center;margin-top:8px;gap:8px" hidden>
+        <span class="muted" style="font-size:12.5px">Slots</span>
+        <label class="muted" style="font-size:12.5px">rows <input id="alSlotR" type="number" min="1" max="20" value="3" style="width:52px"></label>
+        <label class="muted" style="font-size:12.5px">columns <input id="alSlotC" type="number" min="1" max="20" value="3" style="width:52px"></label>
+        <button id="alSlotSet">Set slot grid</button>
+        <button id="alSlotClear">Clear</button>
+        <span class="note" id="alSlotMsg" style="margin:0"></span>
+      </div>
       <p class="note" id="alLegend" hidden>The picture is square to the printer: right is exactly +X, up is exactly +Y, grid lines every 10 mm. Green outline: array as measured (dot = its top-left corner; orange = corners set by hand in the sketcher). White: scrub path. Gold: lifted hops. Red: bridges. Red outline: this array does not match its pattern. Arrows: printer +X and +Y.</p>
       <table style="margin-top:12px" id="alTab" hidden>
         <thead><tr><th><input type="checkbox" id="alAll" title="Select all"></th><th>Substrate</th><th>Pattern</th><th>Measured mm</th><th>Pattern mm</th><th>Turn °</th><th>Origin X, Y mm</th><th>Fit mm</th><th></th></tr></thead>
@@ -1373,7 +1381,7 @@ function paintAlign(){
   else if(sc&&sc.stale){m.textContent='Patterns or checks changed since this photo: the numbers below are updated, the picture is not. Scan again to redraw.';m.className='note'}
   else if(!m.dataset.keep){m.textContent='';m.className='note'}
   const shown=sc?sc.image:null;
-  $('#alImg').style.display=shown?'block':'none';if(shown&&$('#alImg').dataset.src!==shown){$('#alImg').src=shown;$('#alImg').dataset.src=shown}
+  $('#alImg').style.display=shown?'block':'none';$('#alSlotRow').hidden=!shown;if(shown&&$('#alImg').dataset.src!==shown){$('#alImg').src=shown;$('#alImg').dataset.src=shown}
   $('#alLegend').hidden=!sc;
   if(sc&&sc.pixel_only&&sc.substrates.length&&!sc.warnings.length){m.textContent='Arrays found and labelled. Press Sketch to draw the bridges on each one. Sizes in mm, turns and toolpaths appear once the camera points are taught (below).';m.className='note'}
   const subs=sc?sc.substrates:[];
@@ -1387,14 +1395,14 @@ function paintAlign(){
   const ids=subs.map(x=>x.id);alSel=new Set([...alSel].filter(i=>ids.includes(i)));
   if(sc&&sc.pixel_only){
     $('#alRows').innerHTML=subs.map(x=>`<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>
-      <td><b>${x.id}</b></td><td>${esc(x.pattern_name)}</td><td colspan="5" class="muted">${x.size_px[0]} × ${x.size_px[1]} px (mm after the camera points)</td>
+      <td><b>${x.id}</b>${x.slot?`<br><span class="mono" style="color:#3cc8e6">slot ${x.slot}</span>`:''}</td><td>${esc(x.pattern_name)}</td><td colspan="5" class="muted">${x.size_px[0]} × ${x.size_px[1]} px (mm after the camera points)</td>
       <td style="white-space:nowrap"><a class="btn sm gold" href="/static/bridge_sketcher.html?substrate=${x.id}">Sketch</a></td></tr>
       <tr><td></td><td colspan="8" style="padding-top:0;font-size:12px;text-align:left">${x.crop?`<img src="${x.crop}" alt="${x.id} close-up" style="float:left;width:300px;max-width:45%;margin:2px 14px 6px 0;border:1px solid var(--line);border-radius:3px">`:''}<span class="muted">${x.problems.map(esc).join(' ')}</span></td></tr>`).join('');
   }else
   $('#alRows').innerHTML=subs.map(x=>{
     const ok=!x.problems.length,err=x.size_error_mm.map(v=>(v>=0?'+':'')+fmt(v,2)).join(', ');
     return `<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>
-      <td><b>${x.id}</b></td><td>${esc(x.pattern_name)}</td>
+      <td><b>${x.id}</b>${x.slot?`<br><span class="mono" style="color:#3cc8e6">slot ${x.slot}</span>`:''}</td><td>${esc(x.pattern_name)}</td>
       <td>${fmt(x.measured_mm[0],2)} × ${fmt(x.measured_mm[1],2)}<br><span class="${Math.max(...x.size_error_mm.map(Math.abs))>a.settings.size_tolerance_mm?'err':'muted'}">${err}</span></td>
       <td>${fmt(x.pattern_mm[0],2)} × ${fmt(x.pattern_mm[1],2)}</td>
       <td class="${Math.abs(x.rotation_deg)>a.settings.max_rotation_deg?'err':''}">${(x.rotation_deg>=0?'+':'')+fmt(x.rotation_deg,2)}</td>
@@ -1693,6 +1701,26 @@ document.getElementById('gsSave').addEventListener('click',async()=>{
   catch(e){m.textContent=e.message||String(e)}
 });
 ['gsShift','gsClose'].forEach(id=>$('#'+id).addEventListener('input',e=>e.target.dataset.dirty=1));
+
+// ---- slots: fixed numbers for holder positions ----
+let alSlotPts=null;
+async function alSlotLoad(){try{const j=await (await fetch('/api/align/slots')).json();const sl=j.slots;
+  if(sl){$('#alSlotR').value=sl.rows;$('#alSlotC').value=sl.cols;$('#alSlotMsg').textContent=`${sl.rows} × ${sl.cols} grid set: slot 1 is top-left, numbered left to right, then down.`}
+  else $('#alSlotMsg').textContent='No slot grid yet: press Set slot grid, then click the 4 outer corners of the holder grid on the picture.'}catch(e){}}
+$('#alSlotSet').onclick=()=>{alSlotPts=[];$('#alImg').style.cursor='crosshair';
+  $('#alSlotMsg').textContent='Click the outer corners of the holder grid: 1 top-left, 2 top-right, 3 bottom-right, 4 bottom-left.'};
+$('#alSlotClear').onclick=async()=>{const r=await fetch('/api/align/slots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clear:true})});
+  if(r.ok){alSlotPts=null;await alSlotLoad();S.al=await api('/api/align');paintAlign()}};
+async function alSlotSend(body){const r=await fetch('/api/align/slots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));if(!r.ok){$('#alSlotMsg').textContent=j.detail||'Could not set the slots.';return}
+  await alSlotLoad();S.al=await api('/api/align');paintAlign()}
+['#alSlotR','#alSlotC'].forEach(q=>$(q).onchange=()=>alSlotSend({rows:+$('#alSlotR').value,cols:+$('#alSlotC').value}));
+$('#alImg').addEventListener('click',e=>{if(!alSlotPts)return;const b=e.target.getBoundingClientRect();
+  alSlotPts.push([(e.clientX-b.left)/b.width,(e.clientY-b.top)/b.height]);
+  $('#alSlotMsg').textContent=`Corner ${alSlotPts.length} of 4 set.`+(alSlotPts.length<4?` Next: ${['top-left','top-right','bottom-right','bottom-left'][alSlotPts.length]}.`:' Saving…');
+  if(alSlotPts.length===4){const pts=alSlotPts;alSlotPts=null;$('#alImg').style.cursor='';
+    alSlotSend({rows:+$('#alSlotR').value,cols:+$('#alSlotC').value,points:pts})}});
+alSlotLoad();
 </script>
 </body>
 </html>

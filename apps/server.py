@@ -1586,6 +1586,7 @@ def _align_info() -> dict:
             subs.append({"id": sid, "size_px": [round(float(np.linalg.norm(v[1] - v[0])), 1),
                                                 round(float(np.linalg.norm(v[3] - v[0])), 1)],
                          "crop": sc["crops"].get(sid), "manual": sid in sc.get("manual", set()),
+                         "slot": _sub_slot(sc, sid),
                          "pattern_name": (pat or {}).get("name") or ("own pattern" if pat else "not sketched yet"),
                          "problems": ["Teach the camera points to place this substrate's toolpath on the printer."]})
         info["scan"] = {"pixel_only": True, "substrates": subs, "timing": sc.get("timing"), "warnings": [] if subs else
@@ -1607,6 +1608,7 @@ def _align_info() -> dict:
             sub["problems"] = list(sub["warnings"]) + bad
             sub["crop"] = sc.get("crops", {}).get(sid)
             sub["manual"] = sid in sc.get("manual", set())
+            sub["slot"] = _sub_slot(sc, sid)
             mi = (sc.get("mount_info") or [None] * len(d["substrates"]))[int(sid[1:]) - 1]
             sub["mount"] = None if mi is None else {"source": mi["source"], **mi["match"].as_dict(),
                                                     "gcode_ready": _ref_ready()[0]}
@@ -1624,7 +1626,8 @@ def _align_info() -> dict:
 
 
 def _draw_alignment(img: Any, result: alignmod.ScanResult, box: tuple[float, float, float, float],
-                    ppm: float, only: str | None = None, overview: bool = True) -> Any:
+                    ppm: float, only: str | None = None, overview: bool = True,
+                    slots: dict | None = None) -> Any:
     """Draw on a BGR printer view (see alignmod.printer_view: right = +X, up = +Y):
     each array as measured (green, red if it does not match its pattern), its
     placed toolpath (white scrub, gold hops), its bridges (red), and in the
@@ -1687,7 +1690,9 @@ def _draw_alignment(img: Any, result: alignmod.ScanResult, box: tuple[float, flo
         cv2.circle(img, (int(o[0]), int(o[1])), 3 * t, colour, -1, cv2.LINE_AA)     # pattern origin
         if overview:
             q = at(p.corners_mm)
-            cv2.putText(img, f"{p.id}  {p.rotation_deg:+.2f} deg", (int(q[:, 0].min()), int(q[:, 1].min()) - 8 * t),
+            sl = (slots or {}).get(p.id)
+            cv2.putText(img, f"{p.id}{f' slot {sl}' if sl else ''}  {p.rotation_deg:+.2f} deg",
+                        (int(q[:, 0].min()), int(q[:, 1].min()) - 8 * t),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55 * t, colour, t, cv2.LINE_AA)
     if overview:                                    # +X right and +Y up, exactly
         L = int(0.1 * W)
@@ -1747,7 +1752,10 @@ def _scan_views(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.Printer
     ppm = min(2400 / (box[1] - box[0]), 2400 / (box[3] - box[2]),
               1 / (corrmod.get_correction(result.photo_size)._step * axes_fit.mm_per_plate_px))
     over = cv2.cvtColor(alignmod.printer_view(rgb, axes_fit, box, ppm), cv2.COLOR_RGB2BGR)
-    over = _draw_alignment(over, result, box, ppm)
+    if sc is not None:
+        sc["draw_map"] = ("printer", box, ppm)
+    slots = {f"S{i + 1}": k for i, k in enumerate((sc or {}).get("slots") or [])}
+    over = _draw_alignment(over, result, box, ppm, slots=slots)
     _draw_mounts(over, sc, axes_fit, box, ppm)
     crops = {}
     for p in result.placements:
@@ -1792,6 +1800,7 @@ def _scan_photo(rgb: Any, save: bool, t_photo: float) -> dict:
     if not sc["views"] and params != ElectrodeParams():
         # detector settings saved on this machine found nothing: try the built-in ones
         sc["views"] = alignmod.find(rgb, ElectrodeParams(), corrected=view)
+    sc["views"] = _by_slot(sc["views"])          # S1, S2, ... follow the slot numbers
     t_find = time.monotonic() - t
     t = time.monotonic()
     _render_scan(sc)
@@ -1861,6 +1870,172 @@ def _pattern_of(sid: str, result: alignmod.ScanResult | None = None) -> dict:
     return _scrub_tab_pattern()
 
 
+# ---------- slots: fixed numbers for the holder positions on the plate ----------
+
+def _slot_txt(sc: dict, sid: str) -> str:
+    k = _sub_slot(sc, sid) if sc.get("views") is not None else None
+    return f", slot {k}" if k else ""
+
+
+def _slots_file() -> Path:
+    return STATE_DIR / "slots.json"
+
+
+def _slots() -> dict | None:
+    """The holder grid: {rows, cols, corners} with corners the grid's outer
+    corners (top-left, top-right, bottom-right, bottom-left) in the
+    straightened camera view. The camera is fixed, so it is set once."""
+    import json
+
+    try:
+        sl = json.loads(_slots_file().read_text())
+    except (OSError, ValueError):
+        return None
+    if not sl.get("corners") or len(sl["corners"]) != 4:
+        return None
+    return sl
+
+
+def _slot_of_views(views: list, sl: dict | None = None) -> list[int | None]:
+    """Slot number (1 = top-left, reading left to right, then down) of each
+    array's centre, or None outside the grid."""
+    import cv2
+    import numpy as np
+
+    sl = sl if sl is not None else _slots()
+    if not sl:
+        return [None] * len(views)
+    rows, cols = int(sl["rows"]), int(sl["cols"])
+    H = cv2.getPerspectiveTransform(np.float32(sl["corners"]),
+                                    np.float32([[0, 0], [cols, 0], [cols, rows], [0, rows]]))
+    out: list[int | None] = []
+    for v in views:
+        u, w = cv2.perspectiveTransform(np.float64([[np.asarray(v, np.float64).mean(0)]]), H)[0, 0]
+        if -0.25 <= u <= cols + 0.25 and -0.25 <= w <= rows + 0.25:
+            c, r = min(cols - 1, max(0, int(u))), min(rows - 1, max(0, int(w)))
+            out.append(r * cols + c + 1)
+        else:
+            out.append(None)
+    return out
+
+
+def _by_slot(views: list) -> list:
+    slots = _slot_of_views(views)
+    if not any(s is not None for s in slots):
+        return views
+    order = sorted(range(len(views)), key=lambda i: (slots[i] is None, slots[i] or 0, i))
+    return [views[i] for i in order]
+
+
+def _sub_slot(sc: dict, sid: str) -> int | None:
+    sl = sc.get("slots")
+    i = int(sid[1:]) - 1
+    return sl[i] if sl and 0 <= i < len(sl) else None
+
+
+def _view_to_drawn(sc: dict, pts: Any) -> Any:
+    """Straightened-view pixels -> pixels of the drawn scan picture."""
+    import numpy as np
+
+    pts = np.asarray(pts, np.float64)
+    dm = sc.get("draw_map")
+    if not dm or dm[0] == "view":
+        return pts
+    _, box, ppm = dm
+    axes_fit, _ = _camera_axes()
+    c = corrmod.get_correction(sc["rgb"].shape[1::-1])
+    mm = axes_fit.plate_to_mm(c.corrected_to_plate(pts))
+    return np.c_[(mm[:, 0] - box[0]) * ppm - 0.5, (box[3] - mm[:, 1]) * ppm - 0.5]
+
+
+def _drawn_to_view(sc: dict, pts: Any) -> Any:
+    import numpy as np
+
+    pts = np.asarray(pts, np.float64)
+    dm = sc.get("draw_map")
+    if not dm or dm[0] == "view":
+        return pts
+    _, box, ppm = dm
+    axes_fit, _ = _camera_axes()
+    c = corrmod.get_correction(sc["rgb"].shape[1::-1])
+    mm = np.c_[box[0] + (pts[:, 0] + 0.5) / ppm, box[3] - (pts[:, 1] + 0.5) / ppm]
+    return (axes_fit.mm_to_plate(mm) - c._origin) / c._step
+
+
+def _draw_slots(sc: dict, drawn: Any) -> None:
+    """The holder grid and its slot numbers on the scan picture."""
+    import cv2
+    import numpy as np
+
+    sl = _slots()
+    if not sl:
+        return
+    rows, cols = int(sl["rows"]), int(sl["cols"])
+    H = cv2.getPerspectiveTransform(np.float32([[0, 0], [cols, 0], [cols, rows], [0, rows]]),
+                                    np.float32(sl["corners"]))
+
+    def grid(uv: Any) -> Any:
+        return _view_to_drawn(sc, cv2.perspectiveTransform(np.float64([uv]), H)[0])
+
+    t = max(1, drawn.shape[1] // 1200)
+    colour = (230, 200, 60)                      # BGR: light blue-cyan
+    for r in range(rows + 1):
+        p = grid([[0, r], [cols, r]])
+        cv2.line(drawn, tuple(np.round(p[0]).astype(int)), tuple(np.round(p[1]).astype(int)), colour, t, cv2.LINE_AA)
+    for c in range(cols + 1):
+        p = grid([[c, 0], [c, rows]])
+        cv2.line(drawn, tuple(np.round(p[0]).astype(int)), tuple(np.round(p[1]).astype(int)), colour, t, cv2.LINE_AA)
+    cell = float(np.linalg.norm(grid([[0, 0], [1, 0]])[1] - grid([[0, 0], [1, 0]])[0]))
+    fs = max(0.6, cell / 110)
+    for r in range(rows):
+        for c in range(cols):
+            p = grid([[c + 0.12, r + 0.3]])[0]
+            txt = str(r * cols + c + 1)
+            cv2.putText(drawn, txt, tuple(np.round(p).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0),
+                        4 * t, cv2.LINE_AA)
+            cv2.putText(drawn, txt, tuple(np.round(p).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, fs, colour,
+                        2 * t, cv2.LINE_AA)
+
+
+@app.get("/api/align/slots")
+def align_slots_get() -> dict:
+    return {"slots": _slots()}
+
+
+@app.post("/api/align/slots")
+def align_slots_set(payload: dict) -> dict:
+    """Set the holder grid once: rows, cols and its 4 outer corners clicked
+    on the scan picture (as fractions of the shown picture, top-left,
+    top-right, bottom-right, bottom-left), or {clear: true}."""
+    import json
+
+    import numpy as np
+
+    if payload.get("clear"):
+        _slots_file().unlink(missing_ok=True)
+    else:
+        rows, cols = int(payload.get("rows") or 0), int(payload.get("cols") or 0)
+        if not (1 <= rows <= 20 and 1 <= cols <= 20):
+            raise HTTPException(400, "Rows and columns must be 1 to 20.")
+        old = _slots()
+        if payload.get("points"):
+            sc = _scan_or_400()
+            pts = np.asarray(payload["points"], np.float64)
+            if pts.shape != (4, 2):
+                raise HTTPException(400, "Click the 4 outer corners of the holder grid.")
+            dh, dw = sc["drawn"].shape[:2]
+            corners = _drawn_to_view(sc, pts * [dw, dh]).round(2).tolist()
+        elif old:
+            corners = old["corners"]
+        else:
+            raise HTTPException(400, "Click the 4 outer corners of the holder grid on the scan first.")
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _slots_file().write_text(json.dumps({"rows": rows, "cols": cols, "corners": corners}))
+    if hub.align_scan:
+        _render_scan(hub.align_scan)
+    return {"slots": _slots(), **_align_info()}
+
+
 def _render_scan(sc: dict) -> None:
     """(Re)place and (re)draw a scan from its photo and its arrays' corners,
     after a scan, a corner edit or an added substrate."""
@@ -1870,6 +2045,7 @@ def _render_scan(sc: dict) -> None:
     rgb, views = sc["rgb"], sc["views"]
     axes_fit, _ = _camera_axes()
     sc["stale"] = False
+    sc["slots"] = _slot_of_views(views)
     _mounts(sc)
     if axes_fit is not None:
         result = alignmod.place_views(views, rgb.shape[1::-1], hub.machine.axes, axes_fit,
@@ -1897,9 +2073,13 @@ def _render_scan(sc: dict) -> None:
             crops[sid] = _jpeg(crop, 88)
             cv2.polylines(drawn, [np.round(v * 8).astype(np.int32)], True, colour, t, cv2.LINE_AA, shift=3)
             cv2.circle(drawn, tuple(np.round(v[0]).astype(int)), 3 * t, colour, -1, cv2.LINE_AA)
-            cv2.putText(drawn, sid, (int(x0), int(y0) - 8 * t), cv2.FONT_HERSHEY_SIMPLEX, 0.8 * t, colour,
+            slot = (sc.get("slots") or [None] * n)[n - 1]
+            cv2.putText(drawn, sid if slot is None else f"{sid} slot {slot}", (int(x0), int(y0) - 8 * t),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8 * t, colour,
                         2 * t, cv2.LINE_AA)
         sc["result"], sc["drawn"], sc["crops"] = None, drawn, crops
+        sc["draw_map"] = ("view",)
+    _draw_slots(sc, sc["drawn"])
     w = sc["drawn"].shape[1]
     out_w = min(1600, w)
     small = cv2.resize(sc["drawn"], (out_w, round(sc["drawn"].shape[0] * out_w / w)), interpolation=cv2.INTER_AREA)
@@ -2848,7 +3028,7 @@ table{{width:100%;border-collapse:collapse;font:13px/1.4 ui-monospace,Menlo,mono
 .btn{{display:inline-block;border:1px solid #d9b45b;color:#d9b45b;padding:7px 12px;border-radius:4px;text-decoration:none;margin:4px 8px 4px 0;font-size:13px}}
 .leg span{{display:inline-block;margin-right:14px;font-size:12.5px;color:#aaa}} .leg i{{display:inline-block;width:18px;height:3px;vertical-align:middle;margin-right:6px}}
 </style></head><body><main>
-<h1>Reference vs calibrated substrate {h.escape(sid)}</h1>
+<h1>Reference vs calibrated substrate {h.escape(sid)}{h.escape(_slot_txt(hub.align_scan or {}, sid).replace(",", " ·"))}</h1>
 <div class="sub">PAPA substrate alignment · scan #{h.escape(str(sc.get('scan_id', '-')))} at {h.escape(str(sc['time']))} · toolpath from {h.escape(sk.get('name') or 'the bridge sketch')}</div>
 
 <div class="k" style="margin-top:22px">
@@ -2911,7 +3091,7 @@ def align_substrate_gcode(sid: str, z: float | None = None) -> Response:
             raise HTTPException(400, f"{sid} has no glass corners yet: set them in the sketcher.")
         mt = info["match"]
         head = "\n".join([
-            f"; PAPA: reference toolpath moved onto substrate {sid}",
+            f"; PAPA: reference toolpath moved onto substrate {sid}" + _slot_txt(sc, sid),
             f"; scan {sc.get('scan_id', '-')} at {sc['time']}; glass corners {info['source']}",
             f"; turned {mt.rotation_deg:+.3f} deg, centre moved {mt.shift_mm[0]:+.3f}, {mt.shift_mm[1]:+.3f} mm; "
             f"fit {mt.rms_mm:.3f} mm; red dot {'found' if mt.red_found else 'NOT found'}",
@@ -2929,7 +3109,7 @@ def align_substrate_gcode(sid: str, z: float | None = None) -> Response:
             st["start"] = {"x": round(p.origin_mm[0], 4), "y": round(p.origin_mm[1], 4), "z": float(z)}
         src = sc["result"].pattern_source.get(sid)
         lines = [
-            f"; PAPA: {pattern.get('name') or 'pattern'} on substrate {sid}"
+            f"; PAPA: {pattern.get('name') or 'pattern'} on substrate {sid}" + _slot_txt(sc, sid)
             + {"reference": " (the REFERENCE toolpath, modified for this glass)",
                "glass": " (the reference toolpath with this substrate's own bridge edits, on its glass)"}.get(
                 src, " (placed on its array)"),
