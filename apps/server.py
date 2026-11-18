@@ -3215,6 +3215,12 @@ def zhome_run(payload: dict | None = None) -> dict:
         r = zhomemod.probe(hub.printer, hub.loadcell, lc, zc, sp, start_z=start_z)
     except (GripFailed, OverForce) as exc:
         raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:                               # noqa: BLE001
+        import logging, traceback
+        logging.getLogger("papa").error("Z probe failed: %s", traceback.format_exc())
+        raise HTTPException(500, f"Z probe crashed: {type(exc).__name__}: {exc}") from exc
     new_z = zhomemod.declare(hub.printer._inner if hasattr(hub.printer, "_inner") else hub.printer,
                              float(st["ref_z"]), r.stepped_z, r.contact_z)
     _wait_z(new_z)
@@ -3249,6 +3255,12 @@ def zhome_check() -> dict:
         r = zhomemod.check(hub.printer, hub.loadcell, lc, hub.machine.zcal, hub.machine.speeds, st, safe)
     except (GripFailed, OverForce) as exc:
         raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:                               # noqa: BLE001
+        import logging, traceback
+        logging.getLogger("papa").error("Z probe failed: %s", traceback.format_exc())
+        raise HTTPException(500, f"Z probe crashed: {type(exc).__name__}: {exc}") from exc
     _patch_calibration({"zhome": {"last_check": r}})
     return r
 
