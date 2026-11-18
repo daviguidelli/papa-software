@@ -336,6 +336,13 @@
         <button class="sm" id="zhPark">Park at safe Z</button>
       </div>
       <p class="note" id="zhMsg"></p>
+      <p class="label" style="margin-top:18px">Grip · head moves left (−X) while the jaws close, so the arm does not bend</p>
+      <div class="row" style="align-items:flex-end">
+        <label>Move left mm<input type="number" id="gsShift" step="0.1" min="0" max="10"></label>
+        <label>Over seconds<input type="number" id="gsClose" step="0.1" min="0.2" max="10"></label>
+        <button class="gold sm" id="gsSave">Save</button>
+        <span class="note" id="gsMsg" style="margin:0"></span>
+      </div>
       <input type="hidden" id="r2A" value="1"><input type="hidden" id="r2B" value="2">
 
       <div class="auto-actions" style="margin-top:14px"><button class="bigbtn primary" id="r2Run"><b>Run routine 2</b><small id="r2Sub">Checking…</small></button></div>
@@ -1057,7 +1064,7 @@ function paintAuto(){
     return `<div class="trow"><div><b>${name}</b><div class="mono val">${val}</div></div><div class="row"><button class="gold sm" data-save="${k}"${dis}>Save here</button>${v==null?'':`<button class="sm" data-clear="${k}"${dis}>Clear</button>`}</div></div>`;
   }).join('');
   if(th!==autoCache.t){$('#taught').innerHTML=th;autoCache.t=th}
-  [['sLift','lift_mm'],['sGrip','grip_wait_s'],['sRel','release_wait_s'],['sShift','grip_shift_mm'],['sCloseT','grip_close_s'],['sXY','xy_speed_mm_s'],['sZ','z_speed_mm_s']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el&&!el.dataset.dirty)el.value=st[k]});
+  [['gsShift','grip_shift_mm'],['gsClose','grip_close_s'],['sLift','lift_mm'],['sGrip','grip_wait_s'],['sRel','release_wait_s'],['sShift','grip_shift_mm'],['sCloseT','grip_close_s'],['sXY','xy_speed_mm_s'],['sZ','z_speed_mm_s']].forEach(([id,k])=>{const el=$('#'+id);if(document.activeElement!==el&&!el.dataset.dirty)el.value=st[k]});
   $('#sCentre').textContent=`X ${fmt(a.centre.x,1)} · Y ${fmt(a.centre.y,1)}`;
   const lock=run||S.busy||!S.pos||!homedXY();
   const why=k=>!homedXY()?'Home X and Y first':(a.problems[k][0]||'');
@@ -1678,6 +1685,14 @@ setInterval(()=>{if(!S.busy)poll()},1500);
 setInterval(loadDev,15000);
 (async()=>{await Promise.all([poll(),loadDev(),loadCal()]);paintOffset();paint();{const qm=new URLSearchParams(location.search).get('mode');if(['auto','scrub','align'].includes(qm))LS.set('mode',qm)}
   if(['auto','scrub','align'].includes(LS.get('mode','manual')))setMode(LS.get('mode'));else if(S.tab==='cell')setWatch(true)})();
+
+document.getElementById('gsSave').addEventListener('click',async()=>{
+  const m=$('#gsMsg');
+  try{S.auto=await post('/api/auto/settings',{grip_shift_mm:+$('#gsShift').value,grip_close_s:+$('#gsClose').value});
+    delete $('#gsShift').dataset.dirty;delete $('#gsClose').dataset.dirty;m.textContent='Saved';paintAuto()}
+  catch(e){m.textContent=e.message||String(e)}
+});
+['gsShift','gsClose'].forEach(id=>$('#'+id).addEventListener('input',e=>e.target.dataset.dirty=1));
 </script>
 </body>
 </html>
