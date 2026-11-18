@@ -370,3 +370,10 @@ def test_reference_sketch_lands_on_each_glass(aligned, monkeypatch, tmp_path):
     a.post("/api/align/pattern", json={"targets": ["S2"], "sketch": SKETCH, "name": "own"})
     s2 = next(s for s in a.get("/api/align").json()["scan"]["substrates"] if s["id"] == "S2")
     assert not s2["glass_placed"] and s2["pattern_name"] == "own"
+
+
+def test_scan_photo_download_and_code_version(aligned):
+    j = aligned.post("/api/align/scan", json={"save": False}).json()
+    assert j["scan"]["timing"]["code"]
+    r = aligned.get("/api/align/photo")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and r.content[:2] == b"\xff\xd8"

@@ -346,3 +346,20 @@ def test_array_found_under_other_lighting(look):
     assert len(found) == 1
     cx, cy = found[0].center
     assert abs(cx / f + 459 - 796) < 20 and abs(cy / f + 304 - 577) < 20
+
+
+@pytest.mark.parametrize("width", [1874, 4056])
+def test_scan48_array_on_white_holder_below_blue_clamp(width):
+    """Scan #48 (screenshot of the straightened view): one array on a white
+    holder, a blue holder above it; also at full camera width."""
+    import cv2
+
+    from papa.vision import electrodes as el
+
+    pic = cv2.imread("tests/data/real_scan48_screenshot.png")
+    f = width / pic.shape[1]
+    found = el.detect(cv2.cvtColor(cv2.resize(pic, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC), cv2.COLOR_BGR2RGB))
+    assert len(found) == 1
+    c = found[0].corners / f
+    assert 740 < c[:, 0].min() < 760 and 855 < c[:, 0].max() < 875
+    assert 530 < c[:, 1].min() < 550 and 630 < c[:, 1].max() < 645

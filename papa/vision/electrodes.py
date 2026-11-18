@@ -302,7 +302,12 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None, coarse_width: int 
     # nothing at the picture's own exposure: retry with exposure, white balance
     # and noise evened out (a darker, tinted or noisy scan than the tuning ones)
     fixed = denoise(normalize_light(rgb))
-    return _same_kind(_detect_all(fixed, p, coarse_width)) if fixed is not rgb else []
+    if fixed is not rgb:
+        found = _same_kind(_detect_all(fixed, p, coarse_width))
+    if not found and rgb.shape[1] > 1.5 * 1400 and coarse_width != 1400:
+        # last try: search a smaller copy (the size the scan is shown at on screen)
+        found = _same_kind(_detect_all(fixed, p, 1400))
+    return found
 
 
 # What the Pi camera's scans look like under the lights the thresholds were

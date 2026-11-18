@@ -1739,6 +1739,20 @@ def _scan_views(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.Printer
     return over, crops
 
 
+def _code_rev() -> str:
+    """The commit this server process started from (not what is on disk now)."""
+    global _BOOT_REV
+    if _BOOT_REV is None:
+        try:
+            _BOOT_REV = _git("rev-parse", "--short", "HEAD", timeout=5).strip() or "?"
+        except Exception:                                        # noqa: BLE001
+            _BOOT_REV = "?"
+    return _BOOT_REV
+
+
+_BOOT_REV: str | None = None
+
+
 def _scan_photo(rgb: Any, save: bool, t_photo: float) -> dict:
     """Find the arrays in one photo and draw the result. With camera points
     each substrate is placed on the printer; without them the arrays are
@@ -1752,6 +1766,9 @@ def _scan_photo(rgb: Any, save: bool, t_photo: float) -> dict:
     t_corr = time.monotonic() - t
     t = time.monotonic()
     sc["views"] = alignmod.find(rgb, params, corrected=view)
+    if not sc["views"] and params != ElectrodeParams():
+        # detector settings saved on this machine found nothing: try the built-in ones
+        sc["views"] = alignmod.find(rgb, ElectrodeParams(), corrected=view)
     t_find = time.monotonic() - t
     t = time.monotonic()
     _render_scan(sc)
@@ -1760,7 +1777,8 @@ def _scan_photo(rgb: Any, save: bool, t_photo: float) -> dict:
     if save:
         _save_scan(sc)
     sc["timing"] = {"photo": round(t_photo, 1), "straighten": round(t_corr, 1), "find": round(t_find, 1),
-                    "draw": round(t_draw, 1), "save": round(time.monotonic() - t, 1)}
+                    "draw": round(t_draw, 1), "save": round(time.monotonic() - t, 1), "code": _code_rev(),
+                    "size": f"{view.shape[1]}x{view.shape[0]}"}
     return sc
 
 
@@ -2021,6 +2039,19 @@ def _check_corners(sc: dict, corners: Any) -> Any:
     if a < 100:
         raise HTTPException(400, "the four corners enclose almost no area")
     return c
+
+
+@app.get("/api/align/photo")
+def align_photo() -> Response:
+    """The last scan's straightened photo at full size, as a JPEG download
+    (what the array finder looked at)."""
+    import cv2
+
+    sc = _scan_or_400()
+    ok, buf = cv2.imencode(".jpg", cv2.cvtColor(_view_image(sc), cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 95])
+    name = f"scan_{sc.get('scan_id') or 'last'}_full.jpg"
+    return Response(buf.tobytes(), media_type="image/jpeg",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/align/view")

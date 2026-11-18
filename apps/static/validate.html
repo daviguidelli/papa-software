@@ -475,7 +475,7 @@
       <div class="row" style="align-items:center">
         <button class="gold" id="alScan">Scan substrates</button>
         <a class="btn" id="alSketchAll" href="/static/bridge_sketcher.html" hidden>Sketch them in order &rarr;</a>
-        <span class="muted mono" id="alScanInfo" style="font-size:12.5px"></span>
+        <span class="muted mono" id="alScanInfo" style="font-size:12.5px"></span> <a id="alPhotoDl" href="/api/align/photo" style="font-size:12.5px;margin-left:8px">Download full-size scan photo ↓</a>
       </div>
       <p class="note" id="alMsg"></p>
       <img id="alImg" alt="Detected arrays with their placed toolpaths" style="width:100%;display:none;margin-top:10px;border:1px solid var(--line);border-radius:4px">
@@ -1313,9 +1313,9 @@ function paintAlign(){
   $('#alAxX').textContent=a.axes.local_x;$('#alAxY').textContent=a.axes.local_y;
   const sc=a.scan,run=alRunning(),lock=run||S.busy;
   $('#alScan').disabled=lock;
-  const tm=sc&&sc.timing,tt=tm?Object.values(tm).reduce((a,b)=>a+b,0):0;
-  $('#alScanInfo').title=tm?Object.entries(tm).map(([k,v])=>k+' '+v+' s').join(', '):'';
-  $('#alScanInfo').textContent=sc?`Scan ${sc.scan_id?('#'+sc.scan_id+' '):''}at ${sc.time} · ${sc.substrates.length} array${sc.substrates.length===1?'':'s'}${sc.pixel_only?' · no camera points yet':''}${tm?' · took '+tt.toFixed(1)+' s (photo '+tm.photo+', find '+tm.find+', draw '+tm.draw+')':''}`:(a.camera.fit?'No scan yet':'No scan yet. Without camera points a scan finds and labels the arrays for sketching; toolpaths need the points.');
+  const tm=sc&&sc.timing,tt=tm?Object.values(tm).filter(v=>typeof v==='number').reduce((a,b)=>a+b,0):0;
+  $('#alScanInfo').title=tm?Object.entries(tm).filter(([k,v])=>typeof v==='number').map(([k,v])=>k+' '+v+' s').join(', '):'';
+  $('#alScanInfo').textContent=sc?`Scan ${sc.scan_id?('#'+sc.scan_id+' '):''}at ${sc.time} · ${sc.substrates.length} array${sc.substrates.length===1?'':'s'}${sc.pixel_only?' · no camera points yet':''}${tm?' · took '+tt.toFixed(1)+' s (photo '+tm.photo+', find '+tm.find+', draw '+tm.draw+')':''}${tm&&tm.code?' · code '+tm.code:''}${tm&&tm.size?' · '+tm.size+' px':''}`:(a.camera.fit?'No scan yet':'No scan yet. Without camera points a scan finds and labels the arrays for sketching; toolpaths need the points.');
   $('#alScrubSk').textContent=`${fmt(a.scrub_tab.area.w,1)} × ${fmt(a.scrub_tab.area.h,1)} mm, ${a.scrub_tab.bridges} bridge${a.scrub_tab.bridges===1?'':'s'}`;
   const m=$('#alMsg');
   if(sc&&sc.warnings.length){m.textContent=sc.warnings.join(' ');m.className='note warn'}
