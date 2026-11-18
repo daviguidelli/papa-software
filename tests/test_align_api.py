@@ -416,7 +416,14 @@ def test_slots_number_each_holder_position(aligned):
     subs = j["scan"]["substrates"]
     slots = [s["slot"] for s in subs]
     assert all(isinstance(k, int) and 1 <= k <= 4 for k in slots)
-    assert slots == sorted(slots)                                 # S1, S2, ... in slot order
+    assert slots == sorted(slots)
+    seen = set()
+    for sub, k in zip(subs, slots):                                # named after its slot; a second one
+        if k not in seen:                                          # in the same slot gets a number past the grid
+            assert sub["id"] == f"S{k}"
+        else:
+            assert int(sub["id"][1:]) > 4
+        seen.add(k)
     assert len(set(slots)) > 1                                     # arrays in different places differ
     assert slots == srv._slot_of_views(srv.hub.align_scan["views"])
     g = a.get(f"/api/align/substrate/{subs[0]['id']}/gcode", params={"z": 4.5})

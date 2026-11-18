@@ -222,14 +222,15 @@ def drawn_turned(axes: dict[str, str], printer_axes: corr.PrinterAxes, size: tup
 
 
 def place_views(views: list[np.ndarray], size: tuple[int, int], axes: dict[str, str],
-                printer_axes: corr.PrinterAxes, settings: dict[str, Any], default_pattern: dict) -> ScanResult:
+                printer_axes: corr.PrinterAxes, settings: dict[str, Any], default_pattern: dict,
+                ids: list[str] | None = None) -> ScanResult:
     """Place each substrate's pattern on arrays given as corrected-view corners
-    (found by find, or set by hand), numbered S1, S2, ... in list order."""
+    (found by find, or set by hand), named by ids (default S1, S2, ... in list order)."""
     st = merged(settings)
     c = corr.get_correction(size)
     placements, arrays_px, source = [], [], {}
     for n, view in enumerate(views, 1):
-        sid = f"S{n}"
+        sid = ids[n - 1] if ids else f"S{n}"
         own = st["patterns"].get(sid)
         pattern = own or default_pattern
         source[sid] = "own" if own else "scrub tab"

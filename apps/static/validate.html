@@ -1410,14 +1410,14 @@ function paintAlign(){
   const ids=subs.map(x=>x.id);alSel=new Set([...alSel].filter(i=>ids.includes(i)));
   if(sc&&sc.pixel_only){
     $('#alRows').innerHTML=subs.map(x=>`<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>
-      <td><b>${x.id}</b>${x.slot?`<br><span class="mono" style="color:#3cc8e6">slot ${x.slot}</span>`:''}</td><td>${esc(x.pattern_name)}</td><td colspan="5" class="muted">${x.size_px[0]} × ${x.size_px[1]} px (mm after the camera points)</td>
+      <td><b>${x.id}</b>${x.slot?`<br><span class="mono" style="color:#3cc8e6">slot ${x.slot}</span>`:x.id&&(S.al.slot_map)?'<br><span class="mono muted">outside the grid</span>':''}</td><td>${esc(x.pattern_name)}</td><td colspan="5" class="muted">${x.size_px[0]} × ${x.size_px[1]} px (mm after the camera points)</td>
       <td style="white-space:nowrap"><a class="btn sm gold" href="/static/bridge_sketcher.html?substrate=${x.id}">Sketch</a></td></tr>
       <tr><td></td><td colspan="8" style="padding-top:0;font-size:12px;text-align:left">${x.crop?`<img src="${x.crop}" alt="${x.id} close-up" style="float:left;width:300px;max-width:45%;margin:2px 14px 6px 0;border:1px solid var(--line);border-radius:3px">`:''}<span class="muted">${x.problems.map(esc).join(' ')}</span></td></tr>`).join('');
   }else
   $('#alRows').innerHTML=subs.map(x=>{
     const ok=!x.problems.length,err=x.size_error_mm.map(v=>(v>=0?'+':'')+fmt(v,2)).join(', ');
     return `<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>
-      <td><b>${x.id}</b>${x.slot?`<br><span class="mono" style="color:#3cc8e6">slot ${x.slot}</span>`:''}</td><td>${esc(x.pattern_name)}</td>
+      <td><b>${x.id}</b>${x.slot?`<br><span class="mono" style="color:#3cc8e6">slot ${x.slot}</span>`:x.id&&(S.al.slot_map)?'<br><span class="mono muted">outside the grid</span>':''}</td><td>${esc(x.pattern_name)}</td>
       <td>${fmt(x.measured_mm[0],2)} × ${fmt(x.measured_mm[1],2)}<br><span class="${Math.max(...x.size_error_mm.map(Math.abs))>a.settings.size_tolerance_mm?'err':'muted'}">${err}</span></td>
       <td>${fmt(x.pattern_mm[0],2)} × ${fmt(x.pattern_mm[1],2)}</td>
       <td class="${Math.abs(x.rotation_deg)>a.settings.max_rotation_deg?'err':''}">${(x.rotation_deg>=0?'+':'')+fmt(x.rotation_deg,2)}</td>

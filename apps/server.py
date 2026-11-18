@@ -1580,8 +1580,7 @@ def _align_info() -> dict:
     if hub.align_scan and hub.align_scan.get("result") is None:
         sc = hub.align_scan
         subs = []
-        for n, v in enumerate(sc["views"], 1):
-            sid = f"S{n}"
+        for sid, v in zip(_ids(sc), sc["views"]):
             pat = st["patterns"].get(sid)
             subs.append({"id": sid, "size_px": [round(float(np.linalg.norm(v[1] - v[0])), 1),
                                                 round(float(np.linalg.norm(v[3] - v[0])), 1)],
@@ -1609,7 +1608,7 @@ def _align_info() -> dict:
             sub["crop"] = sc.get("crops", {}).get(sid)
             sub["manual"] = sid in sc.get("manual", set())
             sub["slot"] = _sub_slot(sc, sid)
-            mi = (sc.get("mount_info") or [None] * len(d["substrates"]))[int(sid[1:]) - 1]
+            mi = (sc.get("mount_info") or [None] * len(d["substrates"]))[_ids(sc).index(sid)]
             sub["mount"] = None if mi is None else {"source": mi["source"], **mi["match"].as_dict(),
                                                     "gcode_ready": _ref_ready()[0]}
             sub["gcode_from"] = ("reference G-code" if _ref_gcode() is not None and _ref_sketch() is None
@@ -1723,7 +1722,7 @@ def _draw_mounts(img: Any, sc: dict | None, axes_fit: corrmod.PrinterAxes, box: 
         return np.c_[(m[:, 0] - x0) * ppm, (y1 - m[:, 1]) * ppm]
 
     for i, info in enumerate(sc["mount_info"]):
-        sid = f"S{i + 1}"
+        sid = _sid_at(sc, i)
         if info is None or (only and sid != only):
             continue
         mm = axes_fit.plate_to_mm(c.corrected_to_plate(np.asarray(info["corners_view"])))
@@ -1755,7 +1754,7 @@ def _scan_views(rgb: Any, result: alignmod.ScanResult, axes_fit: corrmod.Printer
     over = cv2.cvtColor(alignmod.printer_view(rgb, axes_fit, box, ppm), cv2.COLOR_RGB2BGR)
     if sc is not None:
         sc["draw_map"] = ("printer", box, ppm)
-    slots = {f"S{i + 1}": k for i, k in enumerate((sc or {}).get("slots") or [])}
+    slots = {sid: k for sid, k in zip(_ids(sc), sc.get("slots") or []) if sid != f"S{k}"} if sc else {}
     over = _draw_alignment(over, result, box, ppm, slots=slots)
     _draw_mounts(over, sc, axes_fit, box, ppm)
     crops = {}
@@ -1996,10 +1995,53 @@ def _by_slot(views: list) -> list:
     return [views[i] for i in order]
 
 
-def _sub_slot(sc: dict, sid: str) -> int | None:
+def _ids(sc: dict) -> list[str]:
+    """Each array's name. With a slot grid, a substrate is named after its
+    slot (one substrate in slot 6 is S6); one outside the grid gets the next
+    number after the grid's last slot. Without a grid: S1, S2, ... in order."""
+    views = sc.get("views") or []
     sl = sc.get("slots")
-    i = int(sid[1:]) - 1
+    if sl is None or len(sl) != len(views):
+        sl = _slot_of_views(views)
+    if not any(k is not None for k in sl):
+        return [f"S{i + 1}" for i in range(len(views))]
+    g = _slots() or {"rows": 0, "cols": 0}
+    nxt = max(int(g["rows"]) * int(g["cols"]), max(k for k in sl if k is not None))
+    out, used = [], set()
+    for k in sl:
+        if k is None or k in used:
+            nxt += 1
+            k = nxt
+        used.add(k)
+        out.append(f"S{k}")
+    return out
+
+
+def _sid_at(sc: dict, i: int) -> str:
+    return _ids(sc)[i]
+
+
+def _sub_slot(sc: dict, sid: str) -> int | None:
+    ids = _ids(sc)
+    if sid not in ids:
+        return None
+    sl = sc.get("slots")
+    i = ids.index(sid)
     return sl[i] if sl and 0 <= i < len(sl) else None
+
+
+def _slot_cell_view(sc: dict, i: int) -> Any:
+    """The 4 corners (view px) of the slot the i-th array sits in, or None."""
+    import cv2
+    import numpy as np
+
+    sl, slots = _slots(), sc.get("slots") or []
+    if not sl or i >= len(slots) or slots[i] is None:
+        return None
+    rows, cols = int(sl["rows"]), int(sl["cols"])
+    r, c = divmod(slots[i] - 1, cols)
+    H = cv2.getPerspectiveTransform(np.float32([[0, 0], [cols, 0], [cols, rows], [0, rows]]), np.float32(sl["corners"]))
+    return cv2.perspectiveTransform(np.float64([[[c, r], [c + 1, r], [c + 1, r + 1], [c, r + 1]]]), H)[0]
 
 
 def _view_to_drawn(sc: dict, pts: Any) -> Any:
@@ -2081,7 +2123,7 @@ def _slot_map(sc: dict | None) -> dict | None:
     if sc and sc.get("views") is not None:
         for i, k in enumerate(sc.get("slots") or []):
             if k is not None and k not in owner:
-                owner[k] = f"S{i + 1}"
+                owner[k] = _sid_at(sc, i)
     centres = None
     axes_fit, _ = _camera_axes()
     if axes_fit is not None and sc is not None:
@@ -2198,7 +2240,7 @@ def _render_scan(sc: dict) -> None:
     _mounts(sc)
     if axes_fit is not None:
         result = alignmod.place_views(views, rgb.shape[1::-1], hub.machine.axes, axes_fit,
-                                      _align_settings(), _scrub_tab_pattern())
+                                      _align_settings(), _scrub_tab_pattern(), ids=_ids(sc))
         _glass_placements(sc, result)
         drawn, closeups = _scan_views(rgb, result, axes_fit, sc)    # square to the printer's X and Y
         sc["result"], sc["drawn"] = result, drawn
@@ -2208,8 +2250,7 @@ def _render_scan(sc: dict) -> None:
         base = drawn.copy()
         t = max(1, drawn.shape[1] // 1200)
         crops = {}
-        for n, v in enumerate(views, 1):
-            sid = f"S{n}"
+        for n, (sid, v) in enumerate(zip(_ids(sc), views), 1):
             colour = (255, 170, 60) if sid in sc["manual"] else (80, 220, 80)
             (x0, y0), (x1, y1) = v.min(0), v.max(0)
             m = 0.3 * max(x1 - x0, y1 - y0)
@@ -2223,7 +2264,7 @@ def _render_scan(sc: dict) -> None:
             cv2.polylines(drawn, [np.round(v * 8).astype(np.int32)], True, colour, t, cv2.LINE_AA, shift=3)
             cv2.circle(drawn, tuple(np.round(v[0]).astype(int)), 3 * t, colour, -1, cv2.LINE_AA)
             slot = (sc.get("slots") or [None] * n)[n - 1]
-            cv2.putText(drawn, sid if slot is None else f"{sid} slot {slot}", (int(x0), int(y0) - 8 * t),
+            cv2.putText(drawn, sid if slot is None or sid == f"S{slot}" else f"{sid} slot {slot}", (int(x0), int(y0) - 8 * t),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8 * t, colour,
                         2 * t, cv2.LINE_AA)
         sc["result"], sc["drawn"], sc["crops"] = None, drawn, crops
@@ -2302,8 +2343,8 @@ def _save_scan(sc: dict) -> None:
     d, n = _next_scan_dir()
     cv2.imwrite(str(d / "original.jpg"), cv2.cvtColor(sc["rgb"], cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
     cv2.imwrite(str(d / "scan.jpg"), sc["drawn"], [cv2.IMWRITE_JPEG_QUALITY, 85])
-    out = {"scan_id": n, "corrected_view_corners": {f"S{i}": v.round(2).tolist()
-                                                     for i, v in enumerate(sc["views"], 1)}}
+    out = {"scan_id": n, "corrected_view_corners": {sid: v.round(2).tolist()
+                                                     for sid, v in zip(_ids(sc), sc["views"])}}
     if sc.get("result") is not None:
         out.update(sc["result"].as_dict())
     (d / "alignment.json").write_text(json.dumps(out, indent=2))
@@ -2363,7 +2404,7 @@ def align_substrate_sketch(sid: str) -> dict:
     sc = hub.align_scan
     if not sc:
         raise HTTPException(400, "Scan the substrates first.")
-    ids = [f"S{n}" for n in range(1, len(sc["views"]) + 1)]
+    ids = _ids(sc)
     if sid not in ids:
         raise HTTPException(404, f"no substrate {sid} in the last scan")
     st = _align_settings()
@@ -2438,7 +2479,8 @@ def align_substrate_sketch(sid: str) -> dict:
     ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
     return {"id": sid, "w": w, "h": h, "px_per_mm": ppm, "bridges": bridges, "size_known": size_known,
             "array_mm": array_mm, "glass_mm": _glass_mm(),
-            "frame": frame, "from_reference": frame == "glass" and not own,
+            "glass_by_hand": sid in sc.get("mount_manual", set()), "array_by_hand": sid in sc.get("manual", set()),
+            "frame": frame, "from_reference": frame == "glass" and not own and _ref_sketch() is not None,
             "pattern_name": (own or {}).get("name") or "",
             "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()}
 
@@ -2458,7 +2500,7 @@ def _scan_or_400() -> dict:
 
 
 def _sid_index(sc: dict, sid: str) -> int:
-    ids = [f"S{n}" for n in range(1, len(sc["views"]) + 1)]
+    ids = _ids(sc)
     if sid not in ids:
         raise HTTPException(404, f"no substrate {sid} in the last scan")
     return ids.index(sid)
@@ -2507,25 +2549,42 @@ def align_view(sid: str = "", margin: float = 1.5, what: str = "array") -> dict:
     view = _view_image(sc)
     H, W = view.shape[:2]
     corners = None
+    context = []                            # outlines shown for reference while picking (array / glass)
     if sid:
-        v = sc["views"][_sid_index(sc, sid)]
-        if what == "mount":                 # glass corners: hand-set or estimated, else start from the array
-            _mounts(sc)
-            mv = sc["mounts"][_sid_index(sc, sid)]
-            v = np.asarray(mv) if mv is not None else v
-            margin = max(margin, 1.2)
-        (x0, y0), (x1, y1) = v.min(0), v.max(0)
-        m = margin * max(x1 - x0, y1 - y0) / 2
-        X0, Y0, X1, Y1 = int(max(0, x0 - m)), int(max(0, y0 - m)), int(min(W, x1 + m)), int(min(H, y1 + m))
+        i = _sid_index(sc, sid)
+        arr = np.asarray(sc["views"][i], np.float64)
+        _mounts(sc)
+        mv = sc["mounts"][i] if i < len(sc.get("mounts") or []) else None
+        if what == "mount":                 # glass corners: hand-set or estimated, else start outside the array
+            if mv is not None:
+                v = np.asarray(mv, np.float64)
+            else:
+                m0 = arr.mean(0)
+                v = m0 + (arr - m0) * 1.8
+            context.append(arr)
+        else:
+            v = arr
+            if mv is not None:
+                context.append(np.asarray(mv, np.float64))
+        box = np.vstack([v] + context)
+        cell = _slot_cell_view(sc, i)       # the whole slot (holder) when the slot grid is set
+        if cell is not None:
+            box = np.vstack([box, cell])
+            pad = 0.08 * float(np.ptp(cell, axis=0).max())
+        else:
+            pad = margin * float(np.ptp(v, axis=0).max()) / 2
+        (x0, y0), (x1, y1) = box.min(0), box.max(0)
+        X0, Y0, X1, Y1 = int(max(0, x0 - pad)), int(max(0, y0 - pad)), int(min(W, x1 + pad)), int(min(H, y1 + pad))
         corners = v
     else:
         X0, Y0, X1, Y1 = 0, 0, W, H
     k = min(1.0, 2400 / max(X1 - X0, Y1 - Y0))
     crop = cv2.resize(view[Y0:Y1, X0:X1], (max(1, round((X1 - X0) * k)), max(1, round((Y1 - Y0) * k))),
                       interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_CUBIC)
-    others = [((o - [X0, Y0]) * k).round(2).tolist() for i, o in enumerate(sc["views"])
+    others = [((np.asarray(o) - [X0, Y0]) * k).round(2).tolist() for i, o in enumerate(sc["views"])
               if not sid or i != _sid_index(sc, sid)]
     return {"image": _jpeg(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR), 90), "offset": [X0, Y0], "scale": k,
+            "context": [((o - [X0, Y0]) * k).round(2).tolist() for o in context],
             "corners": None if corners is None else ((corners - [X0, Y0]) * k).round(2).tolist(),
             "others": others}
 
@@ -2551,7 +2610,8 @@ def align_add_substrate(payload: dict) -> dict:
     hub.require_idle()
     sc = _scan_or_400()
     sc["views"].append(_check_corners(sc, payload.get("corners")))
-    sid = f"S{len(sc['views'])}"
+    sc["slots"] = _slot_of_views(sc["views"])
+    sid = _ids(sc)[-1]
     if sc.get("mounts") is not None:
         sc["mounts"].append(None)
     sc.setdefault("manual", set()).add(sid)
@@ -2566,25 +2626,23 @@ def align_remove_substrate(sid: str) -> dict:
     hub.require_idle()
     sc = _scan_or_400()
     i = _sid_index(sc, sid)
-    n = len(sc["views"])
+    old_ids = _ids(sc)
+    slot_named = old_ids != [f"S{k + 1}" for k in range(len(old_ids))]
+    manual_i = {old_ids.index(m) for m in sc.get("manual", set()) if m in old_ids and m != sid}
+    mount_i = {old_ids.index(m) for m in sc.get("mount_manual", set()) if m in old_ids and m != sid}
     del sc["views"][i]
     if sc.get("mounts") is not None and i < len(sc["mounts"]):
         del sc["mounts"][i]
-        sc["mount_manual"] = {f"S{int(m[1:]) - (1 if int(m[1:]) > i + 1 else 0)}"
-                              for m in sc.get("mount_manual", set()) if m != sid}
+    sc["slots"] = _slot_of_views(sc["views"])
+    new_ids = _ids(sc)
+    sc["manual"] = {new_ids[j - (j > i)] for j in manual_i}
+    sc["mount_manual"] = {new_ids[j - (j > i)] for j in mount_i}
     patterns = dict(_align_settings()["patterns"])
     patterns.pop(sid, None)
-    for k in range(i + 2, n + 1):
-        if f"S{k}" in patterns:
-            patterns[f"S{k - 1}"] = patterns.pop(f"S{k}")
-    manual = set()
-    for m in sc.get("manual", set()):
-        k = int(m[1:])
-        if k < i + 1:
-            manual.add(m)
-        elif k > i + 1:
-            manual.add(f"S{k - 1}")
-    sc["manual"] = manual
+    if not slot_named:                      # S1, S2, ... by order: later ones move up one number
+        for j in range(i + 1, len(old_ids)):
+            if old_ids[j] in patterns:
+                patterns[new_ids[j - 1]] = patterns.pop(old_ids[j])
     raw = dict(hub.cal.raw.get("alignment") or {})
     raw["patterns"] = patterns
     _patch_calibration({"alignment": raw})
@@ -2863,7 +2921,7 @@ def _mounts(sc: dict) -> None:
     r = _ref_cfg()
     key = repr((r.get("array_photo"), r.get("photo_corners"), r.get("placement")))
     if sc.get("mount_ref_key") != key:   # reference changed: re-estimate the glass not set by hand
-        sc["mounts"] = [m if f"S{i + 1}" in sc["mount_manual"] else None for i, m in enumerate(sc["mounts"])]
+        sc["mounts"] = [m if _sid_at(sc, i) in sc["mount_manual"] else None for i, m in enumerate(sc["mounts"])]
         sc["mount_ref_key"] = key
     axes_fit, _ = _camera_axes()
     if axes_fit is None or not r.get("photo_corners") or not r.get("placement"):
@@ -2885,7 +2943,7 @@ def _mounts(sc: dict) -> None:
         ref_array = cv2.perspectiveTransform(np.float64([r["array_photo"]]), H)[0]
     view = _view_image(sc)
     for i, v in enumerate(sc["views"]):
-        sid = f"S{i + 1}"
+        sid = _sid_at(sc, i)
         if sc["mounts"][i] is None and ref_array is not None:
             # same glass-to-array layout as the reference: move the reference glass with the array
             arr = view_to_mm(v)
@@ -3090,7 +3148,7 @@ def _array_on_glass(sc: dict, i: int, rc: dict, ref_glass: Any, mt: Any) -> dict
     ref_arr = cv2.perspectiveTransform(np.float64([rc["array_photo"]]), H)[0]
     out = refmod.array_on_glass(ref_glass, ref_arr, arr_mm, mt)
     out["glass_source"] = sc["mount_info"][i].get("source")
-    out["measured"] = f"S{i + 1}" in sc.get("mount_manual", set())
+    out["measured"] = _sid_at(sc, i) in sc.get("mount_manual", set())
     out["ref_array"] = ref_arr.round(3).tolist()
     return out
 

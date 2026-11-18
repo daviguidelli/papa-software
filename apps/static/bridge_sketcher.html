@@ -139,6 +139,11 @@ kbd{font:10px var(--mono);border:1px solid var(--line2);padding:0 4px;color:var(
         <button class="sm" id="fsSave" disabled>Save</button>
         <button class="pri sm" id="fsSaveNext" disabled>Save &amp; next &rarr;</button>
       </div>
+      <div id="fsSteps" hidden style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+        <button class="sm" id="fsStep1" title="Drag 4 corners onto the clear 25 x 25 mm glass">1 · Glass corners</button>
+        <button class="sm" id="fsStep2" title="Drag 4 corners onto the copper electrode array">2 · Array corners</button>
+        <button class="sm" id="fsStep3" title="Place the bridges on the glass">3 · Bridges</button>
+      </div>
       <div id="fsSize" hidden style="display:grid;gap:8px;border:1px solid var(--pick);padding:10px">
         <div class="note" style="color:var(--tx)">No camera points yet, so the size of this array is not measured. Enter its real size; the picture stretches to match.</div>
         <div class="row">
@@ -381,6 +386,9 @@ function draw(){
 }
 
 function drawPhoto(){
+  (S.context||[]).forEach(q=>{                     // the other outline (array or glass) for reference
+    const r=q.map(p=>toScr(p[0],p[1]));ctx.save();ctx.setLineDash([5,4]);ctx.strokeStyle='rgba(80,220,80,.95)';ctx.lineWidth=1.2;
+    ctx.beginPath();r.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.stroke();ctx.restore()});
   const c=S.corners.map(p=>toScr(p[0],p[1]));
   if(c.length===4){
     ctx.save();ctx.beginPath();ctx.rect(0,0,CW,CH);
@@ -912,7 +920,7 @@ function updateUI(){
 
 
 /* ---------- from the scan (Substrates tab) ---------- */
-var FS={id:null,list:[],patterns:{},dirty:false};
+var FS={id:null,list:[],patterns:{},dirty:false,skipGlass:{}};
 const fsIdx=()=>FS.list.findIndex(s=>s.id===FS.id);
 const FOR_SCRUB=new URLSearchParams(location.search).get('for')==='scrub';
 async function fsList(){
@@ -962,7 +970,10 @@ function fsStat(){
   if(!FS||(!FS.list.length&&!FS.cm))return;     // adding the first substrate by hand still shows the corner panel
   fsThumbs();
   const cm=!!FS.cm;$('#fsCornerBox').hidden=!cm;$('#fsCornerTools').hidden=cm;
-  if(cm){$('#fsCornerNote').innerHTML=(FS.cm.kind==='add'?'<b>New substrate.</b> Click its four corners on the photo':FS.cm.kind==='mount'?'<b>'+FS.cm.sid+' glass</b>: drag the four corners onto the corners of the clear glass square (not the array)'+(FS.cm.estimated?'. They start where the glass is expected from the array; move them if they are off':''):'<b>'+FS.cm.sid+'</b>: drag the four corners onto the array')+' (any order; scroll to zoom, hold Space to pan). '+S.corners.length+' / 4 placed.';$('#fsCornerUse').disabled=S.corners.length!==4;$('#fsSave').disabled=$('#fsSaveNext').disabled=$('#fsCopyNext').disabled=$('#fsCopy').disabled=true;return}
+  $('#fsSteps').hidden=!FS.id;
+  const stp=cm?(FS.cm.kind==='mount'?1:FS.cm.kind==='edit'?2:0):(FS.frame==='glass'?3:0);
+  [1,2,3].forEach(k=>{const b=$('#fsStep'+k);b.classList.toggle('pri',k===stp);b.disabled=!FS.id||(k===3&&!cm);});
+  if(cm){$('#fsCornerNote').innerHTML=(FS.cm.kind==='add'?'<b>New substrate.</b> Click its four corners on the photo':FS.cm.kind==='mount'?'<b>Step 1 of 3 · '+FS.cm.sid+' glass</b>: drag the four corners onto the corners of the clear 25 × 25 mm glass (not the array; the array is the thin outline)':'<b>Step 2 of 3 · '+FS.cm.sid+' electrode array</b>: drag the four corners onto the copper array (the glass is the thin outline)')+' (any order; scroll to zoom, hold Space to pan). '+S.corners.length+' / 4 placed.';$('#fsCornerUse').disabled=S.corners.length!==4;$('#fsSave').disabled=$('#fsSaveNext').disabled=$('#fsCopyNext').disabled=$('#fsCopy').disabled=true;return}
   $('#fsEditCorners').disabled=!FS.id;$('#fsRemove').disabled=!FS.id;$('#fsGlass').disabled=!FS.id;
   const i=fsIdx(),on=!!FS.id&&S.mode==='sub';
   $('#fsHead').textContent=FS.id?`${FS.id}  ·  ${i+1} of ${FS.list.length}`:'';
@@ -992,10 +1003,11 @@ async function fsLoad(id){
     const fr=$('#fsFrame');fr.hidden=FS.frame!=='glass';
     fr.textContent=FS.frame!=='glass'?'':(j.from_reference
       ?'This is '+id+'\'s whole glass, turned like the reference photo. It starts with the reference bridges: move, resize, add or delete them to match this substrate, then Save. The G-code is then compared to the reference, bridge by bridge.'
-      :'This is '+id+'\'s whole glass, turned like the reference photo, with its own bridges. Its G-code is compared to the reference, bridge by bridge.');
+      :(j.bridges&&j.bridges.length?'This is '+id+'\'s whole 25 × 25 mm glass with its own bridges; the green outline is the electrode array.':'Step 3 of 3 · '+id+'\'s whole 25 × 25 mm glass; the green outline is the electrode array. Place the bridges, then Save.'));
     if(j.from_reference)FS.dirty=false;
     FS.id=id;$('#fsSel').value=id;setMode('sub');changed();FS.dirty=false;
     history.replaceState(null,'','?substrate='+encodeURIComponent(id));
+    if(FS.frame!=='glass'&&!FS.skipGlass[id]){fsStat();await fsCorners('mount',true);return}   // step 1 first: the glass
   }catch(e){toast('Could not load '+id+': '+(e.message||e))}
   fsStat();
 }
@@ -1044,22 +1056,26 @@ addEventListener('keydown',e=>{
   if(e.key===']'||e.key==='PageDown'){e.preventDefault();fsGo(1)}
   else if(e.key==='['||e.key==='PageUp'){e.preventDefault();fsGo(-1)}
 });
-async function fsCorners(kind){
+async function fsCorners(kind,flow){
   if(FS.dirty&&FS.id&&!confirm(FS.id+' has changes that are not saved. Continue without saving them?'))return;
   try{
     const r=await fetch('/api/align/view'+(kind==='edit'?'?sid='+encodeURIComponent(FS.id):kind==='mount'?'?what=mount&sid='+encodeURIComponent(FS.id):''));const j=await r.json();
     if(!r.ok)throw new Error(j.error||r.status);
     S.src=await loadImageURL(j.image);S.srcName=kind==='add'?'scan photo':FS.id;
     S.corners=j.corners?j.corners.map(p=>[+p[0],+p[1]]):[];S.sorted=!!j.corners;
-    FS.cm={kind,sid:FS.id,offset:j.offset,scale:j.scale,estimated:kind==='mount'};FS.dirty=false;
+    S.context=kind==='add'?[]:(j.context||[]);
+    FS.cm={kind,sid:FS.id,offset:j.offset,scale:j.scale,estimated:kind==='mount',flow:!!flow};FS.dirty=false;
     setMode('photo');fsStat();
   }catch(e){toast('Could not open the photo: '+(e.message||e))}
 }
 $('#fsEditCorners').onclick=()=>fsCorners('edit');
+$('#fsStep1').onclick=()=>fsCorners('mount',true);
+$('#fsStep2').onclick=()=>fsCorners('edit',false);
+$('#fsStep3').onclick=()=>{if(FS.cm){const id=FS.cm.sid;FS.cm=null;fsLoad(id)}};
 $('#fsAdd').onclick=()=>fsCorners('add');
-$('#fsGlass').onclick=()=>fsCorners('mount');
+$('#fsGlass').onclick=()=>fsCorners('mount',true);
 $('#fsCornerReset').onclick=()=>{S.corners=[];S.sorted=false;updateUI();req()};
-$('#fsCornerCancel').onclick=async()=>{const id=FS.cm.sid;FS.cm=null;FS.dirty=false;if(id)await fsLoad(id);else if(FS.list.length)await fsLoad(FS.list[0].id)};
+$('#fsCornerCancel').onclick=async()=>{const id=FS.cm.sid;if(FS.cm.kind==='mount')FS.skipGlass[id]=true;FS.cm=null;FS.dirty=false;if(id)await fsLoad(id);else if(FS.list.length)await fsLoad(FS.list[0].id)};
 $('#fsCornerUse').onclick=async()=>{
   if(S.corners.length!==4)return;
   if(!S.sorted)sortCorners();
@@ -1070,7 +1086,9 @@ $('#fsCornerUse').onclick=async()=>{
     const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);
     const id=cm.kind==='add'?j.added:cm.sid;FS.cm=null;
     toast(cm.kind==='add'?'Added '+id:cm.kind==='mount'?'Glass corners of '+id+' saved':'Corners of '+id+' saved');
-    await fsList();await fsLoad(id);
+    await fsList();
+    if(cm.kind==='mount'&&cm.flow){FS.id=id;await fsCorners('edit',true);return}    // step 2: the array
+    await fsLoad(id);                                                                 // step 3: the bridges
   }catch(e){toast('Not saved: '+(e.message||e))}
 };
 $('#fsRemove').onclick=async()=>{
