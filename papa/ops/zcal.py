@@ -134,9 +134,15 @@ def calibrate_z(
             )
 
         if force >= target_force_n:
-            if hits == 0:
-                cross = (prev_z, prev_f, z_now, force)
-            hits += 1
+            # Confirm by reading again at this same Z, not by stepping further
+            # down: with 0.25 mm steps two more steps would press far too hard.
+            cross = (prev_z, prev_f, z_now, force)
+            hits = 1
+            while hits < settle_readings:
+                again = _steady_force(loadcell, force)
+                if again < target_force_n:
+                    break
+                hits += 1
             if hits >= settle_readings:
                 stepped = printer.position().z
                 z0, f0, z1, f1 = cross
