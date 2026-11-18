@@ -38,6 +38,27 @@ class ZCalResult:
         return self.contact_z + surface_offset_mm
 
 
+
+MAX_JUMP_N = 1.0      # one 0.05 mm step cannot add more than this; a bigger jump is a chip glitch
+GLITCH_RETRIES = 10
+
+
+def _steady_force(loadcell, prev_f: float) -> float:
+    """A reading the probe can trust. The HX711 sometimes spits out wild values
+    (hundreds of N). Real force changes a little per step, so a reading far from
+    the last one is read again; only a value that stays put is believed."""
+    import time
+    last = None
+    for _ in range(GLITCH_RETRIES):
+        f = loadcell.newtons()
+        if abs(f - prev_f) <= MAX_JUMP_N:
+            return f
+        if last is not None and abs(f - last) <= 0.2:      # two agreeing reads: it is real
+            return f
+        last = f
+        time.sleep(0.05)
+    return f
+
 def calibrate_z(
     printer: Any,
     loadcell: Any,
@@ -80,7 +101,7 @@ def calibrate_z(
         travelled += step_mm
         steps += 1
         z_now = prev_z - step_mm
-        force = loadcell.newtons()
+        force = _steady_force(loadcell, prev_f)
 
         if force >= abort_force_n:
             printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
