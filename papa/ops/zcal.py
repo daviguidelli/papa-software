@@ -39,7 +39,7 @@ class ZCalResult:
 
 
 
-MAX_JUMP_N = 1.0      # one 0.05 mm step cannot add more than this; a bigger jump is a chip glitch
+MAX_JUMP_N = 3.0      # a real 0.25 mm step stays under this; glitches are hundreds of N
 GLITCH_RETRIES = 10
 
 
