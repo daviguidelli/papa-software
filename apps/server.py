@@ -1274,6 +1274,22 @@ def auto_teach(payload: dict) -> dict:
     return _auto_info()
 
 
+@app.post("/api/auto/pickup2")
+def auto_pickup2() -> dict:
+    """Save where the tool is now as swab position 2. Position 1 is the taught
+    pickup; the step between them is what routine 2 uses for the second grip."""
+    hub.require_idle()
+    a = _auto_settings()
+    if not a.get("pickup"):
+        raise HTTPException(400, "Save the pickup (swab position 1) first")
+    p = hub.printer.position()
+    if not all(ax in p.homed for ax in "xy"):
+        raise HTTPException(400, "Home X and Y first")
+    step = {"x": round(p.x - float(a["pickup"]["x"]), 3), "y": round(p.y - float(a["pickup"]["y"]), 3)}
+    _patch_calibration({"autonomous": {"pickup_step": step}})
+    return _auto_info()
+
+
 @app.post("/api/auto/clear")
 def auto_clear(payload: dict) -> dict:
     hub.require_idle()
@@ -3062,16 +3078,28 @@ def _park_on_exit() -> None:
 
 
 def _routine2_slides(payload: dict) -> list[dict]:
-    ids = payload.get("slides") or ["S1", "S2"]
+    ids = payload.get("slides") or ["1", "2"]
     if len(ids) != 2:
         raise HTTPException(400, "Routine 2 needs exactly two slides, e.g. S1 and S2")
     st = _zhome_settings()
     z = zhomemod.absolute(st, "slide_mm")
     out = []
     for sid in ids:
-        s = _substrate_scrub(str(sid), bool(payload.get("force")))
-        if z is not None and s.get("start"):
-            s["start"] = {**s["start"], "z": z, "ref": hub.guard.ref}
+        if str(sid).strip().isdigit():
+            # a slot corner captured by hand on the Slide tab: the corner is the pattern's start
+            n = int(str(sid).strip())
+            slot = next((x for x in hub.cal.slots if x.id == n), None)
+            if slot is None or not slot.calibrated:
+                raise HTTPException(400, f"Slide {n}: capture its top-left corner on the Slide tab first")
+            if z is None:
+                raise HTTPException(400, "Set the slide height first")
+            s = dict(_scrub_settings())
+            s["start"] = {"x": slot.x, "y": slot.y, "z": z, "ref": hub.guard.ref}
+            s["rotation_deg"] = 0.0
+        else:
+            s = _substrate_scrub(str(sid), bool(payload.get("force")))
+            if z is not None and s.get("start"):
+                s["start"] = {**s["start"], "z": z, "ref": hub.guard.ref}
         out.append(s)
     return out
 

@@ -123,3 +123,31 @@ def test_routine2_checks_scribes_swaps_and_z_is_left_alone(homed_cell):
 def test_routine2_refuses_without_zhome(aligned):
     r = aligned.post("/api/routine2/run", json={"force": True})
     assert r.status_code == 400
+
+
+def test_routine2_from_hand_captured_slot_corners_and_pickup2(homed_cell):
+    c = homed_cell
+    c.post("/api/zhome/run")
+    c.server.hub.loadcell.contact_z = 50.187            # the mock cell, in the frame Z home declared
+    c.post("/api/machine/move", json={"x": 150, "y": 100, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    c.post("/api/machine/move", json={"x": 200, "y": 100, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 2})
+    c.post("/api/scrub/sketch", json={"substrate": {"w": 25, "h": 25}, "bridges": []})
+    c.post("/api/machine/move", json={"x": 40, "y": 77, "speed_mm_s": 100})
+    j = c.post("/api/auto/pickup2").json()
+    assert j["settings"]["pickup_step"] == {"x": 0.0, "y": 17.0}
+    r = c.post("/api/routine2/run", json={"slides": ["1", "2"]})
+    assert r.status_code == 200, r.text
+    s = wait2(c)
+    assert s["finished"] and not s["error"], s
+    xs = {ln.split("X")[1].split()[0] for ln in moves(c) if " X" in ln}
+    assert "150.0000" in xs and "200.0000" in xs
+    assert any("Z48.0000" in ln for ln in moves(c))
+
+
+def test_routine2_slot_needs_a_captured_corner(homed_cell):
+    c = homed_cell
+    c.post("/api/zhome/run")
+    r = c.post("/api/routine2/run", json={"slides": ["8", "9"]})
+    assert r.status_code == 400 and "top-left corner" in r.json()["error"]

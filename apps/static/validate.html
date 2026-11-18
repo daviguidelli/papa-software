@@ -361,10 +361,10 @@
     <div class="card" id="r2Main">
       <p class="label">Full cycle</p>
       <h2>Routine <em>2</em></h2>
-      <p class="note" style="margin-top:0">Check Z, scrub slide A, dispose, grip position 1, check Z, scrub slide B, dispose, grip position 2, park at safe Z. A check only reports the drift: Z is never changed. Slides come from the last scan on the Substrates tab, and the Scrub tab needs a start set once.</p>
+      <p class="note" style="margin-top:0">Check Z, scrub slide A, dispose, grip position 1, check Z, scrub slide B, dispose, grip position 2, park at safe Z. A check only reports the drift: Z is never changed. A plain number (1, 2…) is a slide slot whose top-left corner you captured on the Slide tab; the sketch from the Scrub tab is placed from that corner. S1, S2… use the camera scan instead.</p>
       <div class="row" style="align-items:flex-end">
-        <label>Slide A<input type="text" id="r2A" value="S1" size="4"></label>
-        <label>Slide B<input type="text" id="r2B" value="S2" size="4"></label>
+        <label>Slide A<input type="text" id="r2A" value="1" size="4"></label>
+        <label>Slide B<input type="text" id="r2B" value="2" size="4"></label>
       </div>
       <div class="auto-actions" style="margin-top:10px"><button class="bigbtn primary" id="r2Run"><b>Run routine 2</b><small id="r2Sub">Checking…</small></button></div>
       <div class="row" style="margin-top:14px;align-items:center">
@@ -402,7 +402,8 @@
           <label>Next swab ΔX mm<input type="number" id="sPX" min="-50" max="50" step="0.1"></label>
           <label>Next swab ΔY mm<input type="number" id="sPY" min="-50" max="50" step="0.1"></label>
         </div>
-        <p class="note">Distance from swab position 1 (the taught pickup) to position 2. Routine 2 grips position 1 after slide A and position 2 after slide B.</p>
+        <div class="row" style="margin-top:6px"><button class="sm" id="sPos2">Set position 2 here</button></div>
+        <p class="note">Jog the open jaws to swab position 2, then press this: it fills the two boxes above from the taught pickup. Distance from swab position 1 (the taught pickup) to position 2. Routine 2 grips position 1 after slide A and position 2 after slide B.</p>
         <div class="row" style="margin-top:10px">
           <label>XY speed mm/s<input type="number" id="sXY" min="1" max="150" step="5"></label>
           <label>Z speed mm/s<input type="number" id="sZ" min="0.5" max="20" step="0.5"></label>
@@ -1263,6 +1264,7 @@ $('#zhRun').onclick=()=>{if(!confirm('Home Z on the load cell? The head moves to
 $('#zhCheck').onclick=()=>{if(!confirm('Probe the cell with the swab in the jaws? Z is not changed.'))return;
   run('Z check',async()=>{const r=await post('/api/zhome/check');
     $('#zhMsg').textContent=`Contact at ${fmt(r.contact_z,3)} mm, ${r.drift_mm>=0?'+':''}${fmt(r.drift_mm,3)} mm from the Z reference. Z unchanged.`;$('#zhMsg').className='note good';await loadZh();setPos(await api('/api/machine/position'))})};
+$('#sPos2').onclick=()=>run('Saved swab position 2',async()=>{S.auto=await post('/api/auto/pickup2');for(const id of ['sPX','sPY'])delete $('#'+id).dataset.dirty;paintAuto();fillSettingsPickup()});
 $('#zhPark').onclick=()=>run('Park at safe Z',async()=>{setPos(await post('/api/park'))});
 
 function paintR2(){
