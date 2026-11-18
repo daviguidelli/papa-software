@@ -20,7 +20,7 @@ DEFAULTS: dict[str, Any] = {
     "bin": None,             # {"x": , "y": , "z": } centre of the bin, where the jaws open
     "safe_z": None,          # XY only ever moves at or above this Z
     "lift_mm": 30.0,         # after the grip, rise this far above the pickup Z
-    "grip_shift_mm": 0.0,    # gantry moves this far in +X while the jaws close, to meet the swab at the centre
+    "grip_shift_mm": 0.0,    # gantry moves this far in -X while the jaws close, to meet the swab at the centre (jaws now close toward +X)
     "grip_close_s": 1.5,     # how long the jaws take to close when the shift is used
     "grip_wait_s": 1.0,      # time allowed for the jaws to close before lifting
     "release_wait_s": 0.6,   # time allowed for the jaws to open over the bin
@@ -94,7 +94,7 @@ def problems(settings: dict[str, Any], machine: Any, action: str, ref: str | Non
     if safe is not None and not machine.limits["z"][0] <= float(safe) <= machine.limits["z"][1]:
         out.append("Safe Z is outside the machine limits.")
     if action == "grip" and t is not None:
-        sx = float(t["x"]) + float(settings.get("grip_shift_mm") or 0.0)
+        sx = float(t["x"]) - float(settings.get("grip_shift_mm") or 0.0)
         if not machine.in_limits(sx, float(t["y"]), float(t["z"])):
             out.append("The grip shift would move X outside the machine limits.")
         top = float(t["z"]) + float(settings["lift_mm"])
@@ -194,7 +194,7 @@ class AutoRunner:
         th = threading.Thread(target=close, daemon=True)
         th.start()
         try:
-            self._printer().move(x=float(t["x"]) + shift, y=float(t["y"]),
+            self._printer().move(x=float(t["x"]) - shift, y=float(t["y"]),
                                  speed_mm_s=max(0.1, abs(shift) / dur))
         finally:
             th.join()

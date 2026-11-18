@@ -394,10 +394,10 @@
           <label>Release wait s<input type="number" id="sRel" min="0" max="10" step="0.1"></label>
         </div>
         <div class="row" style="margin-top:10px">
-          <label>Grip shift mm (+X)<input type="number" id="sShift" min="-10" max="10" step="0.1"></label>
+          <label>Grip shift mm (−X)<input type="number" id="sShift" min="-10" max="10" step="0.1"></label>
           <label>Close time s<input type="number" id="sCloseT" min="0.2" max="10" step="0.1"></label>
         </div>
-        <p class="note">While the jaws close, the gantry moves this far in +X so the swab meets the jaw at the centre. 0 turns it off. Negative moves −X.</p>
+        <p class="note">While the jaws close, the gantry moves this far in −X to balance the jaw moving toward +X, so the swab meets the jaw at the centre. 0 turns it off. Negative moves +X.</p>
         <div class="row" style="margin-top:10px">
           <label>Next swab ΔX mm<input type="number" id="sPX" min="-50" max="50" step="0.1"></label>
           <label>Next swab ΔY mm<input type="number" id="sPY" min="-50" max="50" step="0.1"></label>

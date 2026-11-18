@@ -63,7 +63,7 @@ def test_routine_scrub_fault_keeps_swab_and_skips_dispose(taught):
     assert states.get("Lower into the bin") == "skipped"
 
 
-def test_grip_shift_moves_gantry_in_plus_x_while_jaws_close(taught):
+def test_grip_shift_moves_gantry_in_minus_x_while_jaws_close(taught):
     taught.post("/api/auto/settings", json={"grip_shift_mm": 2.0, "grip_close_s": 0.4})
     mock = taught.server.hub.printer._inner
     mock.speed_factor = 0
@@ -74,13 +74,13 @@ def test_grip_shift_moves_gantry_in_plus_x_while_jaws_close(taught):
         time.sleep(0.02)
     s = taught.get("/api/auto/status").json()
     assert s["finished"], s
-    assert any(l.startswith("G1 X42.0000 Y60.0000") for l in mock.log)
+    assert any(l.startswith("G1 X38.0000 Y60.0000") for l in mock.log)
     assert grip.state == "closed"
 
 
 def test_grip_shift_outside_limits_is_refused(taught):
     taught.post("/api/auto/settings", json={"grip_shift_mm": 10.0})
-    taught.post("/api/machine/move", json={"x": 349, "y": 60, "z": 40, "speed_mm_s": 100})
+    taught.post("/api/machine/move", json={"x": 1, "y": 60, "z": 40, "speed_mm_s": 100})
     taught.post("/api/auto/teach", json={"target": "pickup"})
     r = taught.post("/api/auto/grip")
     assert r.status_code == 400 and "grip shift" in r.json()["error"].lower()
