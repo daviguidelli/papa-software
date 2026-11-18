@@ -13,9 +13,13 @@ from collections import deque
 from typing import Any, Protocol
 
 
+G_TO_N = 0.00980665       # one gram of mass, as a force in newtons
+
+
 class LoadCell(Protocol):
     def read_counts(self) -> int: ...
     def grams(self, samples: int = 5) -> float: ...
+    def newtons(self, samples: int = 5) -> float: ...
     def tare(self, samples: int = 20) -> int: ...
 
 
@@ -67,6 +71,10 @@ class HX711LoadCell:
         """Median of a few samples: one outlier should not stop a descent."""
         reads = [self.read_counts() for _ in range(max(1, samples))]
         return (statistics.median(reads) - self.offset) / self.scale
+
+    def newtons(self, samples: int = 5) -> float:
+        """Force in newtons. The scale is set once with a known mass in grams."""
+        return self.grams(samples) * G_TO_N
 
     def tare(self, samples: int = 20) -> int:
         self.offset = int(statistics.median(self.read_counts() for _ in range(samples)))

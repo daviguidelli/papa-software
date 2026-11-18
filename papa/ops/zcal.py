@@ -24,9 +24,10 @@ class OverForce(RuntimeError):
 
 @dataclass(frozen=True)
 class ZCalResult:
-    contact_z: float
-    force_g: float
+    contact_z: float        # Z where the force crosses the target, interpolated between two steps
+    force_n: float          # the reading that was accepted
     steps: int
+    stepped_z: float = 0.0  # the Z the head actually stopped at, before the back-off
 
     def scribe_z(self, surface_offset_mm: float) -> float:
         """Scribe height on glass, derived from the probed contact height.
@@ -44,8 +45,8 @@ def calibrate_z(
     cell_x: float,
     cell_y: float,
     z_safe: float,
-    target_force_g: float,
-    abort_force_g: float,
+    target_force_n: float,
+    abort_force_n: float,
     step_mm: float,
     max_travel_mm: float,
     approach_speed_mm_s: float,
@@ -54,7 +55,7 @@ def calibrate_z(
     backoff_mm: float = 0.5,
     z_speed_mm_s: float = 10.0,
 ) -> ZCalResult:
-    if abort_force_g <= target_force_g:
+    if abort_force_n <= target_force_n:
         raise ValueError("abort force must exceed target force")
 
     # Go to the start Z first: rise if below it, XY at that height, then settle
@@ -70,28 +71,37 @@ def calibrate_z(
     travelled = 0.0
     hits = 0
     steps = 0
+    prev_z = printer.position().z
+    prev_f = 0.0
+    cross: tuple[float, float, float, float] | None = None
     while travelled < max_travel_mm:
         printer.move_relative(dz=-step_mm, speed_mm_s=approach_speed_mm_s)
         travelled += step_mm
         steps += 1
-        force = loadcell.grams()
+        z_now = prev_z - step_mm
+        force = loadcell.newtons()
 
-        if force >= abort_force_g:
+        if force >= abort_force_n:
             printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
             raise OverForce(
-                f"load cell read {force:.2f} g, at or above the abort force "
-                f"{abort_force_g:.2f} g"
+                f"load cell read {force:.3f} N, at or above the abort force "
+                f"{abort_force_n:.3f} N"
             )
 
-        if force >= target_force_g:
+        if force >= target_force_n:
+            if hits == 0:
+                cross = (prev_z, prev_f, z_now, force)
             hits += 1
             if hits >= settle_readings:
-                contact_z = printer.position().z
+                stepped = printer.position().z
+                z0, f0, z1, f1 = cross
+                contact_z = z1 if f1 <= f0 else z0 + (target_force_n - f0) * (z1 - z0) / (f1 - f0)
                 if backoff_mm:
                     printer.move_relative(dz=backoff_mm, speed_mm_s=approach_speed_mm_s)
-                return ZCalResult(contact_z=contact_z, force_g=force, steps=steps)
+                return ZCalResult(contact_z=contact_z, force_n=force, steps=steps, stepped_z=stepped)
         else:
             hits = 0
+        prev_z, prev_f = z_now, force
 
     printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
     raise GripFailed(

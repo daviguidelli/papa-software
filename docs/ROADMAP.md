@@ -49,8 +49,8 @@ bench.
 | --- | --- | --- |
 | `scribe.kerf_mm` | calibration.yaml | Comb of line pairs at 2.0-0.1 mm gaps, at the working force. See EXPERIMENTS.md |
 | `wear.max_path_mm`, `max_contact_s` | machine.yaml | Scribe until the line quality drops, on a sacrificial slide |
-| `zcal.target_force_g` | machine.yaml | Lowest force that removes film cleanly |
-| `zcal.abort_force_g` | machine.yaml | Well under the cell's rating — confirm the part first |
+| `zcal.target_force_n` | machine.yaml | Lowest force that removes film cleanly |
+| `zcal.abort_force_n` | machine.yaml | Well under the cell's rating — confirm the part first |
 | `slide_surface_offset_mm` | calibration.yaml | Measure load cell top vs slide top |
 | `detection.*_hsv`, blue fractions | calibration.yaml | Sample real film and stem under the final lighting |
 | `speeds_mm_s.scribe` | machine.yaml | Fast enough to be useful, slow enough to cut cleanly |

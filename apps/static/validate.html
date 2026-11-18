@@ -99,7 +99,7 @@
       <div class="row" style="justify-content:space-between;align-items:center">
         <p class="label" style="margin:0">Live force</p><span class="chip" id="cellReal"></span>
       </div>
-      <div style="margin-top:6px"><span class="big" id="grams">–</span> <span class="muted mono" id="lcUnit">g</span></div>
+      <div style="margin-top:6px"><span class="big" id="grams">–</span> <span class="muted mono" id="lcUnit">N</span></div>
       <div class="bar"><i id="forceBar"></i></div>
       <p class="note mono" id="forceNote"></p>
       <canvas id="lcChart" style="width:100%;height:240px;display:block;margin-top:10px;border:1px solid var(--line);border-radius:4px;background:rgba(0,0,0,.25)"></canvas>
@@ -120,7 +120,7 @@
         <button id="scale" class="gold">Calibrate scale</button>
         <button id="saveScale" disabled>Save tare + scale</button>
       </div>
-      <p class="note" id="scaleNote">Until the scale is calibrated the numbers above are raw counts, not grams. Order: empty cell, Tare; then place the known weight, Calibrate scale; then Save.</p>
+      <p class="note" id="scaleNote">Until the scale is calibrated the numbers above are raw counts, not newtons. Order: empty cell, Tare; then place a known mass (type it in grams), Calibrate scale; then Save. The mass is needed once. Every Z home and check tares by itself.</p>
     </div></details>
 
     <details class="card fold" id="f-where"><summary><span class="label">Where is the load cell</span></summary><div class="fold-body">
@@ -336,6 +336,46 @@
       <p class="note" id="r1Msg"></p>
     </div>
 
+    <div class="card" id="zhMain">
+      <p class="label">Z reference</p>
+      <h2>Z home on the <em>load cell</em></h2>
+      <p class="note" style="margin-top:0">Steps the swab onto the cell until the force reaches the target, calls that height the Z reference, then sets the floor and every taught Z from the heights below. Needs the cell XY and probe start Z (Manual tab), a swab in the jaws, a Z floor below the cell, and the scale set once.</p>
+      <div class="kv" id="zhOut"></div>
+      <div class="row" style="margin-top:10px;align-items:flex-end">
+        <label>Slide mm<input type="number" id="zhSlide" step="0.01"></label>
+        <label>Pickup mm<input type="number" id="zhPick" step="0.01"></label>
+        <label>Bin mm<input type="number" id="zhBin" step="0.01"></label>
+        <label>Safe mm<input type="number" id="zhSafe" step="0.5"></label>
+      </div>
+      <div class="row" style="margin-top:10px;align-items:flex-end">
+        <label>Floor margin mm<input type="number" id="zhMargin" step="0.1" min="0" max="5"></label>
+        <button class="gold sm" id="zhSave">Save heights</button>
+        <button class="primary" id="zhRun">Home Z on the load cell</button>
+        <button class="sm" id="zhCheck">Check Z (no change)</button>
+        <button class="sm" id="zhPark">Park at safe Z</button>
+      </div>
+      <p class="note">Heights are mm above the cell contact at the target force (negative = below). Slide is the top of the glass relative to the top of the cell. The floor sits at the lowest height minus the margin: 0 is exact, but a shorter swab then cannot reach the cell.</p>
+      <p class="note" id="zhMsg"></p>
+    </div>
+
+    <div class="card" id="r2Main">
+      <p class="label">Full cycle</p>
+      <h2>Routine <em>2</em></h2>
+      <p class="note" style="margin-top:0">Check Z, scrub slide A, dispose, grip position 1, check Z, scrub slide B, dispose, grip position 2, park at safe Z. A check only reports the drift: Z is never changed. Slides come from the last scan on the Substrates tab, and the Scrub tab needs a start set once.</p>
+      <div class="row" style="align-items:flex-end">
+        <label>Slide A<input type="text" id="r2A" value="S1" size="4"></label>
+        <label>Slide B<input type="text" id="r2B" value="S2" size="4"></label>
+      </div>
+      <div class="auto-actions" style="margin-top:10px"><button class="bigbtn primary" id="r2Run"><b>Run routine 2</b><small id="r2Sub">Checking…</small></button></div>
+      <div class="row" style="margin-top:14px;align-items:center">
+        <button class="danger sm" id="r2Stop" disabled>Stop after this move</button>
+        <span class="muted" style="font-size:12.5px">A stop during a scrub lifts the swab clear and keeps it in the jaws.</span>
+      </div>
+      <ol class="runsteps" id="r2Steps" hidden></ol>
+      <div class="kv" id="r2Check" style="margin-top:10px"></div>
+      <p class="note" id="r2Msg"></p>
+    </div>
+
     <details class="card fold" id="f-teach" open>
       <summary><span class="label">Taught positions</span></summary>
       <div class="fold-body">
@@ -358,6 +398,11 @@
           <label>Close time s<input type="number" id="sCloseT" min="0.2" max="10" step="0.1"></label>
         </div>
         <p class="note">While the jaws close, the gantry moves this far in +X so the swab meets the jaw at the centre. 0 turns it off. Negative moves −X.</p>
+        <div class="row" style="margin-top:10px">
+          <label>Next swab ΔX mm<input type="number" id="sPX" min="-50" max="50" step="0.1"></label>
+          <label>Next swab ΔY mm<input type="number" id="sPY" min="-50" max="50" step="0.1"></label>
+        </div>
+        <p class="note">Distance from swab position 1 (the taught pickup) to position 2. Routine 2 grips position 1 after slide A and position 2 after slide B.</p>
         <div class="row" style="margin-top:10px">
           <label>XY speed mm/s<input type="number" id="sXY" min="1" max="150" step="5"></label>
           <label>Z speed mm/s<input type="number" id="sZ" min="0.5" max="20" step="0.5"></label>
@@ -656,7 +701,7 @@ function paintCell(){
   if(zset&&document.activeElement!==$('#zs'))$('#zs').value=l.z_safe;
   if(zset&&document.activeElement!==$('#pz0')&&!$('#pz0').value)$('#pz0').value=l.z_safe;
   const z=S.dev&&S.dev.zcal;
-  $('#probeNote').textContent=z?`Steps down ${z.step_mm} mm at a time from the start Z, up to ${z.max_travel_mm} mm. Accepts contact at ${z.target_force_g} g, aborts at ${z.abort_force_g} g. Tares the cell first.`:'';
+  $('#probeNote').textContent=z?`Steps down ${z.step_mm} mm at a time from the start Z, up to ${z.max_travel_mm} mm. Accepts contact at ${z.target_force_n} N, aborts at ${z.abort_force_n} N. Tares the cell first.`:'';
   paintProbeReady();
 }
 function paintProbeReady(){
@@ -796,7 +841,8 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
 const LC={seq:0,t:[],c:[],offset:0,scale:1,scaled:false,timer:null,paused:false,err:'',lastT:0};
 const colors=()=>{const cs=getComputedStyle(document.documentElement);return{ink:cs.getPropertyValue('--ink').trim()||'#f6f6f3',muted:cs.getPropertyValue('--muted').trim()||'#8e989d',gold:cs.getPropertyValue('--gold').trim()||'#f6f6f3',line:'rgba(255,255,255,.12)',green:'#93d5b1',red:'#ff8f86'}};
 const medianOf=a=>{const b=[...a].sort((x,y)=>x-y),n=b.length;return n?(n%2?b[(n-1)/2]:(b[n/2-1]+b[n/2])/2):NaN};
-const toUnit=c=>LC.scaled?(c-LC.offset)/LC.scale:(c-LC.offset);
+const G_TO_N=0.00980665;
+const toUnit=c=>LC.scaled?(c-LC.offset)/LC.scale*G_TO_N:(c-LC.offset);
 function liveReset(){LC.seq=0;LC.t=[];LC.c=[]}
 async function liveTick(){
   if(S.busy||LC.paused||S.tab!=='cell'||document.hidden)return;
@@ -817,7 +863,7 @@ function setWatch(on){
 function drawLive(){
   const cv=$('#lcChart'),dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
   if(!W)return;cv.width=W*dpr;cv.height=H*dpr;const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,W,H);
-  const C=colors(),win=+$('#lcWin').value,N=+$('#lcFilt').value,unit=LC.scaled?'g':'counts';
+  const C=colors(),win=+$('#lcWin').value,N=+$('#lcFilt').value,unit=LC.scaled?'N':'counts';
   $('#lcUnit').textContent=unit+(LC.scaled?'':' (not calibrated)');
   const t1=LC.lastT,t0=t1-win;
   const idx=[];for(let i=0;i<LC.t.length;i++)if(LC.t[i]>=t0)idx.push(i);
@@ -825,7 +871,7 @@ function drawLive(){
   const filt=raw.map((_,i)=>medianOf(raw.slice(Math.max(0,i-N+1),i+1)));
   if(raw.length<2){g.fillStyle=C.muted;g.font='13px IBM Plex Mono,monospace';g.fillText(LC.err||'Waiting for readings…',14,24);$('#grams').textContent='–';return}
   let lo=Math.min(...raw),hi=Math.max(...raw);const rawPP=hi-lo;
-  const z=S.dev&&S.dev.zcal,ab=z?z.abort_force_g:20,tg=z?z.target_force_g:5;
+  const z=S.dev&&S.dev.zcal,ab=z?z.abort_force_n:3,tg=z?z.target_force_n:1.1;
   if(LC.scaled){lo=Math.min(lo,0);hi=Math.max(hi,tg*1.2)}
   const pad=(hi-lo)*0.08||1;lo-=pad;hi+=pad;
   const L=58,R=10,T=10,B=22,pw=W-L-R,ph=H-T-B;
@@ -839,14 +885,14 @@ function drawLive(){
   if(N>1){g.lineWidth=2;g.strokeStyle=C.gold;g.beginPath();tt.forEach((t,i)=>{i?g.lineTo(X(t),Y(filt[i])):g.moveTo(X(t),Y(filt[i]))});g.stroke()}
   g.lineWidth=1;
   const now=N>1?filt[filt.length-1]:raw[raw.length-1];
-  $('#grams').textContent=LC.scaled?fmt(now,2):Math.round(now).toLocaleString('en-US');
+  $('#grams').textContent=LC.scaled?fmt(now,3):Math.round(now).toLocaleString('en-US');
   const b=$('#forceBar');
-  if(LC.scaled){b.style.width=Math.max(0,Math.min(100,now/ab*100))+'%';b.style.background=now>=ab?'#ff8f86':now>=tg?'#e6cb8f':'#93d5b1';$('#forceNote').textContent=`target ${tg} g · abort ${ab} g`}
-  else{b.style.width='0%';$('#forceNote').textContent='raw counts relative to the tare point; calibrate the scale to get grams'}
+  if(LC.scaled){b.style.width=Math.max(0,Math.min(100,now/ab*100))+'%';b.style.background=now>=ab?'#ff8f86':now>=tg?'#e6cb8f':'#93d5b1';$('#forceNote').textContent=`target ${tg} N · abort ${ab} N`}
+  else{b.style.width='0%';$('#forceNote').textContent='raw counts relative to the tare point; calibrate the scale to get newtons'}
   // noise statistics over the window (raw samples)
   const n=raw.length,mean=raw.reduce((a,x)=>a+x,0)/n,sd=Math.sqrt(raw.reduce((a,x)=>a+(x-mean)**2,0)/n),pp=rawPP;
   const med=medianOf(raw),mad=medianOf(raw.map(x=>Math.abs(x-med)))*1.4826,spikes=mad>0?raw.filter(x=>Math.abs(x-med)>6*mad).length:0;
-  const sps=n/Math.max(.001,tt[n-1]-tt[0]),f=x=>LC.scaled?fmt(x,3)+' g':Math.round(x).toLocaleString('en-US')+' counts';
+  const sps=n/Math.max(.001,tt[n-1]-tt[0]),f=x=>LC.scaled?fmt(x,3)+' N':Math.round(x).toLocaleString('en-US')+' counts';
   const lsb=LC.scaled?(sd/ (LC.scale||1)):sd;
   $('#lcStats').innerHTML=`<span>Noise (std dev)</span><span>${f(sd)}</span><span>Peak to peak</span><span>${f(pp)}</span><span>Median in window</span><span>${f(med)}</span><span>Samples</span><span>${n} (${sps.toFixed(0)} per s)</span>`;
   const rawAll=idx.map(i=>LC.c[i]);let v='',cls='note';
@@ -864,7 +910,7 @@ $('#tare').onclick=()=>run('tare',async()=>{const r=await post('/api/loadcell/ta
 $('#scale').onclick=()=>run('scale',async()=>{
   const g=+$('#kw').value;if(!(g>0))throw new Error('Enter the known weight in grams');
   const r=await post('/api/loadcell/scale',{grams:g});S.scaled=r.scale_counts_per_g;
-  $('#scaleNote').textContent=`Scale ${fmt(S.scaled,4)} counts per gram. Tare with the cell empty first, then place ${g} g on it before pressing Calibrate scale.`;
+  $('#scaleNote').textContent=`Scale ${fmt(S.scaled,4)} counts per gram (shown as newtons). Tare with the cell empty first, then place ${g} g on it before pressing Calibrate scale.`;
   $('#saveScale').disabled=S.tared==null;liveReset()});
 $('#saveScale').onclick=()=>run('save tare + scale',async()=>{await post('/api/loadcell/save_scale',{tare_counts:S.tared,scale_counts_per_g:S.scaled});await loadCal();$('#scaleNote').textContent='Saved to the calibration file.'});
 $('#capXY').onclick=()=>run('load cell XY captured',async()=>{await post('/api/loadcell/position',{capture_xy:true});await loadCal()});
@@ -874,7 +920,7 @@ $('#saveZ').onclick=()=>run('probe start Z saved',async()=>{const v=parseFloat($
 $('#gripped').onchange=paintProbeReady;
 $('#probe').onclick=()=>{if(!confirm('Probe the load cell now? The head moves to the cell and steps down. Keep a hand on E-STOP.'))return;
   run('probe',async()=>{const sz=parseFloat($('#pz0').value);const r=await post('/api/loadcell/probe',{start_z:Number.isFinite(sz)?sz:undefined,speed_mm_s:+$('#pv').value,step_mm:+$('#pst').value});S.probe=r;LS.set('lastProbe',r);
-    $('#probeOut').innerHTML=`<span>Contact Z</span><span class="good">${fmt(r.contact_z,3)} mm</span><span>Force at contact</span><span>${fmt(r.force_g,2)} g</span><span>Steps</span><span>${r.steps}</span>`;
+    $('#probeOut').innerHTML=`<span>Contact Z</span><span class="good">${fmt(r.contact_z,3)} mm</span><span>Force at contact</span><span>${fmt(r.force_n,3)} N</span><span>Steps</span><span>${r.steps}</span>`;
     LS.set('cellZ',r.contact_z);paintOffset();setPos(await api('/api/machine/position'))})};
 
 /* ---------- glass offset ---------- */
@@ -1051,9 +1097,9 @@ $('#taught').onclick=e=>{
   if(b.dataset.save)run('Saved '+b.dataset.save,async()=>{S.auto=await post('/api/auto/teach',{target:b.dataset.save});paintAuto()});
   if(b.dataset.clear)run('Cleared '+b.dataset.clear,async()=>{S.auto=await post('/api/auto/clear',{target:b.dataset.clear});paintAuto()});
 };
-['sLift','sGrip','sRel','sShift','sCloseT','sXY','sZ'].forEach(id=>$('#'+id).addEventListener('input',e=>{e.target.dataset.dirty='1'}));
+['sLift','sGrip','sRel','sShift','sCloseT','sXY','sZ','sPX','sPY'].forEach(id=>$('#'+id).addEventListener('input',e=>{e.target.dataset.dirty='1'}));
 $('#sSave').onclick=()=>run('Saved motion settings',async()=>{
-  S.auto=await post('/api/auto/settings',{lift_mm:+$('#sLift').value,grip_wait_s:+$('#sGrip').value,release_wait_s:+$('#sRel').value,grip_shift_mm:+$('#sShift').value,grip_close_s:+$('#sCloseT').value,xy_speed_mm_s:+$('#sXY').value,z_speed_mm_s:+$('#sZ').value});['sLift','sGrip','sRel','sShift','sCloseT','sXY','sZ'].forEach(id=>delete $('#'+id).dataset.dirty);paintAuto()});
+  S.auto=await post('/api/auto/settings',{lift_mm:+$('#sLift').value,grip_wait_s:+$('#sGrip').value,release_wait_s:+$('#sRel').value,grip_shift_mm:+$('#sShift').value,pickup_step_x:+$('#sPX').value,pickup_step_y:+$('#sPY').value,grip_close_s:+$('#sCloseT').value,xy_speed_mm_s:+$('#sXY').value,z_speed_mm_s:+$('#sZ').value});['sLift','sGrip','sRel','sShift','sCloseT','sXY','sZ','sPX','sPY'].forEach(id=>delete $('#'+id).dataset.dirty);paintAuto()});
 
 {const _paint=paint;paint=function(){_paint();if(S.mode==='auto')paintAuto()}}
 /* ---------- scrub ---------- */
@@ -1182,6 +1228,79 @@ function r1Watch(){
 $('#r1Run').onclick=()=>run('Routine 1',async()=>{r1Cache='';await post('/api/routine1/run');S.r1=await api('/api/routine1');paintR1();r1Watch()});
 $('#r1Stop').onclick=async()=>{try{await post('/api/routine1/stop');log('stop requested: it ends after the current move')}catch(e){say(String(e.message||e),'err')}};
 {const _paint3=paint;paint=function(){_paint3();if(S.mode==='auto')paintR1()}}
+
+/* ---------- Z home, heights, routine 2 ---------- */
+let zhData=null,r2Timer=null,r2Cache='',r2Info=null;
+function fillSettingsPickup(){const st=S.auto&&S.auto.settings;if(!st)return;const ps=st.pickup_step||{x:0,y:0};
+  for(const [id,v] of [['sPX',ps.x],['sPY',ps.y]]){const e=$('#'+id);if(e&&!e.dataset.dirty&&document.activeElement!==e)e.value=v}}
+async function loadZh(){
+  try{zhData=await api('/api/zhome')}catch(e){zhData=null}
+  paintZh();
+}
+function paintZh(){
+  const z=zhData;if(!z)return;const st=z.settings,hm=homedXY();
+  for(const [id,k] of [['zhSlide','slide_mm'],['zhPick','pickup_mm'],['zhBin','bin_mm'],['zhSafe','safe_mm'],['zhMargin','floor_margin_mm']]){
+    const e=$('#'+id);if(e&&document.activeElement!==e&&!e.dataset.dirty)e.value=st[k]==null?'':st[k]}
+  const lc=st.last_check;
+  $('#zhOut').innerHTML=`<span>Z reference</span><span>${st.ref?'set at '+fmt(st.ref_z,3)+' mm (contact at '+fmt(z.target_force_n,2)+' N)':'not homed on the cell'}</span>`
+   +`<span>Floor with these heights</span><span>${fmt(z.floor_would_be,3)} mm</span>`
+   +`<span>Absolute Z: slide / pickup / bin / safe</span><span>${['slide_mm','pickup_mm','bin_mm','safe_mm'].map(k=>z.abs[k]==null?'–':fmt(z.abs[k],3)).join(' / ')}</span>`
+   +`<span>Last check</span><span>${lc?`drift ${lc.drift_mm>=0?'+':''}${fmt(lc.drift_mm,3)} mm (${fmt(lc.drift_mm,2)} to 2 dp) at ${fmt(lc.force_n,3)} N`:'–'}</span>`;
+  const off=S.busy||!S.pos||!hm||autoRunning();
+  $('#zhRun').disabled=off;$('#zhCheck').disabled=off||st.ref==null;$('#zhPark').disabled=off;$('#zhSave').disabled=S.busy;
+}
+function autoRunning(){return !!((S.auto&&S.auto.status&&S.auto.status.running)||(S.r1&&S.r1.status&&S.r1.status.running)||(r2Info&&r2Info.status&&r2Info.status.running))}
+['zhSlide','zhPick','zhBin','zhSafe','zhMargin'].forEach(id=>$('#'+id).addEventListener('input',e=>{e.target.dataset.dirty='1'}));
+$('#zhSave').onclick=()=>run('Saved heights',async()=>{
+  const v=id=>{const x=parseFloat($('#'+id).value);return Number.isFinite(x)?x:undefined};
+  zhData=await post('/api/zhome/heights',{slide_mm:v('zhSlide'),pickup_mm:v('zhPick'),bin_mm:v('zhBin'),safe_mm:v('zhSafe'),floor_margin_mm:v('zhMargin')});
+  ['zhSlide','zhPick','zhBin','zhSafe','zhMargin'].forEach(id=>delete $('#'+id).dataset.dirty);
+  S.auto=await api('/api/auto');await poll();paintZh();paintAuto()});
+$('#zhRun').onclick=()=>{if(!confirm('Home Z on the load cell? The head moves to the cell and steps down onto it. Keep a hand on E-STOP.'))return;
+  run('Z home',async()=>{const r=await post('/api/zhome/run');zhData=r;
+    $('#zhMsg').textContent=`Contact found at ${fmt(r.contact_z_before,3)} mm (${r.steps} steps, ${fmt(r.force_n,3)} N). Z now reads ${fmt(r.ref_z,3)} at the contact. Floor ${fmt(r.floor,3)} mm.`;$('#zhMsg').className='note good';
+    S.auto=await api('/api/auto');setPos(await api('/api/machine/position'));await poll();await loadR1();await loadR2()})};
+$('#zhCheck').onclick=()=>{if(!confirm('Probe the cell with the swab in the jaws? Z is not changed.'))return;
+  run('Z check',async()=>{const r=await post('/api/zhome/check');
+    $('#zhMsg').textContent=`Contact at ${fmt(r.contact_z,3)} mm, ${r.drift_mm>=0?'+':''}${fmt(r.drift_mm,3)} mm from the Z reference. Z unchanged.`;$('#zhMsg').className='note good';await loadZh();setPos(await api('/api/machine/position'))})};
+$('#zhPark').onclick=()=>run('Park at safe Z',async()=>{setPos(await post('/api/park'))});
+
+function paintR2(){
+  const a=r2Info;if(!a)return;
+  const run=!!(a.status&&a.status.running);
+  const lock=run||S.busy||!S.pos||!homedXY();
+  $('#r2Run').disabled=lock||!a.ready;
+  $('#r2Sub').textContent=!homedXY()?'Home X and Y first':(a.problems[0]||'Check, scrub A, swap, check, scrub B, swap, park');
+  $('#r2Stop').disabled=!run;
+  const steps=(a.status&&a.status.steps)||[];
+  const sh=steps.map(x=>`<li class="${x.state}">${esc(x.name)}</li>`).join('');
+  $('#r2Steps').hidden=!steps.length;
+  if(sh!==r2Cache){$('#r2Steps').innerHTML=sh;r2Cache=sh}
+  const m=$('#r2Msg'),t=a.status||{};
+  if(run){m.textContent='Running routine 2…';m.className='note'}
+  else if(t.error){m.textContent=t.error;m.className='note err'}
+  else if(t.finished){m.textContent='Routine 2 finished. Parked at safe Z with a fresh swab at position 2.';m.className='note good'}
+  else{m.textContent='';m.className='note'}
+  const lc=a.last_check;
+  $('#r2Check').innerHTML=lc?`<span>Latest Z check</span><span>drift ${lc.drift_mm>=0?'+':''}${fmt(lc.drift_mm,3)} mm at ${fmt(lc.force_n,3)} N</span>`:'';
+}
+async function loadR2(){
+  try{r2Info=await api('/api/routine2');if(r2Info.status.running&&!r2Timer)r2Watch()}catch(e){r2Info=null}
+  paintR2();loadZh();
+}
+function r2Watch(){
+  paint();
+  r2Timer=setInterval(async()=>{
+    try{
+      const s=await api('/api/routine2/status');if(r2Info){r2Info.status=s;r2Info.last_check=s.last_check||r2Info.last_check}paintR2();
+      setPos(await api('/api/machine/position'));paint();
+      if(!s.running){clearInterval(r2Timer);r2Timer=null;log(s.error?('routine 2 stopped: '+s.error):'routine 2 finished',s.error?'err':'good');await loadR2();paint()}
+    }catch(e){}
+  },400);
+}
+$('#r2Run').onclick=()=>run('Routine 2',async()=>{r2Cache='';await post('/api/routine2/run',{slides:[$('#r2A').value.trim(),$('#r2B').value.trim()],force:true});r2Info=await api('/api/routine2');paintR2();r2Watch()});
+$('#r2Stop').onclick=async()=>{try{await post('/api/routine2/stop');log('stop requested: it ends after the current move')}catch(e){say(String(e.message||e),'err')}};
+{const _paint5=paint;paint=function(){_paint5();if(S.mode==='auto'){paintR2();paintZh();fillSettingsPickup()}}}
 
 /* ---------- substrates: camera alignment ---------- */
 let alTimer=null,alClick=null,alSel=new Set();
@@ -1492,7 +1611,7 @@ function setMode(m){
   S.mode=m;LS.set('mode',m);
   document.querySelectorAll('.mode').forEach(b=>b.setAttribute('aria-selected',b.dataset.mode===m));
   $('#modeManual').hidden=m!=='manual';$('#modeAuto').hidden=m!=='auto';$('#modeScrub').hidden=m!=='scrub';$('#modeAlign').hidden=m!=='align';
-  if(m==='auto'||m==='scrub'||m==='align'){if(!['auto','scrub','align'].includes(S.tab))prevTab=S.tab;S.tab=m;setWatch(false);camStop();m==='auto'?(loadAuto(),loadR1()):m==='scrub'?loadScrub():(loadAlign(),loadRef(),alCamLoad())}
+  if(m==='auto'||m==='scrub'||m==='align'){if(!['auto','scrub','align'].includes(S.tab))prevTab=S.tab;S.tab=m;setWatch(false);camStop();m==='auto'?(loadAuto(),loadR1(),loadR2()):m==='scrub'?loadScrub():(loadAlign(),loadRef(),alCamLoad())}
   else{const t=document.querySelector('.tab[data-tab="'+prevTab+'"]');S.tab='';if(t)t.click()}
 }
 document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{if(S.mode!==b.dataset.mode)setMode(b.dataset.mode)});

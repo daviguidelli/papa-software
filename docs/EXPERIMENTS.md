@@ -47,7 +47,7 @@ separately, since lines that meet in the drawing are meant to meet.
 
 These are two different numbers and both are currently unresolved.
 
-The configured placeholders are `target_force_g: 5.0` and `abort_force_g: 20.0`.
+The configured placeholders are `target_force_n: 1.1` and `abort_force_n: 3.0`.
 A working force of **1.1 N is 112 gf**, which is twenty-two times the
 placeholder. Before anything is trusted:
 
@@ -56,11 +56,11 @@ placeholder. Before anything is trusted:
   at full scale before reaching the working force, and over its rating the
   reading is neither linear nor safe for the cell.
 - If 1.1 N is really the working force, the cell must be rated well above it,
-  and `abort_force_g` has to sit between the working force and the rating.
+  and `abort_force_n` has to sit between the working force and the rating.
 - If the cell is a 100 g part, then the working force has to come down, or the
   cell has to change.
 
-`abort_force_g` exists to protect the cell, so it is only meaningful once the
+`abort_force_n` exists to protect the cell, so it is only meaningful once the
 rating is known.
 
 **Procedure.** With a swab gripped, use the Jog and test tab: tare, then

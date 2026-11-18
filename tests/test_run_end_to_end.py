@@ -17,7 +17,7 @@ MACHINE = Machine({
     "axes": {"local_x": "+X", "local_y": "-Y"},
     "limits_mm": {"x": [0, 350], "y": [0, 350], "z": [0, 340]},
     "speeds_mm_s": {"travel": 150, "scribe": 20, "z_approach": 1.0, "z_lift": 10},
-    "zcal": {"target_force_g": 5.0, "abort_force_g": 20.0, "step_mm": 0.05,
+    "zcal": {"target_force_n": 1.1, "abort_force_n": 3.0, "step_mm": 0.05,
              "max_travel_mm": 8.0, "settle_readings": 2, "backoff_mm": 0.3},
     "wear": {"max_path_mm": 40.0, "max_contact_s": 1e9},
     "toolpath": {"block_target_mm": 3.0, "resume_overlap_mm": 0.3},

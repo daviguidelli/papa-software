@@ -24,4 +24,4 @@ def test_loadcell_flags_a_100g_cell(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.syspath_prepend(str(__import__("pathlib").Path(__file__).parents[1]))
     assert run("b2_loadcell", ["--drift-s", "0.1", "--rating-g", "100"], monkeypatch) == 1
-    assert run("b2_loadcell", ["--drift-s", "0.1", "--rating-g", "500"], monkeypatch) == 1  # abort 20 g < working
+    assert run("b2_loadcell", ["--drift-s", "0.1", "--rating-g", "1000"], monkeypatch) == 0  # 1 kg cell: abort 3 N sits between working force and rating

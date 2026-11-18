@@ -164,7 +164,7 @@ class Orchestrator:
                 result = calibrate_z(
                     self.printer, self.loadcell,
                     cell_x=lc["x"], cell_y=lc["y"], z_safe=lc["z_safe"],
-                    target_force_g=z["target_force_g"], abort_force_g=z["abort_force_g"],
+                    target_force_n=z["target_force_n"], abort_force_n=z["abort_force_n"],
                     step_mm=z["step_mm"], max_travel_mm=z["max_travel_mm"],
                     approach_speed_mm_s=speeds["z_approach"],
                     travel_speed_mm_s=speeds["travel"],

@@ -87,7 +87,7 @@ anything is pressing on glass.
 3. Gripper open and close with no swab, then with a swab.
 4. Live load cell reading. Press the swab by hand and watch the value. Tare,
    then calibrate with a known weight. Confirm the cell's rating and set
-   `abort_force_g` well under it.
+   `abort_force_n` well under it.
 5. Z probe on the load cell with a swab gripped, slow step size.
 6. Camera: map the four points, sample the film and stem blues, test detection.
 7. Dry run in air on a slot with no slide.

@@ -24,6 +24,7 @@ from papa.ops.geometry import square, to_machine
 from papa.ops import autonomous as automod
 from papa.ops import scrub as scrubmod
 from papa.ops import routine as routinemod
+from papa.ops import zhome as zhomemod
 from papa.ops import alignment as alignmod
 from papa.ops import reference as refmod
 from papa.vision import correction as corrmod
@@ -128,6 +129,7 @@ class Hub:
         self.auto = automod.AutoRunner(lambda: self.printer, lambda: self.gripper, self.machine)
         self.scrub = scrubmod.ScrubRunner(lambda: self.printer, self.machine)
         self.routine = routinemod.RoutineRunner(self.auto, self.scrub, self.machine)
+        self.routine2 = routinemod.Routine2Runner(self.auto, self.scrub, self.machine)
         self.align_scan: dict[str, Any] | None = None   # last alignment scan, see /api/align
 
     @property
@@ -787,6 +789,7 @@ def estop() -> dict:
     hub.auto.stop()
     hub.scrub.stop()
     hub.routine.stop()
+    hub.routine2.stop()
     hub.printer.emergency_stop()
     return {"ok": True}
 
@@ -989,7 +992,8 @@ def loadcell() -> dict:
     off = getattr(lc, "offset", 0)
     sc = getattr(lc, "scale", 1.0) or 1.0
     return {"counts": counts, "offset": off, "scale": sc, "scaled": scaled,
-            "grams": round(lc.grams(), 3) if scaled else None}
+            "grams": round(lc.grams(), 3) if scaled else None,
+            "newtons": round(lc.newtons(), 3) if scaled else None}
 
 
 @app.get("/api/loadcell/live")
@@ -1097,7 +1101,7 @@ def loadcell_probe(payload: dict | None = None) -> dict:
         r = calibrate_z(
             hub.printer, hub.loadcell,
             cell_x=lc["x"], cell_y=lc["y"], z_safe=start_z,
-            target_force_g=z["target_force_g"], abort_force_g=z["abort_force_g"],
+            target_force_n=z["target_force_n"], abort_force_n=z["abort_force_n"],
             step_mm=step, max_travel_mm=z["max_travel_mm"],
             approach_speed_mm_s=speed, travel_speed_mm_s=sp["travel"],
             settle_readings=int(z.get("settle_readings", 3)),
@@ -1106,7 +1110,7 @@ def loadcell_probe(payload: dict | None = None) -> dict:
         )
     except (GripFailed, OverForce) as exc:
         raise HTTPException(409, str(exc)) from exc
-    hub.last_probe = {"contact_z": r.contact_z, "force_g": r.force_g, "steps": r.steps}
+    hub.last_probe = {"contact_z": r.contact_z, "force_n": r.force_n, "steps": r.steps}
     return hub.last_probe
 
 
@@ -1281,6 +1285,7 @@ def auto_clear(payload: dict) -> dict:
 
 
 _AUTO_RANGES = {
+    "pickup_step_x": (-50.0, 50.0), "pickup_step_y": (-50.0, 50.0),
     "lift_mm": (0.0, 200.0), "grip_shift_mm": (-10.0, 10.0), "grip_close_s": (0.2, 10.0), "grip_wait_s": (0.0, 10.0), "release_wait_s": (0.0, 10.0),
     "xy_speed_mm_s": (1.0, 150.0), "z_speed_mm_s": (0.5, 20.0), "skip_rise_xy_mm": (0.0, 50.0),
 }
@@ -1296,6 +1301,11 @@ def auto_settings(payload: dict) -> dict:
             if not lo <= v <= hi:
                 raise HTTPException(400, f"{key} must be {lo:g} to {hi:g}")
             updates[key] = v
+    step = {k[-1]: updates.pop(k) for k in ("pickup_step_x", "pickup_step_y") if k in updates}
+    if step:
+        cur = dict(_auto_settings().get("pickup_step") or {"x": 0.0, "y": 0.0})
+        cur.update(step)
+        updates["pickup_step"] = cur
     if updates:
         _patch_calibration({"autonomous": updates})
     return _auto_info()
@@ -2908,6 +2918,217 @@ def align_routine(payload: dict) -> dict:
     except (routinemod.RoutineError, scrubmod.ScrubError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return hub.routine.status.as_dict()
+
+
+# ---------- Z home on the load cell, heights, park, routine 2 ----------
+
+def _zhome_settings() -> dict:
+    return zhomemod.merged(hub.cal.raw.get("zhome"))
+
+
+def _zhome_info() -> dict:
+    st = _zhome_settings()
+    return {"settings": st, "problems": zhomemod.problems(st, hub.guard.ref),
+            "floor_would_be": zhomemod.floor_z(st), "target_force_n": hub.machine.zcal["target_force_n"],
+            "abs": {k: zhomemod.absolute(st, k) for k in zhomemod.HEIGHTS}}
+
+
+@app.get("/api/zhome")
+def zhome_info() -> dict:
+    return _zhome_info()
+
+
+_ZH_RANGES = {"ref_z": (10.0, 300.0), "probe_start_mm": (0.5, 20.0), "floor_margin_mm": (0.0, 5.0),
+              "up_mm": (5.0, 290.0), "slide_mm": (-100.0, 200.0), "pickup_mm": (-100.0, 200.0),
+              "bin_mm": (-100.0, 200.0), "safe_mm": (-100.0, 250.0)}
+
+
+@app.post("/api/zhome/heights")
+def zhome_heights(payload: dict) -> dict:
+    """Heights are mm above the load cell contact. If Z is already homed on the
+    cell, the taught Zs and the floor follow at once."""
+    hub.require_idle()
+    upd: dict[str, float] = {}
+    for k, (lo, hi) in _ZH_RANGES.items():
+        if payload.get(k) is not None:
+            v = float(payload[k])
+            if not lo <= v <= hi:
+                raise HTTPException(400, f"{k} must be {lo:g} to {hi:g}")
+            upd[k] = v
+    if "ref_z" in upd and _zhome_settings().get("ref") is not None:
+        raise HTTPException(400, "ref_z is fixed by the last Z home; home Z again to change it")
+    if upd:
+        _patch_calibration({"zhome": upd})
+    st = _zhome_settings()
+    if st.get("ref") is not None and st["ref"] == hub.guard.ref:
+        _patch_calibration(zhomemod.patch_for(st, hub.cal.raw.get("autonomous"), hub.cal.raw.get("scrub"), hub.guard.ref))
+        hub.guard.set_floor(zhomemod.floor_z(st))
+    return _zhome_info()
+
+
+def _wait_z(target: float, timeout: float = 3.0) -> None:
+    end = time.time() + timeout
+    while time.time() < end:
+        if abs(hub.printer.position().z - target) < 0.01:
+            return
+        time.sleep(0.05)
+
+
+@app.post("/api/zhome/run")
+def zhome_run(payload: dict | None = None) -> dict:
+    """Probe the cell to the target force, call that Z `ref_z`, re-derive every
+    taught Z and the floor from the typed heights, and rise to the safe Z."""
+    hub.require_idle()
+    hub.stop_sampler()
+    lc, zc, sp = hub.cal.load_cell, hub.machine.zcal, hub.machine.speeds
+    if hub.guard.floor is None:
+        raise HTTPException(400, "Set a Z floor first (a few mm below the load cell) so the probe may descend")
+    if not (lc.get("xy_set") and lc.get("z_safe_set")):
+        raise HTTPException(400, "Capture the load cell XY and the probe start Z first")
+    if not getattr(hub.loadcell, "scaled", True):
+        raise HTTPException(400, "Scale the load cell first (known mass, once)")
+    p = hub.printer.position()
+    if not all(a in p.homed for a in "xyz"):
+        raise HTTPException(400, "Home X and Y and set Z first")
+    start_z = float(lc["z_safe"])
+    if start_z < hub.guard.floor or (hub.guard.ceiling is not None and start_z > hub.guard.ceiling):
+        raise HTTPException(400, "the probe start Z is outside the Z floor / ceiling")
+    st = _zhome_settings()
+    try:
+        r = zhomemod.probe(hub.printer, hub.loadcell, lc, zc, sp, start_z=start_z)
+    except (GripFailed, OverForce) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    new_z = zhomemod.declare(hub.printer._inner if hasattr(hub.printer, "_inner") else hub.printer,
+                             float(st["ref_z"]), r.stepped_z, r.contact_z)
+    _wait_z(new_z)
+    hub.guard.reset_reference(float(st["ref_z"]) + float(st["up_mm"]))
+    ref = hub.guard.ref
+    _patch_calibration({"zhome": {"ref": ref, "homed_at": time.time(), "last_check": None,
+                                  "first_contact_z_before": round(r.contact_z, 4)}})
+    st = _zhome_settings()
+    hub.guard.set_floor(zhomemod.floor_z(st))
+    _patch_calibration(zhomemod.patch_for(st, hub.cal.raw.get("autonomous"), hub.cal.raw.get("scrub"), ref))
+    safe = zhomemod.absolute(st, "safe_mm") or (float(st["ref_z"]) + 10.0)
+    hub.printer.move(z=safe, speed_mm_s=min(float(sp.get("z_lift", 10.0)), 10.0))
+    return {"contact_z_before": round(r.contact_z, 4), "force_n": round(r.force_n, 3), "steps": r.steps,
+            "ref_z": st["ref_z"], "floor": hub.guard.floor, **_zhome_info()}
+
+
+@app.post("/api/zhome/check")
+def zhome_check() -> dict:
+    """Probe the cell with the swab in the jaws and report the drift. Z is not changed."""
+    hub.require_idle()
+    hub.stop_sampler()
+    st = _zhome_settings()
+    if st.get("ref") is None or st["ref"] != hub.guard.ref:
+        raise HTTPException(400, "Home Z on the load cell first")
+    safe = zhomemod.absolute(st, "safe_mm")
+    if safe is None:
+        raise HTTPException(400, "Set the safe height first")
+    lc = hub.cal.load_cell
+    if not lc.get("xy_set"):
+        raise HTTPException(400, "Capture the load cell XY first")
+    try:
+        r = zhomemod.check(hub.printer, hub.loadcell, lc, hub.machine.zcal, hub.machine.speeds, st, safe)
+    except (GripFailed, OverForce) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    _patch_calibration({"zhome": {"last_check": r}})
+    return r
+
+
+@app.post("/api/park")
+def park() -> dict:
+    hub.require_idle()
+    st = _zhome_settings()
+    safe = _auto_settings().get("safe_z")
+    if safe is None:
+        raise HTTPException(400, "Save the safe Z first")
+    if not zhomemod.park(hub.printer, float(safe)):
+        raise HTTPException(400, "Z is not set")
+    return position()
+
+
+@app.on_event("shutdown")
+def _park_on_exit() -> None:
+    """Leave the head at the safe Z, so the next Z home does not start low."""
+    try:
+        if hub.busy or not hub.devices["printer"].built:
+            return
+        safe = _auto_settings().get("safe_z")
+        if safe is not None:
+            zhomemod.park(hub.printer, float(safe))
+    except Exception:                                      # noqa: BLE001
+        pass
+
+
+def _routine2_slides(payload: dict) -> list[dict]:
+    ids = payload.get("slides") or ["S1", "S2"]
+    if len(ids) != 2:
+        raise HTTPException(400, "Routine 2 needs exactly two slides, e.g. S1 and S2")
+    st = _zhome_settings()
+    z = zhomemod.absolute(st, "slide_mm")
+    out = []
+    for sid in ids:
+        s = _substrate_scrub(str(sid), bool(payload.get("force")))
+        if z is not None and s.get("start"):
+            s["start"] = {**s["start"], "z": z, "ref": hub.guard.ref}
+        out.append(s)
+    return out
+
+
+def _routine2_extra() -> list[str]:
+    st = _zhome_settings()
+    bad = zhomemod.problems(st, hub.guard.ref)
+    lc = hub.cal.load_cell
+    if not lc.get("xy_set"):
+        bad.append("Capture the load cell XY.")
+    if not getattr(hub.loadcell, "scaled", True):
+        bad.append("Scale the load cell (known mass, once).")
+    return bad
+
+
+@app.get("/api/routine2")
+def routine2_info() -> dict:
+    bad = _routine2_extra()
+    return {"problems": bad, "ready": not bad, "status": hub.routine2.status.as_dict(),
+            "last_check": hub.routine2.last_check or _zhome_settings().get("last_check")}
+
+
+@app.get("/api/routine2/status")
+def routine2_status() -> dict:
+    return {**hub.routine2.status.as_dict(), "last_check": hub.routine2.last_check}
+
+
+@app.post("/api/routine2/run")
+def routine2_run(payload: dict | None = None) -> dict:
+    hub.require_idle()
+    hub.stop_sampler()
+    body = payload or {}
+    slides = _routine2_slides(body)
+    st = _zhome_settings()
+    safe = float(zhomemod.absolute(st, "safe_mm") or _auto_settings().get("safe_z") or 0)
+    lc, zc, sp = hub.cal.load_cell, hub.machine.zcal, hub.machine.speeds
+
+    def check_fn(stop):
+        r = zhomemod.check(hub.printer, hub.loadcell, lc, zc, sp, _zhome_settings(), safe, stop)
+        _patch_calibration({"zhome": {"last_check": r}})
+        return r
+
+    def park_fn():
+        zhomemod.park(hub.printer, safe)
+
+    try:
+        hub.thread = hub.routine2.start2(_auto_settings(), slides, hub.guard.ref, hub.guard.floor,
+                                         check_fn, park_fn, int(body.get("swab_index", 0)), _routine2_extra())
+    except (routinemod.RoutineError, scrubmod.ScrubError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return hub.routine2.status.as_dict()
+
+
+@app.post("/api/routine2/stop")
+def routine2_stop() -> dict:
+    hub.routine2.stop()
+    return hub.routine2.status.as_dict()
 
 
 if STATIC.exists():

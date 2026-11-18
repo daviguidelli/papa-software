@@ -36,9 +36,9 @@ def run() -> int:
     if args.rating_g:
         r.check("cell rating comfortably above the working force (>= 2x)",
                 args.rating_g >= 2 * working_g, f"rating {args.rating_g} g")
-        abort = m.zcal["abort_force_g"]
-        r.check("abort_force_g sits between working force and rating",
-                working_g < abort < args.rating_g, f"abort {abort} g")
+        abort = m.zcal["abort_force_n"] * 1000 / 9.80665
+        r.check("abort_force_n sits between working force and rating",
+                working_g < abort < args.rating_g, f"abort {abort:.0f} gf")
     else:
         r.note("pass --rating-g from the cell label to check it against the working force")
 

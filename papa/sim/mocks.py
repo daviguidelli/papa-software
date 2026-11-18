@@ -125,7 +125,7 @@ class MockLoadCell:
     """
     printer: MockMoonraker
     contact_z: float = 12.0
-    stiffness_g_per_mm: float = 60.0
+    stiffness_g_per_mm: float = 600.0
     has_swab: bool = True
     noise_g: float = 0.05
     offset: int = 0
@@ -138,6 +138,9 @@ class MockLoadCell:
         depth = self.contact_z - self.printer.z
         f = max(0.0, depth) * self.stiffness_g_per_mm
         return float(f + np.random.normal(0, self.noise_g))
+
+    def newtons(self, samples: int = 5) -> float:
+        return self.grams(samples) * 0.00980665
 
     def read_counts(self) -> int:
         return int(self.grams() * self.scale + self.offset)

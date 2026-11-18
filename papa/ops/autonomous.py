@@ -27,6 +27,7 @@ DEFAULTS: dict[str, Any] = {
     "xy_speed_mm_s": 60.0,
     "z_speed_mm_s": 8.0,
     "skip_rise_xy_mm": 2.0,  # no rise to safe Z when already this close to the target in XY
+    "pickup_step": {"x": 0.0, "y": 0.0},  # mm between neighbouring swabs; routine 2 grips swab n at pickup + n steps
     "refs": {},              # which Z reference each taught Z was saved under
 }
 
