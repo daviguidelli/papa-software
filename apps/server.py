@@ -1824,38 +1824,70 @@ def _jpeg(bgr: Any, q: int = 85) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
 
 
+GLASS_MM = 25.0          # the glass substrate is 25 x 25 mm (the electrode array on it is smaller)
+
+
+def _glass_mm() -> float:
+    return float(((_ref_cfg() or {}).get("placement") or {}).get("size") or GLASS_MM)
+
+
+def _on_glass(own: dict | None) -> bool:
+    """An own pattern belongs on the glass if it was drawn on the glass, or
+    if its area is the glass's size (a sketch of the whole glass square)."""
+    if not own:
+        return True
+    if own.get("frame") == "glass":
+        return True
+    a, g = own.get("area") or {}, _glass_mm()
+    return abs(float(a.get("w", 0)) - g) < 0.5 and abs(float(a.get("h", 0)) - g) < 0.5
+
+
 def _glass_placements(sc: dict, result: alignmod.ScanResult) -> None:
-    """Substrates without their own pattern get the reference sketch, placed
-    on their glass by the glass-vs-reference match (instead of on the array)."""
+    """Every substrate whose glass corners are known (set by hand, or
+    estimated from its array through the reference) is sketched and run on
+    its glass: the sketch covers the whole 25 x 25 mm glass with (0, 0) at
+    its top-left corner, and the array is wherever it is on that glass.
+    Placed by the glass-vs-reference match when there is a reference, else
+    by the glass corners themselves."""
     import numpy as np
 
     from papa.ops.geometry import axis_matrix
 
     sk, r = _ref_sketch(), _ref_cfg()
-    if sk is None or not r.get("placement"):
-        return
     st = _align_settings()
     bx, by = axis_matrix(hub.machine.axes)
+    axes_fit, _ = _camera_axes()
+    G = _glass_mm()
+    mounts = sc.get("mounts") or []
+    corr_ = corrmod.get_correction(sc["rgb"].shape[1::-1])
     for i, p in enumerate(result.placements):
         mi = (sc.get("mount_info") or [None] * len(result.placements))[i]
+        mv = mounts[i] if i < len(mounts) else None
         own = st["patterns"].get(p.id)
-        if mi is None or (own and own.get("frame") != "glass"):
-            continue                            # an own sketch drawn on the array stays on the array
-        mt = mi["match"]
-        g = refmod.glass_placement(r["placement"], mt, bx, by)
-        c = np.asarray(g["corners"])
-        area = (own or sk)["area"]
+        if (mi is None and mv is None) or not _on_glass(own):
+            continue                            # no glass known, or an own sketch drawn on the array
+        area = (own or sk or {"area": {"w": G, "h": G}})["area"]
         w, h = float(area["w"]), float(area["h"])
+        if mi is not None and r.get("placement"):
+            mt = mi["match"]
+            g = refmod.glass_placement(r["placement"], mt, bx, by)
+            c, origin, rot, rms = np.asarray(g["corners"]), g["origin"], g["rotation_deg"], mt.rms_mm
+            warns = list(mt.warnings) + g["warnings"]
+            lim = float(st["max_rotation_deg"])
+            if abs(mt.rotation_deg) > lim and not mt.red_found:
+                warns.append(f"Glass turned {mt.rotation_deg:+.1f} deg from the reference, more than {lim:g} deg.")
+        elif axes_fit is not None:
+            glass_mm = axes_fit.plate_to_mm(corr_.corrected_to_plate(np.asarray(mv, np.float64)))
+            q = alignmod.place(p.id, hub.machine.axes, glass_mm, {"area": {"w": G, "h": G}}, st)
+            c, origin, rot, rms = np.asarray(q.corners_mm), q.origin_mm, q.rotation_deg, 0.0
+            warns = [w_.replace("pattern is", "the glass is") for w_ in q.warnings]
+        else:
+            continue
         mw = float((np.linalg.norm(c[1] - c[0]) + np.linalg.norm(c[2] - c[3])) / 2)
         mh = float((np.linalg.norm(c[3] - c[0]) + np.linalg.norm(c[2] - c[1])) / 2)
-        warns = list(mt.warnings) + g["warnings"]
-        lim = float(st["max_rotation_deg"])
-        if abs(mt.rotation_deg) > lim and not mt.red_found:
-            warns.append(f"Glass turned {mt.rotation_deg:+.1f} deg from the reference, more than {lim:g} deg.")
         result.placements[i] = alignmod.Placement(
-            p.id, c.tolist(), c.mean(0).tolist(), g["origin"], g["rotation_deg"], [mw, mh], [w, h],
-            [mw - w, mh - h], mt.rms_mm, warns)
-        result.pattern_source[p.id] = "glass" if own else "reference"
+            p.id, c.tolist(), c.mean(0).tolist(), origin, rot, [mw, mh], [w, h], [mw - w, mh - h], rms, warns)
+        result.pattern_source[p.id] = "glass" if (own or sk is None) else "reference"
 
 
 def _pattern_of(sid: str, result: alignmod.ScanResult | None = None) -> dict:
@@ -1868,6 +1900,9 @@ def _pattern_of(sid: str, result: alignmod.ScanResult | None = None) -> dict:
     if res is not None and res.pattern_source.get(sid) == "reference" and _ref_sketch() is not None:
         sk = _ref_sketch()
         return {"name": sk.get("name") or "reference sketch", "area": sk["area"], "bridges": sk["bridges"]}
+    if res is not None and res.pattern_source.get(sid) == "glass":
+        return {"name": "glass (no bridges sketched yet)", "area": {"w": _glass_mm(), "h": _glass_mm()},
+                "bridges": [], "frame": "glass"}
     return _scrub_tab_pattern()
 
 
@@ -2336,43 +2371,73 @@ def align_substrate_sketch(sid: str) -> dict:
     bridges = list((own or {}).get("bridges") or [])
     axes_fit, _ = _camera_axes()
     frame = "array"
+    i = ids.index(sid)
+    view = np.asarray(sc["views"][i], np.float64)
+    mounts = sc.get("mounts") or []
+    glass_view = None                       # the glass corners in the sketch's order (TL, TR, BR, BL), view px
     if sc.get("result") is not None and axes_fit is not None:
         p = next(x for x in sc["result"].placements if x.id == sid)
         glass = sc["result"].pattern_source.get(sid) in ("reference", "glass")
+        c_ = corrmod.get_correction(sc["rgb"].shape[1::-1])
         if glass:
-            # the glass, turned the way the reference photo shows it; the sketch
-            # covers the whole glass with (0, 0) at its top-left corner
+            # the whole glass, turned the way the reference photo shows it; the
+            # sketch covers the 25 x 25 mm glass with (0, 0) at its top-left corner
             frame = "glass"
             ref = _ref_sketch() or {}
-            area = (own or ref)["area"]
+            area = (own or ref or {"area": {"w": _glass_mm(), "h": _glass_mm()}})["area"]
             w, h = float(area["w"]), float(area["h"])
             origin, rot = p.origin_mm, p.rotation_deg
             if not own:
                 bridges = [dict(b) for b in ref.get("bridges") or []]
-        elif own and own.get("drawn_on") != "camera view":
-            w, h = float(own["area"]["w"]), float(own["area"]["h"])
+            # the array in real mm on this glass (the camera points give true mm)
+            from papa.ops.geometry import to_local
+            arr_mm = axes_fit.plate_to_mm(c_.corrected_to_plate(view))
+            local_arr = np.array([to_local(hub.machine.axes, origin[0], origin[1], x, y, rot) for x, y in arr_mm])
+        elif own and own.get("drawn_on") != "camera view" and not _on_glass(own):
+            w, h = float(own["area"]["w"]), float(own["area"]["h"])     # its own array-size pattern
             origin, rot = p.origin_mm, p.rotation_deg
         else:
+            # no glass corners: the array at its measured size (never the 25 x 25 mm glass size)
             w, h = round(p.measured_mm[0], 2), round(p.measured_mm[1], 2)
             fit = alignmod.place(sid, hub.machine.axes, p.corners_mm, {"area": {"w": w, "h": h}}, {})
             origin, rot = fit.origin_mm, fit.rotation_deg
         ppm = min(40.0, 2400.0 / max(w, h))
         img = alignmod.rectify(sc["rgb"], hub.machine.axes, axes_fit, origin, rot, w, h, ppm)
         size_known = True
+    elif i < len(mounts) and mounts[i] is not None:
+        # no camera points, glass corners set: the glass gives the scale (25 x 25 mm)
+        frame = "glass"
+        w = h = _glass_mm()
+        glass_view = alignmod.view_order(np.asarray(mounts[i], np.float64))
+        ppm = min(40.0, 2400.0 / max(w, h))
+        img = alignmod.rectify_view(sc["rgb"], glass_view, w, h, ppm)
+        size_known = True
     else:
-        view = sc["views"][ids.index(sid)]
         aspect = float(np.linalg.norm(view[1] - view[0]) / max(1e-6, np.linalg.norm(view[3] - view[0])))
-        if own:
+        if own and not _on_glass(own):
             w, h = float(own["area"]["w"]), float(own["area"]["h"])
         else:
-            other = next((v for v in st["patterns"].values()), None)
+            other = next((v for v in st["patterns"].values() if not _on_glass(v)), None)
             w = float(other["area"]["w"]) if other else 10.0
             h = round(w / aspect, 2)
         ppm = min(40.0, 2400.0 / max(w, h))
         img = alignmod.rectify_view(sc["rgb"], view, w, h, ppm)
         size_known = False
+    array_mm, q = None, None
+    if glass_view is not None:              # no camera points: the glass is the scale
+        Hm = cv2.getPerspectiveTransform(np.float32(glass_view), np.float32([[0, 0], [w, 0], [w, h], [0, h]]))
+        q = cv2.perspectiveTransform(np.float64([view]), Hm)[0]
+    elif frame == "glass":
+        q = local_arr
+    if q is not None:
+        # the electrode array outlined where it sits on the glass
+        array_mm = q.round(3).tolist()
+        img = img.copy()
+        t = max(1, img.shape[1] // 600)
+        cv2.polylines(img, [np.round(q * ppm * 8).astype(np.int32)], True, (80, 220, 80), t, cv2.LINE_AA, shift=3)
     ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
     return {"id": sid, "w": w, "h": h, "px_per_mm": ppm, "bridges": bridges, "size_known": size_known,
+            "array_mm": array_mm, "glass_mm": _glass_mm(),
             "frame": frame, "from_reference": frame == "glass" and not own,
             "pattern_name": (own or {}).get("name") or "",
             "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()}

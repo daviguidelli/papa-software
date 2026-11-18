@@ -491,3 +491,43 @@ def test_slot_corners_any_click_order(aligned):
     srv._slots_file().write_text(json.dumps({"rows": 3, "cols": 3, "corners": [c[0], c[1], c[3], c[2]]}))
     assert np.allclose(srv._slots()["corners"], ref, atol=0.05)
     a.post("/api/align/slots", json={"clear": True})
+
+
+def test_glass_corners_set_the_25mm_frame_and_the_array_sits_inside(aligned):
+    """The 25 x 25 mm is the glass, not the array: with the glass corners set by
+    hand the sketch covers the glass, and the array is outlined inside it at
+    its own (smaller) size; the toolpath is placed by the glass."""
+    a = aligned
+    a.post("/api/reference/sketch", json={"clear": True})
+    a.post("/api/align/scan", json={"save": False})
+    sc = a.server.hub.align_scan
+    v = np.asarray(sc["views"][0], np.float64)
+    m = v.mean(0)
+    glass = (m + (v - m) * 1.8).round(2).tolist()          # a glass 1.8x the array's size around it
+    r = a.post("/api/align/substrate/S1/mount", json={"corners": glass})
+    assert r.status_code == 200, r.text
+    j = a.get("/api/align/substrate/S1/sketch").json()
+    assert j["frame"] == "glass" and j["w"] == pytest.approx(25) and j["h"] == pytest.approx(25)
+    arr = np.asarray(j["array_mm"])
+    assert (arr > 0).all() and (arr < 25).all()                # the array is inside the glass
+    side = np.linalg.norm(arr[1] - arr[0])
+    assert 8 < side < 16                                       # the array at its own size, not stretched to 25
+    p = next(x for x in sc["result"].placements if x.id == "S1")
+    assert sc["result"].pattern_source["S1"] == "glass"
+    assert p.measured_mm[0] == pytest.approx(side * 1.8, rel=0.08)  # glass measured by the camera
+
+
+def test_glass_corners_give_the_scale_without_camera_points(aligned):
+    api = aligned
+    api.post("/api/align/scan", json={"save": False})
+    api.post("/api/align/camera/delete", json={"all": True})     # then forget the camera points
+    sc = api.server.hub.align_scan
+    api.server._render_scan(sc)
+    assert sc["views"] and sc.get("result") is None
+    assert api.get("/api/align/substrate/S1/sketch").json()["size_known"] is False
+    v = np.asarray(sc["views"][0], np.float64)
+    m = v.mean(0)
+    api.post("/api/align/substrate/S1/mount", json={"corners": (m + (v - m) * 2).round(2).tolist()})
+    j = api.get("/api/align/substrate/S1/sketch").json()
+    assert j["frame"] == "glass" and j["size_known"] is True and j["w"] == pytest.approx(25)
+    assert np.linalg.norm(np.subtract(j["array_mm"][1], j["array_mm"][0])) == pytest.approx(12.5, rel=0.08)
