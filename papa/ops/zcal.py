@@ -88,6 +88,15 @@ def calibrate_z(
                 f"{abort_force_n:.3f} N"
             )
 
+        if force <= -target_force_n:
+            printer.move(z=z_safe, speed_mm_s=z_speed_mm_s)
+            raise GripFailed(
+                f"the load cell reads {force:.3f} N while pressed: the sign is backwards. "
+                "Re-run Tare and Calibrate scale with the known mass pushing DOWN on the cell "
+                "(the same way the swab will), then save. The scale comes out negative if the "
+                "cell reads negative under load, which flips the reading."
+            )
+
         if force >= target_force_n:
             if hits == 0:
                 cross = (prev_z, prev_f, z_now, force)

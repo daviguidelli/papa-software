@@ -62,3 +62,11 @@ def test_abort_force_must_exceed_target():
     bad = dict(ARGS, abort_force_n=1.1)
     with pytest.raises(ValueError):
         calibrate_z(p, lc, **bad)
+
+
+def test_backwards_cell_stops_the_descent_early_with_a_clear_message():
+    p, lc = rig(contact_z=20.0)
+    lc.stiffness_g_per_mm = -600.0
+    with pytest.raises(GripFailed, match="sign is backwards"):
+        calibrate_z(p, lc, **ARGS)
+    assert p.z == 25.0
