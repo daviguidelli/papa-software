@@ -1721,9 +1721,9 @@ document.getElementById('gsSave').addEventListener('click',async()=>{
 let alSlotPts=null;
 async function alSlotLoad(){try{const j=await (await fetch('/api/align/slots')).json();const sl=j.slots;
   if(sl){$('#alSlotR').value=sl.rows;$('#alSlotC').value=sl.cols;$('#alSlotMsg').textContent=`${sl.rows} × ${sl.cols} grid set: slot 1 is top-left, numbered left to right, then down.`}
-  else $('#alSlotMsg').textContent='No slot grid yet: press Set slot grid, then click the 4 outer corners of the holder grid on the picture.'}catch(e){}}
+  else $('#alSlotMsg').textContent='No slot grid yet: press Set slot grid, then click the 4 outer corners of the holder grid on the picture (any order).'}catch(e){}}
 $('#alSlotSet').onclick=()=>{alSlotPts=[];$('#alImg').style.cursor='crosshair';
-  $('#alSlotMsg').textContent='Click the outer corners of the holder grid: 1 top-left, 2 top-right, 3 bottom-right, 4 bottom-left.'};
+  $('#alSlotMsg').textContent='Click the 4 outer corners of the holder grid, in any order.'};
 $('#alSlotClear').onclick=async()=>{const r=await fetch('/api/align/slots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clear:true})});
   if(r.ok){alSlotPts=null;await alSlotLoad();S.al=await api('/api/align');paintAlign()}};
 async function alSlotSend(body){const r=await fetch('/api/align/slots',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -1732,7 +1732,7 @@ async function alSlotSend(body){const r=await fetch('/api/align/slots',{method:'
 ['#alSlotR','#alSlotC'].forEach(q=>$(q).onchange=()=>alSlotSend({rows:+$('#alSlotR').value,cols:+$('#alSlotC').value}));
 $('#alImg').addEventListener('click',e=>{if(!alSlotPts)return;const b=e.target.getBoundingClientRect();
   alSlotPts.push([(e.clientX-b.left)/b.width,(e.clientY-b.top)/b.height]);
-  $('#alSlotMsg').textContent=`Corner ${alSlotPts.length} of 4 set.`+(alSlotPts.length<4?` Next: ${['top-left','top-right','bottom-right','bottom-left'][alSlotPts.length]}.`:' Saving…');
+  $('#alSlotMsg').textContent=`Corner ${alSlotPts.length} of 4 set.`+(alSlotPts.length<4?' Next corner.':' Saving…');
   if(alSlotPts.length===4){const pts=alSlotPts;alSlotPts=null;$('#alImg').style.cursor='';
     alSlotSend({rows:+$('#alSlotR').value,cols:+$('#alSlotC').value,points:pts})}});
 alSlotLoad();

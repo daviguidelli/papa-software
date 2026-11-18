@@ -471,3 +471,23 @@ def test_template_gcode_repeated_on_other_slots(aligned):
     assert np.allclose(np.array(x_moved) - np.array(x_same), dx, atol=0.002)
     assert a.get("/api/align/slots/gcode", params={"source": src["sid"], "targets": "99", "z": 4.5}).status_code == 400
     a.post("/api/align/slots", json={"clear": True})
+
+
+def test_slot_corners_any_click_order(aligned):
+    """Corners clicked in reading order (TL, TR, BL, BR) or starting anywhere
+    give the same grid as top-left, top-right, bottom-right, bottom-left; an
+    already saved twisted grid is untwisted."""
+    import json
+
+    a = aligned
+    a.post("/api/align/scan", json={"save": False})
+    tl, tr, br, bl = [0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]
+    ref = a.post("/api/align/slots", json={"rows": 3, "cols": 3, "points": [tl, tr, br, bl]}).json()["slots"]["corners"]
+    for order in ([tl, tr, bl, br], [br, bl, tl, tr], [tr, tl, bl, br]):
+        got = a.post("/api/align/slots", json={"rows": 3, "cols": 3, "points": order}).json()["slots"]["corners"]
+        assert np.allclose(got, ref, atol=0.05), order
+    srv = a.server
+    c = ref
+    srv._slots_file().write_text(json.dumps({"rows": 3, "cols": 3, "corners": [c[0], c[1], c[3], c[2]]}))
+    assert np.allclose(srv._slots()["corners"], ref, atol=0.05)
+    a.post("/api/align/slots", json={"clear": True})

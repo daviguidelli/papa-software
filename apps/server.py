@@ -1894,7 +1894,40 @@ def _slots() -> dict | None:
         return None
     if not sl.get("corners") or len(sl["corners"]) != 4:
         return None
+    sl["corners"] = _untwist(sl["corners"])
     return sl
+
+
+def _crosses(a: Any, b: Any, c: Any, d: Any) -> bool:
+    """Segments ab and cd cross."""
+    def side(p: Any, q: Any, r: Any) -> float:
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    return side(a, b, c) * side(a, b, d) < 0 and side(c, d, a) * side(c, d, b) < 0
+
+
+def _untwist(corners: Any) -> list:
+    """Four grid corners as a simple quadrilateral in the clicked order's sense:
+    if the last two were given the other way round (top-left, top-right,
+    bottom-left, bottom-right, i.e. in reading order) they are swapped back."""
+    c = [list(map(float, p)) for p in corners]
+    if _crosses(c[1], c[2], c[3], c[0]):      # e.g. TL, TR, BL, BR (reading order): last two reversed
+        c[2], c[3] = c[3], c[2]
+    elif _crosses(c[0], c[1], c[2], c[3]):    # e.g. TL, BR, TR, BL: middle two reversed
+        c[1], c[2] = c[2], c[1]
+    return c
+
+
+def _screen_order(pts: Any) -> Any:
+    """Clicked corners in any order -> top-left, top-right, bottom-right,
+    bottom-left as seen on the picture (image y grows downward)."""
+    import numpy as np
+
+    p = np.asarray(pts, np.float64)
+    m = p.mean(0)
+    ang = np.arctan2(p[:, 1] - m[1], p[:, 0] - m[0])       # clockwise on screen
+    p = p[np.argsort(ang)]
+    k = int(np.argmin(p[:, 0] + p[:, 1]))                   # top-left: smallest x + y
+    return np.roll(p, -k, axis=0)
 
 
 def _slot_of_views(views: list, sl: dict | None = None) -> list[int | None]:
@@ -2105,7 +2138,7 @@ def align_slots_set(payload: dict) -> dict:
             if pts.shape != (4, 2):
                 raise HTTPException(400, "Click the 4 outer corners of the holder grid.")
             dh, dw = sc["drawn"].shape[:2]
-            corners = _drawn_to_view(sc, pts * [dw, dh]).round(2).tolist()
+            corners = _drawn_to_view(sc, _screen_order(pts * [dw, dh])).round(2).tolist()
         elif old:
             corners = old["corners"]
         else:
