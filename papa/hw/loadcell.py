@@ -119,7 +119,7 @@ class LoadCellSampler:
     def __init__(self, cell: Any, maxlen: int = 6000, idle_s: float = 1.5,
                  min_interval_s: float = 0.05, warmup_s: float = 2.0) -> None:
         self.cell = cell
-        self.warmup_s = warmup_s
+        self.warmup_s = warmup_s if hasattr(cell, "settle") else 0.0   # only the real chip swings at start-up
         self.idle_s = idle_s
         self.min_interval_s = min_interval_s
         self._buf: deque[tuple[int, float, int]] = deque(maxlen=maxlen)
