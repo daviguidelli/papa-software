@@ -1327,7 +1327,10 @@ function paintAlign(){
   if(sc&&sc.pixel_only&&sc.substrates.length&&!sc.warnings.length){m.textContent='Arrays found and labelled. Press Sketch to draw the bridges on each one. Sizes in mm, turns and toolpaths appear once the camera points are taught (below).';m.className='note'}
   const subs=sc?sc.substrates:[];
   $('#alTab').hidden=!subs.length;
-  $('#alSketchAll').hidden=!subs.length;
+  // nothing found: offer adding the substrate by hand on the same photo
+  $('#alSketchAll').hidden=!sc;
+  $('#alSketchAll').innerHTML=subs.length?'Sketch them in order &rarr;':'Add a substrate by hand (click its 4 corners) &rarr;';
+  $('#alSketchAll').href='/static/bridge_sketcher.html'+(subs.length?'':'?add=1');
   const np=$('#alNeedPrinter');np.hidden=!(subs.length&&!homedXY());
   np.textContent='Scanning, sketching, setting corners and patterns all work now. Scrub and Routine 1 also need the printer: connect it, then Home XY (Manual test & calibration).';
   const ids=subs.map(x=>x.id);alSel=new Set([...alSel].filter(i=>ids.includes(i)));

@@ -906,7 +906,7 @@ function updateUI(){
   $('#undo').disabled=!S.hist.length;$('#redo').disabled=!S.fut.length;
   $('#clearAll').disabled=!S.rects.length;
   syncProps();updateList();renderTools();updateStatus();
-  if(FS&&FS.list&&FS.list.length)fsStat();
+  if(FS&&FS.list&&(FS.list.length||FS.cm))fsStat();
   if(typeof FOR_SCRUB!=='undefined'&&FOR_SCRUB)$('#sendScrub').disabled=S.mode!=='sub';
 }
 
@@ -930,8 +930,9 @@ async function fsList(){
   FS.list=(a.scan&&a.scan.substrates)||[];FS.patterns=a.patterns||{};
   $('#sec-scan').hidden=!FS.list.length;
   if(!FS.list.length){
-    $('#empty').innerHTML='<div class="box"><div class="big">No substrates yet</div><div class="note">Scan the plate: every electrode array it finds opens here automatically, one after another.</div><div class="row" style="justify-content:center;gap:10px"><button class="pri" id="emptyScan">Scan substrates now</button><button id="emptyBack">Back to substrates</button></div><div class="note" id="emptyMsg"></div></div>';
+    $('#empty').innerHTML='<div class="box"><div class="big">No substrates yet</div><div class="note">Scan the plate: every electrode array it finds opens here automatically, one after another.</div><div class="row" style="justify-content:center;gap:10px"><button class="pri" id="emptyScan">Scan substrates now</button>'+(a.scan?'<button class="pri" id="emptyAdd">Add one by hand (click its 4 corners)</button>':'')+'<button id="emptyBack">Back to substrates</button></div><div class="note" id="emptyMsg"></div></div>';
     $('#emptyBack').onclick=()=>fsBack();
+    if(a.scan)$('#emptyAdd').onclick=()=>{$('#empty').innerHTML='';$('#sec-scan').hidden=false;fsCorners('add')};
     $('#emptyScan').onclick=async()=>{
       const b=$('#emptyScan'),m=$('#emptyMsg');b.disabled=true;m.textContent='Taking the photo and finding the arrays…';
       try{const r=await fetch('/api/align/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const j=await r.json();
@@ -939,6 +940,7 @@ async function fsList(){
         if(await fsList())await fsLoad(FS.list[0].id);else m.textContent='No electrode arrays were found. Check the lighting and focus on the Camera tab, or add one by hand after a scan.';
       }catch(e){m.textContent='Scan failed: '+(e.message||e)}finally{b.disabled=false}
     };
+    if(a.scan&&new URLSearchParams(location.search).get('add'))setTimeout(()=>$('#emptyAdd').click(),0);
     return false;
   }
   const sel=$('#fsSel');
@@ -957,7 +959,7 @@ function fsThumbs(){
     <div style="position:absolute;right:0;top:0;padding:1px 5px;background:rgba(0,0,0,.75);font:11px var(--mono);color:${FS.patterns[s.id]?'#93d5b1':'var(--mut)'}">${FS.patterns[s.id]?'✓':'·'}</div></div>`).join('');
 }
 function fsStat(){
-  if(!FS||!FS.list.length)return;
+  if(!FS||(!FS.list.length&&!FS.cm))return;     // adding the first substrate by hand still shows the corner panel
   fsThumbs();
   const cm=!!FS.cm;$('#fsCornerBox').hidden=!cm;$('#fsCornerTools').hidden=cm;
   if(cm){$('#fsCornerNote').innerHTML=(FS.cm.kind==='add'?'<b>New substrate.</b> Click its four corners on the photo':FS.cm.kind==='mount'?'<b>'+FS.cm.sid+' glass</b>: drag the four corners onto the corners of the clear glass square (not the array)'+(FS.cm.estimated?'. They start where the glass is expected from the array; move them if they are off':''):'<b>'+FS.cm.sid+'</b>: drag the four corners onto the array')+' (any order; scroll to zoom, hold Space to pan). '+S.corners.length+' / 4 placed.';$('#fsCornerUse').disabled=S.corners.length!==4;$('#fsSave').disabled=$('#fsSaveNext').disabled=$('#fsCopyNext').disabled=$('#fsCopy').disabled=true;return}

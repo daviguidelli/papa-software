@@ -1566,7 +1566,7 @@ def _align_info() -> dict:
                          "pattern_name": (pat or {}).get("name") or ("own pattern" if pat else "not sketched yet"),
                          "problems": ["Teach the camera points to place this substrate's toolpath on the printer."]})
         info["scan"] = {"pixel_only": True, "substrates": subs, "timing": sc.get("timing"), "warnings": [] if subs else
-                        ["No electrode arrays found. Check the lighting and focus on the Camera tab."],
+                        ["No electrode arrays found. Check the lighting and focus on the Camera tab, or add the substrate by hand: Sketch → + Add a substrate, then click its 4 corners."],
                         "time": sc["time"], "scan_id": sc.get("scan_id"), "image": sc["image"],
                         "shown_scale": sc["shown_scale"], "stale": False}
     elif hub.align_scan:
