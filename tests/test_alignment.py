@@ -304,3 +304,21 @@ def test_scan35_finds_the_array_not_the_blue_clamp():
     c = found[0].corners / f + [139, 365]
     assert c[:, 0].min() == pytest.approx(458, abs=5) and c[:, 0].max() == pytest.approx(495, abs=5)
     assert c[:, 1].min() == pytest.approx(622, abs=5) and c[:, 1].max() == pytest.approx(652, abs=5)
+
+
+@pytest.mark.parametrize("width", [2000, 3000, 4500])
+def test_scan38_small_array_with_clamp_parallel_to_its_lines(width):
+    """Scan #38 (screenshot): a small array whose clamp below has ridges
+    parallel to the electrode lines, and a copper bit beyond the clamp. Checked
+    at several resolutions, including full-size scans (coarse + exact pass)."""
+    import cv2
+
+    from papa.vision import electrodes as el
+
+    pic = cv2.imread("tests/data/real_scan38_screenshot.png")[304:912, 459:1251]
+    f = width / pic.shape[1]
+    found = el.detect(cv2.cvtColor(cv2.resize(pic, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC), cv2.COLOR_BGR2RGB))
+    assert len(found) == 1
+    c = found[0].corners / f + [459, 304]
+    assert c[:, 0].min() == pytest.approx(778, abs=4) and c[:, 0].max() == pytest.approx(815, abs=4)
+    assert c[:, 1].min() == pytest.approx(561, abs=4) and c[:, 1].max() == pytest.approx(594, abs=4)

@@ -296,6 +296,20 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None, coarse_width: int 
     found is then measured on the full picture in a window around it, so the
     outline keeps full-resolution accuracy."""
     p = p or ElectrodeParams()
+    return _same_kind(_detect_all(rgb, p, coarse_width))
+
+
+def _same_kind(found: list[Array], frac: float = 0.25) -> list[Array]:
+    """All substrates on the plate are the same kind of array: drop finds much
+    smaller than the largest (a speck on a bracket, a bit of a label)."""
+    if not found:
+        return found
+    areas = [cv2.contourArea(a.corners.astype(np.float32)) for a in found]
+    top = max(areas)
+    return [a for a, ar in zip(found, areas) if ar >= frac * top]
+
+
+def _detect_all(rgb: np.ndarray, p: ElectrodeParams, coarse_width: int) -> list[Array]:
     h, w = rgb.shape[:2]
     if w <= 1.5 * coarse_width:
         return _detect(rgb, p)
@@ -317,7 +331,7 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None, coarse_width: int 
         cop = copper_mask(win, p)
         inside = np.zeros(cop.shape, np.uint8)
         cv2.fillPoly(inside, [np.round(local).astype(np.int32)], 255)
-        if cv2.countNonZero(cv2.bitwise_and(cop, inside)) >= 0.3 * max(1, cv2.countNonZero(inside)):
+        if cv2.countNonZero(cv2.bitwise_and(cop, inside)) >= 0.1 * max(1, cv2.countNonZero(inside)):
             local = trim_to_copper(local, cop)            # same clean-up as on the small copy
         corners = local + [x0, y0]
         out.append(
@@ -330,34 +344,51 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None, coarse_width: int 
     return out
 
 
-def trim_to_copper(corners: np.ndarray, cop: np.ndarray, step: float = 0.04, max_cut: float = 0.3,
-                   min_band: float = 0.15) -> np.ndarray:
-    """Pull in any side of an outline whose edge band has (almost) no copper:
-    a clamp, clip or holder edge beside the array that looked like more lines.
-    corners TL, TR, BR, BL (any consistent order around the box)."""
-    c = np.asarray(corners, np.float64).copy()
-    for _ in range(int(max_cut / step) * 4):
-        changed = False
-        for i in range(4):                       # side i runs c[i] -> c[i+1]; inward is towards the opposite side
-            a, b = c[i], c[(i + 1) % 4]
-            d, e = c[(i + 3) % 4], c[(i + 2) % 4]  # the opposite side
-            band = np.array([a, b, b + (e - b) * step, a + (d - a) * step], np.float32)
-            m = np.zeros(cop.shape, np.uint8)
-            cv2.fillPoly(m, [np.round(band).astype(np.int32)], 255)
-            n = cv2.countNonZero(m)
-            if n and cv2.countNonZero(cv2.bitwise_and(cop, m)) < min_band * n:
-                full = np.linalg.norm(e - b)
-                if full <= 0:
-                    continue
-                c[i], c[(i + 1) % 4] = a + (d - a) * step, b + (e - b) * step
-                changed = True
-        if not changed:
-            break
-    w0 = np.linalg.norm(np.asarray(corners)[1] - np.asarray(corners)[0])
-    h0 = np.linalg.norm(np.asarray(corners)[3] - np.asarray(corners)[0])
-    if np.linalg.norm(c[1] - c[0]) < (1 - max_cut) * w0 or np.linalg.norm(c[3] - c[0]) < (1 - max_cut) * h0:
-        return np.asarray(corners, np.float64)   # cut too much: keep the measured outline
-    return c
+def trim_to_copper(corners: np.ndarray, cop: np.ndarray, min_frac: float = 0.15, max_cut: float = 0.55,
+                   n: int = 120) -> np.ndarray:
+    """Shrink an outline to its main copper part. Along each of its two
+    directions, the copper fraction is profiled across the outline and only the
+    longest continuous copper stretch is kept (gaps shorter than a tenth of the
+    outline are bridged): strips of clamp, clip or holder beside the array, and
+    a separate copper bit beyond a gap, are cut off. Keeps the outline as it is
+    if that would cut away more than max_cut of either side.
+    corners in order around the box; returned in the same order."""
+    c = np.asarray(corners, np.float64)
+    dst = np.float32([[0, 0], [n, 0], [n, n], [0, n]])
+    M = cv2.getPerspectiveTransform(c.astype(np.float32), dst)
+    patch = cv2.warpPerspective(cop, M, (n, n), flags=cv2.INTER_NEAREST).astype(np.float32) / 255.0
+
+    def keep(profile: np.ndarray) -> tuple[int, int]:
+        prof = np.convolve(profile, np.ones(5) / 5, mode="same")
+        on = prof >= min_frac
+        runs, start = [], None
+        for i, v in enumerate(list(on) + [False]):
+            if v and start is None:
+                start = i
+            elif not v and start is not None:
+                runs.append([start, i])
+                start = None
+        if not runs:
+            return 0, n
+        merged = [runs[0]]
+        for r in runs[1:]:
+            if r[0] - merged[-1][1] < n // 10:
+                merged[-1][1] = r[1]
+            else:
+                merged.append(r)
+        lo, hi = max(merged, key=lambda r: r[1] - r[0])
+        return max(0, lo - 1), min(n, hi + 1)
+
+    u0, u1 = keep(patch.mean(0))          # along side 0 -> 1
+    v0, v1 = keep(patch.mean(1))          # along side 0 -> 3
+    if (u1 - u0) < (1 - max_cut) * n or (v1 - v0) < (1 - max_cut) * n:
+        return c
+
+    def at(u: float, v: float) -> np.ndarray:
+        u, v = u / n, v / n
+        return (1 - u) * (1 - v) * c[0] + u * (1 - v) * c[1] + u * v * c[2] + (1 - u) * v * c[3]
+
+    return np.array([at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)])
 
 
 def _detect(rgb: np.ndarray, p: ElectrodeParams) -> list[Array]:
@@ -423,7 +454,7 @@ def _detect(rgb: np.ndarray, p: ElectrodeParams) -> list[Array]:
         corners = np.asarray(measured[0], dtype=np.float64)
         inside = np.zeros(gray.shape, np.uint8)
         cv2.fillPoly(inside, [np.round(corners).astype(np.int32)], 255)
-        if cv2.countNonZero(cv2.bitwise_and(cop_only, inside)) >= 0.3 * max(1, cv2.countNonZero(inside)):
+        if cv2.countNonZero(cv2.bitwise_and(cop_only, inside)) >= 0.1 * max(1, cv2.countNonZero(inside)):
             corners = trim_to_copper(corners, cop_only)       # a copper array: drop non-copper edge strips
         found.append(Array(corners, tuple(map(float, corners.mean(0))), float(copper)))
     found.sort(key=lambda a: -cv2.contourArea(a.corners.astype(np.float32)))
