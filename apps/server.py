@@ -3183,12 +3183,22 @@ def _wait_z(target: float, timeout: float = 3.0) -> None:
         time.sleep(0.05)
 
 
+def _loadcell_alive() -> None:
+    """Read the cell once before any motion, so a dead wire stops the run at the
+    start, not after the head has travelled to the cell."""
+    try:
+        hub.loadcell.read_counts()
+    except Exception as exc:                               # noqa: BLE001
+        raise HTTPException(409, f"The load cell is not answering ({exc}). Check its four wires and power, then try again. Nothing moved.") from exc
+
+
 @app.post("/api/zhome/run")
 def zhome_run(payload: dict | None = None) -> dict:
     """Probe the cell to the target force, call that Z `ref_z`, re-derive every
     taught Z and the floor from the typed heights, and rise to the safe Z."""
     hub.require_idle()
     hub.stop_sampler()
+    _loadcell_alive()
     lc, zc, sp = hub.cal.load_cell, hub.machine.zcal, hub.machine.speeds
     if hub.guard.floor is None:
         raise HTTPException(400, "Set a Z floor first (a few mm below the load cell) so the probe may descend")
@@ -3242,6 +3252,7 @@ def zhome_check() -> dict:
     """Probe the cell with the swab in the jaws and report the drift. Z is not changed."""
     hub.require_idle()
     hub.stop_sampler()
+    _loadcell_alive()
     st = _zhome_settings()
     if st.get("ref") is None or st["ref"] != hub.guard.ref:
         raise HTTPException(400, "Home Z on the load cell first")
@@ -3344,6 +3355,7 @@ def routine2_status() -> dict:
 def routine2_run(payload: dict | None = None) -> dict:
     hub.require_idle()
     hub.stop_sampler()
+    _loadcell_alive()
     body = payload or {}
     slides = _routine2_slides(body)
     st = _zhome_settings()
