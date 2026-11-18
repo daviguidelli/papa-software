@@ -292,6 +292,11 @@ def test_reference_sketch_lands_on_each_glass(aligned, monkeypatch, tmp_path):
     assert j["ready"] and j["sketch"]["bridges"] == 8 and j["sketch"]["warning"] is None
 
     subs = a.post("/api/align/scan", json={"save": False}).json()["scan"]["substrates"]
+    assert not any(s["glass_placed"] for s in subs)          # mounts are identical: the glass is not used...
+    sc = a.server.hub.align_scan
+    for i, s in enumerate(subs):                              # ...unless its corners are set by hand
+        a.post(f"/api/align/substrate/{s['id']}/mount", json={"corners": np.asarray(sc["mounts"][i]).tolist()})
+    subs = a.get("/api/align").json()["scan"]["substrates"]
     assert all(s["glass_placed"] and s["pattern_name"].startswith("Reference sketch") for s in subs)
     assert all(s["pattern_mm"] == [25, 25] for s in subs)
     sc = a.server.hub.align_scan
@@ -320,7 +325,7 @@ def test_reference_sketch_lands_on_each_glass(aligned, monkeypatch, tmp_path):
     for b in c["bridges"]:
         assert b["new"] == pytest.approx((mt.R @ np.array(b["ref"]) + mt.t).tolist(), abs=2e-3)
     og = c["on_glass"]                                     # glass estimated from the array: reference layout
-    assert og is not None and og["measured"] is False and og["swapped"] == []
+    assert og is not None and og["swapped"] == []
     assert og["rotation_deg"] == pytest.approx(0, abs=0.05) and og["offset_mm"] == pytest.approx([0, 0], abs=0.05)
     assert "Array on its glass" in a.get("/api/align/substrate/S2/report", params={"z": 4.5}).text
     b1 = next(b for b in c["bridges"] if b["id"] == "B1")
@@ -538,3 +543,65 @@ def test_glass_corners_give_the_scale_without_camera_points(aligned):
     j = api.get("/api/align/substrate/S1/sketch").json()
     assert j["frame"] == "glass" and j["size_known"] is True and j["w"] == pytest.approx(25)
     assert np.linalg.norm(np.subtract(j["array_mm"][1], j["array_mm"][0])) == pytest.approx(12.5, rel=0.08)
+
+
+MASTER_SKETCH = {"substrate": {"w": 12.0, "h": 10.0},
+                 "bridges": [{"id": "B1", "cx": 3.0, "cy": 2.0, "l": 2.0, "w": 1.0},
+                             {"id": "B2", "cx": 8.0, "cy": 6.0, "l": 2.0, "w": 1.0}]}
+
+
+def _grid_around(a):
+    srv, sc = a.server, a.server.hub.align_scan
+    cen = np.array([np.asarray(v).mean(0) for v in sc["views"]])
+    (x0, y0), (x1, y1) = cen.min(0) - 40, cen.max(0) + 40
+    box = srv._view_to_drawn(sc, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+    dh, dw = sc["drawn"].shape[:2]
+    return a.post("/api/align/slots", json={"rows": 2, "cols": 3, "points": (box / [dw, dh]).tolist()}).json()
+
+
+def test_master_path_moved_to_every_slot(aligned):
+    """One master automation, recorded on one slot: every other substrate is
+    compared with where the master array would be in its slot (mount spacing)
+    and runs the master path turned and shifted by that, with the master
+    bridges unless they were changed for it."""
+    a = aligned
+    a.post("/api/master", json={"clear": "all"})
+    a.post("/api/align/scan", json={"save": False})
+    j = _grid_around(a)
+    subs = j["scan"]["substrates"]
+    m_id, other = subs[0]["id"], subs[1]["id"]
+    r = a.post("/api/master", json={"from": m_id})
+    assert r.status_code == 200, r.text
+    assert r.json()["master"]["slot"] == subs[0]["slot"]
+    a.post("/api/master", json={"sketch": MASTER_SKETCH, "name": "master.json"})
+    gcode = "G21\nG90\nG0 Z5\nG0 X10 Y20\nG1 Z1 F300\nG1 X20 Y20 F600\nG0 Z5\n"
+    assert a.post("/api/master", json={"gcode": gcode, "name": "master.gcode"}).status_code == 200
+    info = a.get("/api/align").json()["scan"]["substrates"]
+    me = next(s for s in info if s["id"] == m_id)
+    assert me["vs_master"]["rotation_deg"] == pytest.approx(0, abs=0.01)
+    assert me["vs_master"]["shift_mm"] == pytest.approx([0, 0], abs=0.01)
+    ot = next(s for s in info if s["id"] == other)
+    assert ot["vs_master"] is not None and ot["bridges_from"] == "master"
+    # the master's own G-code is the master file, unmoved
+    g = a.get(f"/api/align/substrate/{m_id}/gcode", params={"z": 4.5}).text
+    assert "master path" in g and "X10.000 Y20.000" in g.replace("X10 Y20", "X10.000 Y20.000")
+    # another substrate: the same moves turned and shifted (the first move lands where R p + t says)
+    vm = a.server._vs_master(a.server.hub.align_scan, other)
+    p = vm["R"] @ np.array([10.0, 20.0]) + vm["t"]
+    g2 = a.get(f"/api/align/substrate/{other}/gcode", params={"z": 4.5}).text
+    assert f"X{p[0]:.3f} Y{p[1]:.3f}" in g2
+    # the sketcher shows the master bridges unless changed
+    sk = a.get(f"/api/align/substrate/{other}/sketch").json()
+    assert sk["bridges_from"] == "master" and len(sk["bridges"]) == 2
+    a.post("/api/align/pattern", json={"targets": [other], "sketch": {**MASTER_SKETCH, "bridges": MASTER_SKETCH["bridges"][:1]}})
+    assert a.get(f"/api/align/substrate/{other}/sketch").json()["bridges_from"] == "own"
+    assert "master path" not in a.get(f"/api/align/substrate/{other}/gcode", params={"z": 4.5}).text
+    a.post("/api/align/pattern", json={"targets": [other], "clear": True})
+    assert a.get(f"/api/align/substrate/{other}/sketch").json()["bridges_from"] == "master"
+    # measured spacing replaces the camera grid
+    a.post("/api/master", json={"spacing": {"col": [40.0, 0.0], "row": [0.0, -40.0]}})
+    assert a.get("/api/master").json()["spacing"]["source"] == "entered"
+    a.post("/api/master", json={"spacing": None})
+    assert a.get("/api/master").json()["spacing"]["source"] == "camera grid"
+    a.post("/api/master", json={"clear": "all"})
+    a.post("/api/align/slots", json={"clear": True})

@@ -515,6 +515,27 @@
         <button id="alSlotClear">Clear</button>
         <span class="note" id="alSlotMsg" style="margin:0"></span>
       </div>
+      <div class="card" id="alMaster" hidden style="margin-top:10px;padding:12px">
+        <p class="label" style="margin:0 0 6px">Master path</p>
+        <p class="note" style="margin:0 0 8px;font-size:12.5px">One calibrated automation, done on one slot. Every other substrate runs it turned and shifted by how its array sits compared with the master array moved over by the mount spacing. Its bridges are used unless you change them for a substrate in the sketcher.</p>
+        <p class="mono" id="alMasterInfo" style="font-size:12.5px;margin:0 0 8px"></p>
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+          <label class="muted" style="font-size:12.5px">Master automation done on <select id="alMasterFrom"></select></label>
+          <button id="alMasterSet">Record it as the master</button>
+          <label class="btn sm" style="cursor:pointer">Master bridges file…<input type="file" id="alMasterSketch" accept=".json,application/json" hidden></label>
+          <label class="btn sm" style="cursor:pointer">Master G-code…<input type="file" id="alMasterG" accept=".gcode,.nc,.txt,.g" hidden></label>
+          <button id="alMasterClearG">Remove G-code</button>
+          <button id="alMasterClear">Clear master</button>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+          <span class="muted" style="font-size:12.5px">Mount spacing (mm)</span>
+          <label class="muted" style="font-size:12.5px">next column X <input id="alSpCX" type="number" step="0.01" style="width:80px"></label>
+          <label class="muted" style="font-size:12.5px">Y <input id="alSpCY" type="number" step="0.01" style="width:80px"></label>
+          <label class="muted" style="font-size:12.5px">next row X <input id="alSpRX" type="number" step="0.01" style="width:80px"></label>
+          <label class="muted" style="font-size:12.5px">Y <input id="alSpRY" type="number" step="0.01" style="width:80px"></label>
+          <button id="alSpSave">Save spacing</button><button id="alSpCam">Use the camera grid</button>
+        </div>
+      </div>
       <p class="note" id="alLegend" hidden>The picture is square to the printer: right is exactly +X, up is exactly +Y, grid lines every 10 mm. Green outline: array as measured (dot = its top-left corner; orange = corners set by hand in the sketcher). White: scrub path. Gold: lifted hops. Red: bridges. Red outline: this array does not match its pattern. Arrows: printer +X and +Y.</p>
       <table style="margin-top:12px" id="alTab" hidden>
         <thead><tr><th><input type="checkbox" id="alAll" title="Select all"></th><th>Substrate</th><th>Pattern</th><th>Measured mm</th><th>Pattern mm</th><th>Turn °</th><th>Origin X, Y mm</th><th>Fit mm</th><th></th></tr></thead>
@@ -1396,7 +1417,7 @@ function paintAlign(){
   else if(sc&&sc.stale){m.textContent='Patterns or checks changed since this photo: the numbers below are updated, the picture is not. Scan again to redraw.';m.className='note'}
   else if(!m.dataset.keep){m.textContent='';m.className='note'}
   const shown=sc?sc.image:null;
-  $('#alImg').style.display=shown?'block':'none';$('#alSlotRow').hidden=!shown;alSlotPaint();if(shown&&$('#alImg').dataset.src!==shown){$('#alImg').src=shown;$('#alImg').dataset.src=shown}
+  $('#alImg').style.display=shown?'block':'none';$('#alSlotRow').hidden=!shown;alSlotPaint();alMasterLoad();if(shown&&$('#alImg').dataset.src!==shown){$('#alImg').src=shown;$('#alImg').dataset.src=shown}
   $('#alLegend').hidden=!sc;
   if(sc&&sc.pixel_only&&sc.substrates.length&&!sc.warnings.length){m.textContent='Arrays found and labelled. Press Sketch to draw the bridges on each one. Sizes in mm, turns and toolpaths appear once the camera points are taught (below).';m.className='note'}
   const subs=sc?sc.substrates:[];
@@ -1417,13 +1438,13 @@ function paintAlign(){
   $('#alRows').innerHTML=subs.map(x=>{
     const ok=!x.problems.length,err=x.size_error_mm.map(v=>(v>=0?'+':'')+fmt(v,2)).join(', ');
     return `<tr><td><input type="checkbox" data-sel="${x.id}" ${alSel.has(x.id)?'checked':''}></td>
-      <td><b>${x.id}</b>${x.slot?`<br><span class="mono" style="color:#3cc8e6">slot ${x.slot}</span>`:x.id&&(S.al.slot_map)?'<br><span class="mono muted">outside the grid</span>':''}</td><td>${esc(x.pattern_name)}</td>
+      <td><b>${x.id}</b>${x.slot?`<br><span class="mono" style="color:#3cc8e6">slot ${x.slot}</span>`:x.id&&(S.al.slot_map)?'<br><span class="mono muted">outside the grid</span>':''}</td><td>${esc(x.pattern_name)}${x.bridges_from==='master'?'<br><span class="muted">master bridges</span>':x.bridges_from==='own'?'<br><span class="warn">own bridges</span>':''}</td>
       <td>${fmt(x.measured_mm[0],2)} × ${fmt(x.measured_mm[1],2)}<br><span class="${Math.max(...x.size_error_mm.map(Math.abs))>a.settings.size_tolerance_mm?'err':'muted'}">${err}</span></td>
       <td>${fmt(x.pattern_mm[0],2)} × ${fmt(x.pattern_mm[1],2)}</td>
       <td class="${Math.abs(x.rotation_deg)>a.settings.max_rotation_deg?'err':''}">${(x.rotation_deg>=0?'+':'')+fmt(x.rotation_deg,2)}</td>
       <td>${fmt(x.origin_mm[0],2)}, ${fmt(x.origin_mm[1],2)}</td><td>${fmt(x.fit_rms_mm,3)}</td>
       <td style="white-space:nowrap"><a class="btn sm" href="/static/bridge_sketcher.html?substrate=${x.id}">Sketch</a> <button class="sm" data-scrub="${x.id}" ${lock||!homedXY()?'disabled':''}>Scrub</button> <button class="sm gold" data-routine="${x.id}" ${lock||!homedXY()?'disabled':''}>Routine 1</button></td></tr>
-      <tr><td></td><td colspan="8" class="${ok?'good':'warn'}" style="padding-top:0;font-size:12px;text-align:left">${x.crop?`<img src="${x.crop}" alt="${x.id} close-up" style="float:left;width:300px;max-width:45%;margin:2px 14px 6px 0;border:1px solid var(--line);border-radius:3px">`:''}${ok?(x.plan?`Ready · ${x.plan.rows} rows, ${x.plan.hops} hops, ~${fmt(x.plan.est_s/60,1)} min`:'Ready'):x.problems.map(esc).join(' ')}${alGlass(x)}</td></tr>`}).join('');
+      <tr><td></td><td colspan="8" class="${ok?'good':'warn'}" style="padding-top:0;font-size:12px;text-align:left">${x.crop?`<img src="${x.crop}" alt="${x.id} close-up" style="float:left;width:300px;max-width:45%;margin:2px 14px 6px 0;border:1px solid var(--line);border-radius:3px">`:''}${ok?(x.plan?`Ready · ${x.plan.rows} rows, ${x.plan.hops} hops, ~${fmt(x.plan.est_s/60,1)} min`:'Ready'):x.problems.map(esc).join(' ')}${alVsMaster(x)}${alGlass(x)}</td></tr>`}).join('');
   $('#alAll').checked=subs.length&&alSel.size===subs.length;
   const opts=['<option value="">Scrub tab sketch</option>'].concat(subs.filter(x=>a.patterns[x.id]).map(x=>`<option value="${x.id}">${x.id} · ${esc(x.pattern_name)}</option>`));
   const cf=$('#alCopyFrom'),cur=cf.value;cf.innerHTML=opts.join('');cf.value=[...cf.options].some(o=>o.value===cur)?cur:'';
@@ -1773,6 +1794,38 @@ $('#alSlotNone').onclick=()=>{alSlotPick=new Set();alSlotPaint()};
 $('#alSlotGo').onclick=()=>{const src=$('#alSlotSrc').value;if(!src||!alSlotPick.size)return;const q=alZq();if(q===null)return;
   const t=[...alSlotPick].sort((x,y)=>x-y).join(',');
   run(`G-code: ${src} on slots ${t}`,()=>alDownload(`/api/align/slots/gcode?source=${src}&targets=${t}`+(q?'&'+q.slice(1):''),'slots.gcode'))};
+
+// ---- master path ----
+function alVsMaster(x){const v=x.vs_master;if(!v)return '';
+  const sh=v.shift_mm,n=Math.hypot(sh[0],sh[1]);
+  return `<br><span class="mono" style="color:var(--tx)">vs master (slot ${v.master_slot} → ${v.slot}): turned ${(v.rotation_deg>=0?'+':'')+fmt(v.rotation_deg,2)}°, shifted X ${(sh[0]>=0?'+':'')+fmt(sh[0],2)}, Y ${(sh[1]>=0?'+':'')+fmt(sh[1],2)} mm (${fmt(n,2)} mm) · spacing: ${esc(v.spacing)}</span>`}
+let alMasterT=0;
+async function alMasterLoad(force){
+  if(!force&&Date.now()-alMasterT<4000)return;alMasterT=Date.now();
+  let m;try{m=await api('/api/master')}catch(e){return}
+  const a=S.al,subs=(a&&a.scan&&a.scan.substrates)||[];
+  $('#alMaster').hidden=!(a&&a.scan&&a.scan.image);
+  const sel=$('#alMasterFrom'),prev=sel.value;
+  sel.innerHTML=subs.map(x=>`<option value="${x.id}">${x.id}${x.slot?' (slot '+x.slot+')':''}</option>`).join('');
+  if([...sel.options].some(o=>o.value===prev))sel.value=prev;
+  const sp=m.spacing||{};
+  $('#alMasterInfo').innerHTML=(m.slot?`Master: slot ${m.slot} (${esc(m.sid||'')}), recorded ${esc(m.time||'')}`:'No master recorded yet.')
+    +` · bridges: ${m.sketch?esc(m.sketch.name||'')+' ('+m.sketch.bridges.length+')':'none'}`
+    +` · G-code: ${m.gcode_name?esc(m.gcode_name)+' ('+m.gcode_lines+' lines)':'none'}`
+    +`<br>Spacing (${esc(sp.source||'none')}): column ${sp.col?fmt(sp.col[0],2)+', '+fmt(sp.col[1],2):'–'} · row ${sp.row?fmt(sp.row[0],2)+', '+fmt(sp.row[1],2):'–'} mm`
+    +(m.ready?' · <span class="good">ready</span>':'');
+  if(sp.source==='entered'){[['#alSpCX',sp.col,0],['#alSpCY',sp.col,1],['#alSpRX',sp.row,0],['#alSpRY',sp.row,1]].forEach(([q,v,i])=>{if(document.activeElement!==$(q))$(q).value=v?v[i]:''})}
+}
+async function alMasterPost(body,what){try{const r=await fetch('/api/master',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);say(what,'ok');S.al=await api('/api/align');paintAlign();await alMasterLoad(true)}catch(e){say(what+' failed: '+(e.message||e),'err')}}
+$('#alMasterSet').onclick=()=>{const id=$('#alMasterFrom').value;if(id&&confirm('Record '+id+' as the master: its slot and array corners now, and its own bridges if it has any?'))alMasterPost({from:id},'Master recorded from '+id)};
+$('#alMasterSketch').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const j=JSON.parse(await f.text());alMasterPost({sketch:j,name:f.name},'Master bridges loaded')}catch(x){say('That is not a bridge-sketcher JSON file','err')}e.target.value=''};
+$('#alMasterG').onchange=async e=>{const f=e.target.files[0];if(!f)return;alMasterPost({gcode:await f.text(),name:f.name},'Master G-code loaded');e.target.value=''};
+$('#alMasterClearG').onclick=()=>alMasterPost({clear:'gcode'},'Master G-code removed');
+$('#alMasterClear').onclick=()=>{if(confirm('Clear the whole master (slot, array, bridges, G-code, spacing)?'))alMasterPost({clear:'all'},'Master cleared')};
+$('#alSpSave').onclick=()=>{const v=q=>$(q).value===''?null:+$(q).value;const cx=v('#alSpCX'),cy=v('#alSpCY'),rx=v('#alSpRX'),ry=v('#alSpRY');
+  alMasterPost({spacing:{col:cx===null&&cy===null?null:[cx||0,cy||0],row:rx===null&&ry===null?null:[rx||0,ry||0]}},'Mount spacing saved')};
+$('#alSpCam').onclick=()=>alMasterPost({spacing:null},'Using the camera grid for the spacing');
 </script>
 </body>
 </html>

@@ -1608,6 +1608,10 @@ def _align_info() -> dict:
             sub["crop"] = sc.get("crops", {}).get(sid)
             sub["manual"] = sid in sc.get("manual", set())
             sub["slot"] = _sub_slot(sc, sid)
+            vm = _vs_master(sc, sid)
+            sub["vs_master"] = None if vm is None else {k: vm[k] for k in
+                                                        ("slot", "master_slot", "rotation_deg", "shift_mm", "step_mm", "spacing")}
+            sub["bridges_from"] = _bridges_from(sid)
             mi = (sc.get("mount_info") or [None] * len(d["substrates"]))[_ids(sc).index(sid)]
             sub["mount"] = None if mi is None else {"source": mi["source"], **mi["match"].as_dict(),
                                                     "gcode_ready": _ref_ready()[0]}
@@ -1863,6 +1867,8 @@ def _glass_placements(sc: dict, result: alignmod.ScanResult) -> None:
         mi = (sc.get("mount_info") or [None] * len(result.placements))[i]
         mv = mounts[i] if i < len(mounts) else None
         own = st["patterns"].get(p.id)
+        if p.id not in sc.get("mount_manual", set()) or _master().get("array_mm"):
+            continue                            # mounts are identical: the array, not the glass, places the path
         if (mi is None and mv is None) or not _on_glass(own):
             continue                            # no glass known, or an own sketch drawn on the array
         area = (own or sk or {"area": {"w": G, "h": G}})["area"]
@@ -1902,7 +1908,7 @@ def _pattern_of(sid: str, result: alignmod.ScanResult | None = None) -> dict:
     if res is not None and res.pattern_source.get(sid) == "glass":
         return {"name": "glass (no bridges sketched yet)", "area": {"w": _glass_mm(), "h": _glass_mm()},
                 "bridges": [], "frame": "glass"}
-    return _scrub_tab_pattern()
+    return _default_pattern()
 
 
 # ---------- slots: fixed numbers for the holder positions on the plate ----------
@@ -2108,6 +2114,181 @@ def _draw_slots(sc: dict, drawn: Any) -> None:
                         2 * t, cv2.LINE_AA)
 
 
+# ---------- master path: one calibrated automation, moved to every slot ----------
+
+def _master_file() -> Path:
+    return STATE_DIR / "master.json"
+
+
+def _master() -> dict:
+    import json
+
+    try:
+        return json.loads(_master_file().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_master(m: dict) -> None:
+    import json
+
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _master_file().with_suffix(".tmp")
+    tmp.write_text(json.dumps(m))
+    tmp.replace(_master_file())
+
+
+def _master_pattern() -> dict | None:
+    sk = _master().get("sketch")
+    if not sk or not sk.get("bridges"):
+        return None
+    return {"name": sk.get("name") or "master bridges", "area": dict(sk["area"]),
+            "bridges": [dict(b) for b in sk["bridges"]], "master": True}
+
+
+def _default_pattern() -> dict:
+    """What a substrate runs unless its bridges were changed for it: the
+    master bridges, else the Scrub tab sketch."""
+    return _master_pattern() or _scrub_tab_pattern()
+
+
+def _spacing(sc: dict | None) -> tuple[Any, Any, str]:
+    """Distance from one mount to the next: (one column, one row) in printer mm,
+    and where it comes from. Measured values entered for the master win;
+    until then the camera's view of the slot grid."""
+    sp = _master().get("spacing") or {}
+    if sp.get("col") is not None or sp.get("row") is not None:
+        return sp.get("col"), sp.get("row"), "entered"
+    sm = _slot_map(sc) if sc else None
+    if sm and ("col_step_mm" in sm):
+        return sm.get("col_step_mm"), sm.get("row_step_mm"), "camera grid"
+    return None, None, "none"
+
+
+def _vs_master(sc: dict, sid: str) -> dict | None:
+    """Where this substrate's array is compared with where the master array
+    would be in this slot (the master's array moved by the mount spacing):
+    its turn and X/Y shift, and the transform new = R (master + step) + t."""
+    import numpy as np
+
+    m = _master()
+    if not m.get("array_mm") or m.get("slot") is None or sc is None or sc.get("result") is None:
+        return None
+    k = _sub_slot(sc, sid)
+    sl = _slots()
+    axes_fit, _ = _camera_axes()
+    if k is None or not sl or axes_fit is None:
+        return None
+    col, row, src = _spacing(sc)
+    cols = int(sl["cols"])
+    r0, c0 = divmod(int(m["slot"]) - 1, cols)
+    r1, c1 = divmod(k - 1, cols)
+    if (c1 != c0 and col is None) or (r1 != r0 and row is None):
+        return None
+    step = (c1 - c0) * np.asarray(col or [0, 0], float) + (r1 - r0) * np.asarray(row or [0, 0], float)
+    expected = np.asarray(m["array_mm"], float) + step
+    c = corrmod.get_correction(sc["rgb"].shape[1::-1])
+    view = np.asarray(sc["views"][_sid_index(sc, sid)], float)
+    measured = alignmod.local_order(hub.machine.axes, axes_fit.plate_to_mm(c.corrected_to_plate(view)))
+    side = float(np.linalg.norm(expected[1] - expected[0]))
+    mt = refmod.match(expected, 0, measured, None, side, 1e9)
+    shift = measured.mean(0) - expected.mean(0)
+    return {"slot": k, "master_slot": int(m["slot"]), "step_mm": step.round(3).tolist(), "spacing": src,
+            "rotation_deg": round(mt.rotation_deg, 3), "shift_mm": shift.round(3).tolist(),
+            "expected_mm": expected.round(3).tolist(), "measured_mm": measured.round(3).tolist(),
+            "R": mt.R, "t": mt.t + mt.R @ step}
+
+
+def _bridges_from(sid: str) -> str:
+    if _align_settings()["patterns"].get(sid):
+        return "own"
+    return "master" if _master_pattern() else "scrub tab"
+
+
+@app.get("/api/master")
+def master_get() -> dict:
+    m = _master()
+    col, row, src = _spacing(hub.align_scan)
+    return {"slot": m.get("slot"), "sid": m.get("sid"), "time": m.get("time"),
+            "array_mm": m.get("array_mm"), "sketch": m.get("sketch"),
+            "gcode_name": m.get("gcode_name"), "gcode_lines": len((m.get("gcode") or "").splitlines()),
+            "spacing": {"col": col, "row": row, "source": src},
+            "ready": bool(m.get("array_mm") and (m.get("gcode") or m.get("sketch")))}
+
+
+@app.post("/api/master")
+def master_set(payload: dict) -> dict:
+    """Set up the master path. One of:
+    from: "S3"   the master automation was done on this substrate: record its
+                 slot and array corners (from the last scan) and, if it has
+                 its own bridges, those as the master bridges;
+    sketch: {...} master bridges (bridge-sketcher file, mm from the array's top-left);
+    gcode: "...", name   the calibrated G-code of the master automation;
+    spacing: {col: [x, y], row: [x, y]}   measured distance between mounts (mm),
+             or null to use the camera's slot grid;
+    clear: "all" | "gcode" | "sketch" | "spacing"."""
+    import numpy as np
+
+    m = _master()
+    if payload.get("clear"):
+        what = payload["clear"]
+        if what == "all":
+            m = {}
+        elif what in ("gcode", "sketch", "spacing"):
+            m.pop(what, None)
+            if what == "gcode":
+                m.pop("gcode_name", None)
+    elif payload.get("from"):
+        sid = str(payload["from"])
+        sc = _scan_or_400()
+        i = _sid_index(sc, sid)
+        axes_fit, _ = _camera_axes()
+        if axes_fit is None:
+            raise HTTPException(400, "Teach the camera points first: the master's array is recorded in printer mm.")
+        k = _sub_slot(sc, sid)
+        if k is None:
+            raise HTTPException(400, f"{sid} is not in a slot: set the slot grid first.")
+        c = corrmod.get_correction(sc["rgb"].shape[1::-1])
+        arr = alignmod.local_order(hub.machine.axes,
+                                   axes_fit.plate_to_mm(c.corrected_to_plate(np.asarray(sc["views"][i], float))))
+        m.update({"slot": k, "sid": sid, "array_mm": arr.round(4).tolist(),
+                  "time": time.strftime("%Y-%m-%d %H:%M")})
+        own = _align_settings()["patterns"].get(sid)
+        if own:
+            m["sketch"] = {"name": own.get("name") or f"{sid} bridges", "area": dict(own["area"]),
+                           "bridges": [dict(b) for b in own["bridges"]]}
+    elif payload.get("sketch") is not None:
+        try:
+            sk = refmod.clean_sketch(payload["sketch"])
+        except refmod.ReferenceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        m["sketch"] = {"name": str(payload.get("name") or sk.get("name") or "master bridges"),
+                       "area": sk["area"], "bridges": sk["bridges"]}
+    elif payload.get("gcode") is not None:
+        text = str(payload["gcode"])
+        try:
+            refmod.transform_gcode(text)            # refuses files that cannot be moved safely
+        except refmod.ReferenceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        m["gcode"], m["gcode_name"] = text, str(payload.get("name") or "master.gcode")
+    elif "spacing" in payload:
+        sp = payload["spacing"]
+        if sp is None:
+            m.pop("spacing", None)
+        else:
+            try:
+                m["spacing"] = {k: (None if sp.get(k) in (None, "") else [float(sp[k][0]), float(sp[k][1])])
+                                for k in ("col", "row")}
+            except (TypeError, ValueError, IndexError, AttributeError) as exc:
+                raise HTTPException(400, "spacing: col and row as [x, y] in mm") from exc
+    else:
+        raise HTTPException(400, "send from, sketch, gcode, spacing or clear")
+    _save_master(m)
+    if hub.align_scan:
+        _render_scan(hub.align_scan)
+    return {"master": master_get(), **_align_info()}
+
+
 def _slot_map(sc: dict | None) -> dict | None:
     """The holder grid for the GUI's slot map: every slot with the substrate
     found in it (if any) and, with camera points, its centre on the printer
@@ -2240,7 +2421,7 @@ def _render_scan(sc: dict) -> None:
     _mounts(sc)
     if axes_fit is not None:
         result = alignmod.place_views(views, rgb.shape[1::-1], hub.machine.axes, axes_fit,
-                                      _align_settings(), _scrub_tab_pattern(), ids=_ids(sc))
+                                      _align_settings(), _default_pattern(), ids=_ids(sc))
         _glass_placements(sc, result)
         drawn, closeups = _scan_views(rgb, result, axes_fit, sc)    # square to the printer's X and Y
         sc["result"], sc["drawn"] = result, drawn
@@ -2410,6 +2591,9 @@ def align_substrate_sketch(sid: str) -> dict:
     st = _align_settings()
     own = st["patterns"].get(sid)
     bridges = list((own or {}).get("bridges") or [])
+    mp = _master_pattern()
+    if not own and mp:
+        bridges = [dict(b) for b in mp["bridges"]]          # the master bridges unless changed for this one
     axes_fit, _ = _camera_axes()
     frame = "array"
     i = ids.index(sid)
@@ -2480,6 +2664,7 @@ def align_substrate_sketch(sid: str) -> dict:
     return {"id": sid, "w": w, "h": h, "px_per_mm": ppm, "bridges": bridges, "size_known": size_known,
             "array_mm": array_mm, "glass_mm": _glass_mm(),
             "glass_by_hand": sid in sc.get("mount_manual", set()), "array_by_hand": sid in sc.get("manual", set()),
+            "bridges_from": _bridges_from(sid), "master_name": (mp or {}).get("name"),
             "frame": frame, "from_reference": frame == "glass" and not own and _ref_sketch() is not None,
             "pattern_name": (own or {}).get("name") or "",
             "image": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()}
@@ -2564,7 +2749,7 @@ def align_view(sid: str = "", margin: float = 1.5, what: str = "array") -> dict:
             context.append(arr)
         else:
             v = arr
-            if mv is not None:
+            if mv is not None and sid in sc.get("mount_manual", set()):
                 context.append(np.asarray(mv, np.float64))
         box = np.vstack([v] + context)
         cell = _slot_cell_view(sc, i)       # the whole slot (holder) when the slot grid is set
@@ -3322,6 +3507,21 @@ def align_substrate_gcode(sid: str, z: float | None = None) -> Response:
         raise HTTPException(400, "Teach the camera points first.")
     info = (sc.get("mount_info") or [None] * (i + 1))[i]
     name = _ref_cfg().get("gcode_name") or "toolpath.gcode"
+    vm, mst = _vs_master(sc, sid), _master()
+    if mst.get("gcode") and vm is not None and _bridges_from(sid) != "own":
+        # the master automation, turned and shifted from the master's array onto this one
+        head = "\n".join([
+            f"; PAPA: master path ({mst.get('gcode_name') or 'master G-code'}) moved onto {sid}" + _slot_txt(sc, sid),
+            f"; scan {sc.get('scan_id', '-')} at {sc['time']}; master recorded on slot {vm['master_slot']}",
+            f"; slot step X{vm['step_mm'][0]:+.3f} Y{vm['step_mm'][1]:+.3f} mm (mount spacing: {vm['spacing']})",
+            f"; vs master: array turned {vm['rotation_deg']:+.3f} deg, shifted X{vm['shift_mm'][0]:+.3f} "
+            f"Y{vm['shift_mm'][1]:+.3f} mm from where the master array would be"])
+        try:
+            text, _ = refmod.transform_gcode(mst["gcode"], vm["R"], vm["t"], header=head)
+        except refmod.ReferenceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return Response(text, media_type="text/plain",
+                        headers={"Content-Disposition": f'attachment; filename="{sid}_{mst.get("gcode_name") or "master.gcode"}"'})
     # the bridge sketch wins: the G-code file is used only when there is no sketch
     if _ref_gcode() is not None and _ref_sketch() is None and _ref_ready()[0]:
         if info is None:
