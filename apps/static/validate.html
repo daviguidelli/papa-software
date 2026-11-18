@@ -1570,6 +1570,8 @@ $('#alClear').onclick=()=>{const targets=[...alSel];
   run(`${targets.join(', ')} use the Scrub tab sketch`,async()=>{S.al=await post('/api/align/pattern',{targets,clear:true});paintAlign()})};
 $('#alTolSave').onclick=()=>run('Saved alignment checks',async()=>{S.al=await post('/api/align/settings',{size_tolerance_mm:+$('#alTol').value,max_rotation_deg:+$('#alRot').value});paintAlign()});
 {const _paint4=paint;paint=function(){_paint4();if(S.mode==='align')paintAlign()}}
+// the update button follows "busy" after any action finishes, not just when the list is drawn
+{const _paint5=paint;paint=function(){_paint5();const b=document.getElementById('swUpdate');if(b)b.disabled=!(S.swNew&&S.swNew.length)||S.busy}}
 
 /* ---------- software update ---------- */
 function swPaint(j){
@@ -1578,7 +1580,7 @@ function swPaint(j){
   $('#swChip').textContent=n===undefined?'':(n.length?n.length+' update'+(n.length===1?'':'s'):'up to date');
   $('#swChip').className='chip '+(n&&n.length?'warn':'ok');
   $('#swNew').innerHTML=(n||[]).map(x=>`<li>${esc(x)}</li>`).join('');
-  $('#swUpdate').disabled=!(n&&n.length)||S.busy;
+  S.swNew=n;$('#swUpdate').disabled=!(n&&n.length)||S.busy;
   if(j.local_changes&&j.local_changes.length){$('#swMsg').textContent='Files were edited on the Pi ('+j.local_changes.join(', ')+'); an update will not overwrite them.';$('#swMsg').className='note warn'}
 }
 async function swLoad(){try{swPaint(await api('/api/software'))}catch(e){$('#swMsg').textContent='Version unknown: '+e.message}}
