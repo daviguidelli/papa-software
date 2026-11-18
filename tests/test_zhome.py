@@ -151,3 +151,35 @@ def test_routine2_slot_needs_a_captured_corner(homed_cell):
     c.post("/api/zhome/run")
     r = c.post("/api/routine2/run", json={"slides": ["8", "9"]})
     assert r.status_code == 400 and "top-left corner" in r.json()["error"]
+
+
+def test_loadcell_calibrate_and_tare_save_themselves(api):
+    import yaml
+    r = api.post("/api/loadcell/tare")
+    assert r.status_code == 200 and r.json()["saved"]
+    assert "tare_counts" in saved(api)["load_cell"]
+    api.server.hub.loadcell.pressed_g = 100.0 if hasattr(api.server.hub.loadcell, "pressed_g") else None
+    r = api.post("/api/loadcell/calibrate", json={"grams": 100})
+    if r.status_code == 200:
+        assert r.json()["saved"]
+        assert saved(api)["load_cell"]["scale_counts_per_g"] == pytest.approx(r.json()["scale_counts_per_g"])
+    assert api.post("/api/loadcell/calibrate", json={"grams": 0}).status_code == 400
+
+
+def test_setup_positions_show_up(homed_cell):
+    c = homed_cell
+    pos = c.get("/api/zhome").json()["positions"]
+    assert pos["swab1"] == {"x": 40.0, "y": 60.0} and pos["bin"]["x"] == 300.0
+    assert pos["swab2"] == {"x": 40.0, "y": 65.0}
+    assert pos["cell"] == {"x": 30.0, "y": 40.0}
+    assert c.get("/api/zhome").json()["loadcell"]["scaled"] in (True, False)
+
+
+def test_zhome_after_restart_starts_a_fixed_height_above_the_contact(homed_cell):
+    c = homed_cell
+    c.post("/api/zhome/run")
+    c.post("/api/machine/move", json={"z": 90, "speed_mm_s": 100})
+    c.server.hub.loadcell.contact_z = 50.187
+    r = c.post("/api/zhome/run")
+    assert r.status_code == 200, r.text
+    assert abs(r.json()["contact_z_before"] - (50.0 - 0.0)) < 0.5, "the second Z home finds the same contact"

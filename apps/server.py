@@ -1020,7 +1020,9 @@ def loadcell_live(since: int = 0, limit: int = 2000) -> dict:
 def tare() -> dict:
     hub.require_idle()
     hub.stop_sampler()
-    return {"tare_counts": hub.loadcell.tare()}
+    counts = hub.loadcell.tare()
+    _patch_calibration({"load_cell": {"tare_counts": int(counts)}})
+    return {"tare_counts": counts, "saved": True}
 
 
 @app.post("/api/loadcell/scale")
@@ -1029,6 +1031,25 @@ def scale(payload: dict) -> dict:
     hub.stop_sampler()
     g = float(payload.get("grams", 0))
     return {"scale_counts_per_g": hub.loadcell.calibrate_with_known_weight(g)}
+
+
+@app.post("/api/loadcell/calibrate")
+def loadcell_calibrate(payload: dict) -> dict:
+    """Scale from a known mass pressing on the cell, saved at once together with
+    the tare it was measured against. Nothing else to press, and it survives
+    a restart."""
+    hub.require_idle()
+    hub.stop_sampler()
+    g = float(payload.get("grams", 0))
+    if not g > 0:
+        raise HTTPException(400, "Enter the known mass in grams")
+    lc = hub.loadcell
+    sc = lc.calibrate_with_known_weight(g)
+    if abs(sc) < 1e-6:
+        raise HTTPException(400, "No change in the reading: is the mass on the cell, and was the cell tared empty first?")
+    _patch_calibration({"load_cell": {"tare_counts": int(getattr(lc, "offset", 0)), "scale_counts_per_g": float(sc)}})
+    return {"scale_counts_per_g": sc, "tare_counts": int(getattr(lc, "offset", 0)), "saved": True,
+            "newtons_now": round(lc.newtons(), 3)}
 
 
 @app.post("/api/loadcell/position")
@@ -3089,7 +3110,36 @@ def _zhome_info() -> dict:
     st = _zhome_settings()
     return {"settings": st, "problems": zhomemod.problems(st, hub.guard.ref),
             "floor_would_be": zhomemod.floor_z(st), "target_force_n": hub.machine.zcal["target_force_n"],
-            "abs": {k: zhomemod.absolute(st, k) for k in zhomemod.HEIGHTS}}
+            "abs": {k: zhomemod.absolute(st, k) for k in zhomemod.HEIGHTS},
+            "positions": _setup_positions(), "loadcell": _lc_status()}
+
+
+def _setup_positions() -> dict:
+    a = _auto_settings()
+    lc = hub.cal.load_cell
+    slots = {x.id: x for x in hub.cal.slots if x.calibrated}
+
+    def xy(o) -> dict | None:
+        return None if o is None else {"x": round(float(o["x"]), 2), "y": round(float(o["y"]), 2)}
+
+    pick = a.get("pickup")
+    step = a.get("pickup_step") or {"x": 0.0, "y": 0.0}
+    set2 = bool(step.get("x") or step.get("y"))
+    return {
+        "slide1": xy({"x": slots[1].x, "y": slots[1].y}) if 1 in slots else None,
+        "slide2": xy({"x": slots[2].x, "y": slots[2].y}) if 2 in slots else None,
+        "bin": xy(a.get("bin")),
+        "swab1": xy(pick),
+        "swab2": xy({"x": pick["x"] + step["x"], "y": pick["y"] + step["y"]}) if pick and set2 else None,
+        "cell": xy(lc) if lc.get("xy_set") else None,
+    }
+
+
+def _lc_status() -> dict:
+    lc = hub.loadcell
+    return {"scaled": bool(getattr(lc, "scaled", True)),
+            "scale": float(getattr(lc, "scale", 1.0) or 1.0),
+            "saved": bool(hub.cal.load_cell.get("scale_counts_per_g"))}
 
 
 @app.get("/api/zhome")
@@ -3149,10 +3199,15 @@ def zhome_run(payload: dict | None = None) -> dict:
     p = hub.printer.position()
     if not all(a in p.homed for a in "xyz"):
         raise HTTPException(400, "Home X and Y and set Z first")
-    start_z = float(lc["z_safe"])
+    st = _zhome_settings()
+    if st.get("ref") is not None and st["ref"] == hub.guard.ref:
+        # the Z frame from the last Z home is still the one in use (also after a restart
+        # and a Z restore), so start a fixed distance above the cell contact
+        start_z = float(st["ref_z"]) + float(st["probe_start_mm"])
+    else:
+        start_z = float(lc["z_safe"])
     if start_z < hub.guard.floor or (hub.guard.ceiling is not None and start_z > hub.guard.ceiling):
         raise HTTPException(400, "the probe start Z is outside the Z floor / ceiling")
-    st = _zhome_settings()
     try:
         r = zhomemod.probe(hub.printer, hub.loadcell, lc, zc, sp, start_z=start_z)
     except (GripFailed, OverForce) as exc:

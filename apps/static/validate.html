@@ -118,9 +118,9 @@
         <button id="tare" class="gold">Tare (cell empty)</button>
         <label>Known weight g<input type="number" id="kw" value="100" min="1" step="1"></label>
         <button id="scale" class="gold">Calibrate scale</button>
-        <button id="saveScale" disabled>Save tare + scale</button>
+        <button id="saveScale" hidden>Save</button>
       </div>
-      <p class="note" id="scaleNote">Until the scale is calibrated the numbers above are raw counts, not newtons. Order: empty cell, Tare; then press a known mass DOWN on the cell, the way the swab will (if the cell reads negative under load, the scale comes out negative and flips it); then Calibrate scale. Use a known mass (type it in grams), Calibrate scale; then Save. The mass is needed once. Every Z home and check tares by itself.</p>
+      <p class="note" id="scaleNote">Two steps, both save by themselves. 1) Cell empty: <b>Tare</b>. 2) Press a known mass DOWN on the cell, type its grams, <b>Calibrate scale</b>. Do this once; it is remembered across restarts. Every Z home and check also tares by itself.</p>
     </div></details>
 
     <details class="card fold" id="f-where"><summary><span class="label">Where is the load cell</span></summary><div class="fold-body">
@@ -307,6 +307,50 @@
 
   <!-- ============ AUTONOMOUS ============ -->
   <div id="modeAuto" class="stack" hidden>
+    <div class="card" id="r2Main">
+      <p class="label">Routine 2 · setup</p>
+      <h2>Where <em>everything</em> is</h2>
+      <p class="note" style="margin-top:0">Jog the tip there with the controls on the left, press <b>Set here</b>. Home X and Y first. Slides: the top-left corner of the electrode array.</p>
+      <div class="taught" id="setupRows"></div>
+      <p class="note" id="lcNote"></p>
+
+      <div class="row" style="margin-top:16px;align-items:center">
+        <button class="primary" id="suRun">Start up</button>
+        <span class="muted" style="font-size:12.5px">After a power cycle: homes X and Y, restores Z, homes Z on the load cell, parks at safe Z. Needs a swab in the jaws, the head parked at safe Z when it was turned off, and a hand near E-STOP.</span>
+      </div>
+      <p class="note" id="suMsg"></p>
+
+      <p class="label" style="margin-top:18px">Heights · mm above the load cell contact</p>
+      <div class="row" style="align-items:flex-end">
+        <label>Slide<input type="number" id="zhSlide" step="0.01"></label>
+        <label>Pickup<input type="number" id="zhPick" step="0.01"></label>
+        <label>Bin<input type="number" id="zhBin" step="0.01"></label>
+        <label>Safe<input type="number" id="zhSafe" step="0.5"></label>
+        <label>Floor margin<input type="number" id="zhMargin" step="0.1" min="0" max="5"></label>
+        <button class="gold sm" id="zhSave">Save</button>
+      </div>
+      <div class="kv" id="zhOut" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="zhRun">Home Z on load cell</button>
+        <button class="sm" id="zhCheck">Check Z (no change)</button>
+        <button class="sm" id="zhPark">Park at safe Z</button>
+      </div>
+      <p class="note" id="zhMsg"></p>
+      <input type="hidden" id="r2A" value="1"><input type="hidden" id="r2B" value="2">
+
+      <div class="auto-actions" style="margin-top:14px"><button class="bigbtn primary" id="r2Run"><b>Run routine 2</b><small id="r2Sub">Checking…</small></button></div>
+      <div class="row" style="margin-top:12px;align-items:center">
+        <button class="danger sm" id="r2Stop" disabled>Stop after this move</button>
+        <span class="muted" style="font-size:12.5px">Order: check Z, scrub 1, dispose, grip swab 1, check Z, scrub 2, dispose, grip swab 2, park.</span>
+      </div>
+      <ol class="runsteps" id="r2Steps" hidden></ol>
+      <div class="kv" id="r2Check" style="margin-top:10px"></div>
+      <p class="note" id="r2Msg"></p>
+    </div>
+
+    <details class="card fold" id="f-adv">
+      <summary><span class="label">More · single actions, Routine 1, taught positions, motion settings</span></summary>
+      <div class="fold-body stack">
     <div class="card" id="autoMain">
       <p class="label">One-button actions</p>
       <h2>Grip and <em>dispose</em></h2>
@@ -334,46 +378,6 @@
       </div>
       <ol class="runsteps" id="r1Steps" hidden></ol>
       <p class="note" id="r1Msg"></p>
-    </div>
-
-    <div class="card" id="zhMain">
-      <p class="label">Z reference</p>
-      <h2>Z home on the <em>load cell</em></h2>
-      <p class="note" style="margin-top:0">Steps the swab onto the cell until the force reaches the target, calls that height the Z reference, then sets the floor and every taught Z from the heights below. Needs the cell XY and probe start Z (Manual tab), a swab in the jaws, a Z floor below the cell, and the scale set once.</p>
-      <div class="kv" id="zhOut"></div>
-      <div class="row" style="margin-top:10px;align-items:flex-end">
-        <label>Slide mm<input type="number" id="zhSlide" step="0.01"></label>
-        <label>Pickup mm<input type="number" id="zhPick" step="0.01"></label>
-        <label>Bin mm<input type="number" id="zhBin" step="0.01"></label>
-        <label>Safe mm<input type="number" id="zhSafe" step="0.5"></label>
-      </div>
-      <div class="row" style="margin-top:10px;align-items:flex-end">
-        <label>Floor margin mm<input type="number" id="zhMargin" step="0.1" min="0" max="5"></label>
-        <button class="gold sm" id="zhSave">Save heights</button>
-        <button class="primary" id="zhRun">Home Z on the load cell</button>
-        <button class="sm" id="zhCheck">Check Z (no change)</button>
-        <button class="sm" id="zhPark">Park at safe Z</button>
-      </div>
-      <p class="note">Heights are mm above the cell contact at the target force (negative = below). Slide is the top of the glass relative to the top of the cell. The floor sits at the lowest height minus the margin: 0 is exact, but a shorter swab then cannot reach the cell.</p>
-      <p class="note" id="zhMsg"></p>
-    </div>
-
-    <div class="card" id="r2Main">
-      <p class="label">Full cycle</p>
-      <h2>Routine <em>2</em></h2>
-      <p class="note" style="margin-top:0">Check Z, scrub slide A, dispose, grip position 1, check Z, scrub slide B, dispose, grip position 2, park at safe Z. A check only reports the drift: Z is never changed. A plain number (1, 2…) is a slide slot whose top-left corner you captured on the Slide tab; the sketch from the Scrub tab is placed from that corner. S1, S2… use the camera scan instead.</p>
-      <div class="row" style="align-items:flex-end">
-        <label>Slide A<input type="text" id="r2A" value="1" size="4"></label>
-        <label>Slide B<input type="text" id="r2B" value="2" size="4"></label>
-      </div>
-      <div class="auto-actions" style="margin-top:10px"><button class="bigbtn primary" id="r2Run"><b>Run routine 2</b><small id="r2Sub">Checking…</small></button></div>
-      <div class="row" style="margin-top:14px;align-items:center">
-        <button class="danger sm" id="r2Stop" disabled>Stop after this move</button>
-        <span class="muted" style="font-size:12.5px">A stop during a scrub lifts the swab clear and keeps it in the jaws.</span>
-      </div>
-      <ol class="runsteps" id="r2Steps" hidden></ol>
-      <div class="kv" id="r2Check" style="margin-top:10px"></div>
-      <p class="note" id="r2Msg"></p>
     </div>
 
     <details class="card fold" id="f-teach" open>
@@ -410,6 +414,8 @@
           <button class="gold sm" id="sSave">Save settings</button>
         </div>
         <div class="kv" style="margin-top:14px"><span>Centre of gantry</span><span id="sCentre">–</span></div>
+      </div>
+    </details>
       </div>
     </details>
   </div>
@@ -908,13 +914,12 @@ function drawLive(){
 $('#lcWin').onchange=$('#lcFilt').onchange=drawLive;
 window.addEventListener('resize',()=>{if(S.tab==='cell')drawLive()});
 $('#watch').onclick=()=>{LC.paused=!LC.paused;$('#watch').textContent=LC.paused?'Resume':'Pause'};
-$('#tare').onclick=()=>run('tare',async()=>{const r=await post('/api/loadcell/tare');S.tared=r.tare_counts;$('#scaleNote').textContent='Tared at '+r.tare_counts+' counts. The cell should have been empty.';$('#saveScale').disabled=S.scaled==null;liveReset()});
+$('#tare').onclick=()=>run('tare',async()=>{const r=await post('/api/loadcell/tare');S.tared=r.tare_counts;$('#scaleNote').textContent='Tared at '+r.tare_counts+' counts and saved. The cell should have been empty.';liveReset()});
 $('#scale').onclick=()=>run('scale',async()=>{
   const g=+$('#kw').value;if(!(g>0))throw new Error('Enter the known weight in grams');
-  const r=await post('/api/loadcell/scale',{grams:g});S.scaled=r.scale_counts_per_g;
-  $('#scaleNote').textContent=`Scale ${fmt(S.scaled,4)} counts per gram (shown as newtons). Tare with the cell empty first, then place ${g} g on it before pressing Calibrate scale.`;
-  $('#saveScale').disabled=S.tared==null;liveReset()});
-$('#saveScale').onclick=()=>run('save tare + scale',async()=>{await post('/api/loadcell/save_scale',{tare_counts:S.tared,scale_counts_per_g:S.scaled});await loadCal();$('#scaleNote').textContent='Saved to the calibration file.'});
+  const r=await post('/api/loadcell/calibrate',{grams:g});S.scaled=r.scale_counts_per_g;
+  $('#scaleNote').textContent=`Saved: ${fmt(S.scaled,4)} counts per gram, tare ${r.tare_counts}. The cell now reads ${fmt(r.newtons_now,3)} N with the mass on it (should be about ${fmt(g*0.00980665,3)} N). Remove the mass: it should read about 0.000 N.`;
+  liveReset()});
 $('#capXY').onclick=()=>run('load cell XY captured',async()=>{await post('/api/loadcell/position',{capture_xy:true});await loadCal()});
 $('#goXY').onclick=()=>run('go to load cell XY',async()=>{const l=lcCal();if(!l.xy_set)throw new Error('Capture the load cell XY first');setPos(await post('/api/machine/move',{x:l.x,y:l.y,speed_mm_s:+$('#fxy').value}))});
 $('#capZ').onclick=()=>{if(S.pos)$('#zs').value=S.pos[2].toFixed(3)};
@@ -1248,7 +1253,7 @@ function paintZh(){
    +`<span>Floor with these heights</span><span>${fmt(z.floor_would_be,3)} mm</span>`
    +`<span>Absolute Z: slide / pickup / bin / safe</span><span>${['slide_mm','pickup_mm','bin_mm','safe_mm'].map(k=>z.abs[k]==null?'–':fmt(z.abs[k],3)).join(' / ')}</span>`
    +`<span>Last check</span><span>${lc?`drift ${lc.drift_mm>=0?'+':''}${fmt(lc.drift_mm,3)} mm (${fmt(lc.drift_mm,2)} to 2 dp) at ${fmt(lc.force_n,3)} N`:'–'}</span>`;
-  const off=S.busy||!S.pos||!hm||autoRunning();
+  const off=S.busy||!S.pos||!hm||autoRunning();$('#suRun').disabled=S.busy||!S.pos||autoRunning();
   $('#zhRun').disabled=off;$('#zhCheck').disabled=off||st.ref==null;$('#zhPark').disabled=off;$('#zhSave').disabled=S.busy;
 }
 function autoRunning(){return !!((S.auto&&S.auto.status&&S.auto.status.running)||(S.r1&&S.r1.status&&S.r1.status.running)||(r2Info&&r2Info.status&&r2Info.status.running))}
@@ -1266,6 +1271,19 @@ $('#zhCheck').onclick=()=>{if(!confirm('Probe the cell with the swab in the jaws
   run('Z check',async()=>{const r=await post('/api/zhome/check');
     $('#zhMsg').textContent=`Contact at ${fmt(r.contact_z,3)} mm, ${r.drift_mm>=0?'+':''}${fmt(r.drift_mm,3)} mm from the Z reference. Z unchanged.`;$('#zhMsg').className='note good';await loadZh();setPos(await api('/api/machine/position'))})};
 $('#sPos2').onclick=()=>run('Saved swab position 2',async()=>{S.auto=await post('/api/auto/pickup2');for(const id of ['sPX','sPY'])delete $('#'+id).dataset.dirty;paintAuto();fillSettingsPickup()});
+$('#suRun').onclick=()=>{
+  if(!confirm('Start up?\n\n1. Home X and Y\n2. Restore Z (the head must have been parked at safe Z when it was turned off)\n3. Home Z on the load cell (needs a swab in the jaws)\n4. Park at safe Z\n\nKeep a hand near E-STOP.'))return;
+  run('Start up',async()=>{
+    const m=$('#suMsg');m.className='note';
+    m.textContent='Homing X and Y…';setPos(await post('/api/machine/home',{axes:'XY'}));await poll();
+    m.textContent='Restoring Z…';
+    try{const r=await post('/api/machine/restore_z',{});setPos(r);S.floor=r.floor;S.lastZ=r.last_z}
+    catch(e){if(!/already set/i.test(String(e.message||e)))throw e}
+    m.textContent='Homing Z on the load cell…';
+    const r=await post('/api/zhome/run');zhData=r;
+    m.textContent=`Ready. Contact at ${fmt(r.force_n,3)} N, Z reference ${fmt(r.ref_z,3)}, parked at safe Z. Run routine 2.`;m.className='note good';
+    S.auto=await api('/api/auto');setPos(await api('/api/machine/position'));await poll();await loadR2();paintSetup()})};
+
 $('#zhPark').onclick=()=>run('Park at safe Z',async()=>{setPos(await post('/api/park'))});
 
 function paintR2(){
@@ -1304,6 +1322,31 @@ function r2Watch(){
 $('#r2Run').onclick=()=>run('Routine 2',async()=>{r2Cache='';await post('/api/routine2/run',{slides:[$('#r2A').value.trim(),$('#r2B').value.trim()],force:true});r2Info=await api('/api/routine2');paintR2();r2Watch()});
 $('#r2Stop').onclick=async()=>{try{await post('/api/routine2/stop');log('stop requested: it ends after the current move')}catch(e){say(String(e.message||e),'err')}};
 {const _paint5=paint;paint=function(){_paint5();if(S.mode==='auto'){paintR2();paintZh();fillSettingsPickup()}}}
+
+/* ---------- routine 2 setup rows ---------- */
+const SETUP=[
+  ['slide1','Slide 1 · top-left',async()=>post('/api/slide/corner',{id:1})],
+  ['slide2','Slide 2 · top-left',async()=>post('/api/slide/corner',{id:2})],
+  ['swab1','Swab 1 · pickup',async()=>post('/api/auto/teach',{target:'pickup'})],
+  ['swab2','Swab 2 · pickup',async()=>post('/api/auto/pickup2')],
+  ['bin','Bin',async()=>post('/api/auto/teach',{target:'bin'})],
+  ['cell','Load cell',async()=>post('/api/loadcell/position',{capture_xy:true})]];
+let setupCache='';
+function paintSetup(){
+  const z=zhData;if(!z||!z.positions)return;
+  const off=S.busy||!S.pos||!homedXY()||autoRunning();
+  const h=SETUP.map(([k,name])=>{const v=z.positions[k];
+    const val=v?`X ${fmt(v.x,2)} · Y ${fmt(v.y,2)}`:'<span class="muted">not set</span>';
+    return `<div class="trow"><div><b>${name}</b><div class="mono val">${val}</div></div><div class="row"><button class="gold sm" data-setup="${k}"${off?' disabled':''}>Set here</button></div></div>`}).join('');
+  if(h!==setupCache){$('#setupRows').innerHTML=h;setupCache=h}
+  const l=z.loadcell||{};
+  $('#lcNote').innerHTML=l.scaled?`Load cell: scale ${fmt(l.scale,3)} counts per gram${l.saved?', saved':', NOT saved'}.`:'<span class="err">Load cell not scaled yet.</span> Manual tab → Load cell → Zero and scale: Tare empty, press a known mass, Calibrate scale.';
+  $('#lcNote').className='note'+(l.scaled?'':' err');
+}
+$('#setupRows').addEventListener('click',e=>{const b=e.target.closest('[data-setup]');if(!b)return;
+  const row=SETUP.find(x=>x[0]===b.dataset.setup);
+  run('Saved '+row[1],async()=>{await row[2]();if(b.dataset.setup==='cell')await loadCal();S.auto=await api('/api/auto');await loadZh();setupCache='';paintAuto();paintSetup()})});
+{const _p6=paintZh;paintZh=function(){_p6();paintSetup()}}
 
 /* ---------- substrates: camera alignment ---------- */
 let alTimer=null,alClick=null,alSel=new Set();

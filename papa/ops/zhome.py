@@ -19,7 +19,7 @@ from papa.ops.zcal import calibrate_z
 
 DEFAULTS: dict[str, Any] = {
     "ref_z": 50.0,            # what Z reads at the cell contact right after Z home
-    "probe_start_mm": 3.0,    # the check starts this far above the contact
+    "probe_start_mm": 6.0,    # probes start this far above the cell contact (more than any swab length spread)
     "floor_margin_mm": 0.5,   # floor sits this far below the lowest height (0 = exact)
     "up_mm": 150.0,           # ceiling above ref_z
     "slide_mm": None,         # heights, mm above the cell contact (negative = below)
