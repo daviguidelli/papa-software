@@ -313,7 +313,13 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None, coarse_width: int 
         win = rgb[y0:y1, x0:x1]
         lines = dark_lines(cv2.cvtColor(win, cv2.COLOR_RGB2GRAY), k)
         measured = measure(lines, centre - [x0, y0], size, copper_score(win, p))
-        corners = measured[0] + [x0, y0] if measured is not None else rough
+        local = np.asarray(measured[0], np.float64) if measured is not None else rough - [x0, y0]
+        cop = copper_mask(win, p)
+        inside = np.zeros(cop.shape, np.uint8)
+        cv2.fillPoly(inside, [np.round(local).astype(np.int32)], 255)
+        if cv2.countNonZero(cv2.bitwise_and(cop, inside)) >= 0.3 * max(1, cv2.countNonZero(inside)):
+            local = trim_to_copper(local, cop)            # same clean-up as on the small copy
+        corners = local + [x0, y0]
         out.append(
             Array(
                 np.asarray(corners, dtype=np.float64),
@@ -324,21 +330,59 @@ def detect(rgb: np.ndarray, p: ElectrodeParams | None = None, coarse_width: int 
     return out
 
 
+def trim_to_copper(corners: np.ndarray, cop: np.ndarray, step: float = 0.04, max_cut: float = 0.3,
+                   min_band: float = 0.15) -> np.ndarray:
+    """Pull in any side of an outline whose edge band has (almost) no copper:
+    a clamp, clip or holder edge beside the array that looked like more lines.
+    corners TL, TR, BR, BL (any consistent order around the box)."""
+    c = np.asarray(corners, np.float64).copy()
+    for _ in range(int(max_cut / step) * 4):
+        changed = False
+        for i in range(4):                       # side i runs c[i] -> c[i+1]; inward is towards the opposite side
+            a, b = c[i], c[(i + 1) % 4]
+            d, e = c[(i + 3) % 4], c[(i + 2) % 4]  # the opposite side
+            band = np.array([a, b, b + (e - b) * step, a + (d - a) * step], np.float32)
+            m = np.zeros(cop.shape, np.uint8)
+            cv2.fillPoly(m, [np.round(band).astype(np.int32)], 255)
+            n = cv2.countNonZero(m)
+            if n and cv2.countNonZero(cv2.bitwise_and(cop, m)) < min_band * n:
+                full = np.linalg.norm(e - b)
+                if full <= 0:
+                    continue
+                c[i], c[(i + 1) % 4] = a + (d - a) * step, b + (e - b) * step
+                changed = True
+        if not changed:
+            break
+    w0 = np.linalg.norm(np.asarray(corners)[1] - np.asarray(corners)[0])
+    h0 = np.linalg.norm(np.asarray(corners)[3] - np.asarray(corners)[0])
+    if np.linalg.norm(c[1] - c[0]) < (1 - max_cut) * w0 or np.linalg.norm(c[3] - c[0]) < (1 - max_cut) * h0:
+        return np.asarray(corners, np.float64)   # cut too much: keep the measured outline
+    return c
+
+
 def _detect(rgb: np.ndarray, p: ElectrodeParams) -> list[Array]:
     """detect() on one picture, at its own resolution."""
     h, w = rgb.shape[:2]
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     k = max(3, int(round(p.close_frac * w)) | 1)
     lines = dark_lines(gray, k)
-    mask = cv2.bitwise_or(copper_mask(rgb, p), (lines > p.line_contrast).astype(np.uint8) * 255)
-
+    cop_only = copper_mask(rgb, p)
+    both = cv2.bitwise_or(cop_only, (lines > p.line_contrast).astype(np.uint8) * 255)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    blobs = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    blobs = cv2.morphologyEx(blobs, cv2.MORPH_OPEN, kernel)
 
-    contours, _ = cv2.findContours(blobs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # candidates from copper colour + dark lines, then from copper colour alone:
+    # the second finds an array whose blob merged with a holder or a clamp beside it
+    cands = []
+    for mask in (both, cop_only):
+        blobs = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        blobs = cv2.morphologyEx(blobs, cv2.MORPH_OPEN, kernel)
+        contours, _ = cv2.findContours(blobs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cands += [(c, mask) for c in contours]
     found: list[Array] = []
-    for c in contours:
+    for c, mask in cands:
+        if any(cv2.pointPolygonTest(a.corners.astype(np.float32), tuple(map(float, c.reshape(-1, 2).mean(0))), False) >= 0
+               for a in found):
+            continue                # already found from the other mask
         area = cv2.contourArea(c)
         if not p.min_area_frac * w * h <= area <= p.max_area_frac * w * h:
             continue
@@ -372,12 +416,15 @@ def _detect(rgb: np.ndarray, p: ElectrodeParams) -> list[Array]:
                 continue
             inside = np.zeros(gray.shape, np.uint8)
             cv2.fillPoly(inside, [np.round(exact).astype(np.int32)], 255)
-            cop = copper_mask(rgb, p)
-            if cv2.countNonZero(cv2.bitwise_and(cop, inside)) < 0.3 * max(1, cv2.countNonZero(inside)):
+            if cv2.countNonZero(cv2.bitwise_and(cop_only, inside)) < 0.3 * max(1, cv2.countNonZero(inside)):
                 continue            # evenly striped but not copper: a vent grille, a printed label
         if min(corners[:, 0].min(), corners[:, 1].min()) < 2 or corners[:, 0].max() > w - 3 or corners[:, 1].max() > h - 3:
             continue                # cut off by the picture's edge
         corners = np.asarray(measured[0], dtype=np.float64)
+        inside = np.zeros(gray.shape, np.uint8)
+        cv2.fillPoly(inside, [np.round(corners).astype(np.int32)], 255)
+        if cv2.countNonZero(cv2.bitwise_and(cop_only, inside)) >= 0.3 * max(1, cv2.countNonZero(inside)):
+            corners = trim_to_copper(corners, cop_only)       # a copper array: drop non-copper edge strips
         found.append(Array(corners, tuple(map(float, corners.mean(0))), float(copper)))
     found.sort(key=lambda a: -cv2.contourArea(a.corners.astype(np.float32)))
     return found
@@ -388,9 +435,7 @@ def detect_loose(rgb: np.ndarray, p: ElectrodeParams | None = None) -> list[Arra
     where the lines can look brighter than the gaps and the strict line test
     of detect() fails: the biggest roughly rectangular copper-coloured patch.
     Tries detect() first."""
-    found = detect(rgb, p)
-    if found:
-        return found
+    strict = detect(rgb, p)
     p = p or ElectrodeParams()
     loose = ElectrodeParams(**{**p.__dict__, "s_min": min(p.s_min, 30), "v_min": min(p.v_min, 60)})
     h, w = rgb.shape[:2]
@@ -411,4 +456,13 @@ def detect_loose(rgb: np.ndarray, p: ElectrodeParams | None = None) -> list[Arra
             continue
         corners = cv2.boxPoints(rect).astype(np.float64)
         out.append(Array(corners, tuple(map(float, corners.mean(0))), float(area / (rw * rh))))
-    return out[:1]
+    if not strict:
+        return out[:1]
+    if out:
+        big = out[0]
+        a_big = cv2.contourArea(big.corners.astype(np.float32))
+        a_str = cv2.contourArea(strict[0].corners.astype(np.float32))
+        inside = cv2.pointPolygonTest(big.corners.astype(np.float32), strict[0].center, False) >= 0
+        if inside and a_big > 2.0 * a_str:
+            return [big]        # the strict find is only part of a bigger copper patch: one array, seen close up
+    return strict

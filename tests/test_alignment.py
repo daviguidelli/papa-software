@@ -270,3 +270,37 @@ def test_array_in_a_white_holder_with_vertical_lines_is_found():
     c = found[0].corners
     assert c[:, 0].min() == pytest.approx(1031, abs=10) and c[:, 0].max() == pytest.approx(1088, abs=6)
     assert c[:, 1].min() == pytest.approx(1119, abs=6) and c[:, 1].max() == pytest.approx(1192, abs=6)
+
+
+def test_array_with_a_clamp_across_it_is_found_and_trimmed():
+    """Scan #34: camera turned 180°, the substrate held by metal clamps. The
+    blob of copper + dark lines merges array, holder and clamp; the copper-only
+    candidates find the array, and the clip's ridges beside it are trimmed off."""
+    import cv2
+
+    from papa.vision import electrodes as el
+
+    bgr = cv2.imread("tests/data/real_clamped_scan.png")
+    f = 2000 / bgr.shape[1]
+    small = cv2.resize(bgr, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC)
+    found = el.detect(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
+    assert len(found) == 1
+    c = found[0].corners / f
+    assert c[:, 0].min() == pytest.approx(566, abs=6) and c[:, 0].max() == pytest.approx(616, abs=6)
+    assert c[:, 1].min() == pytest.approx(841, abs=6) and c[:, 1].max() == pytest.approx(902, abs=6)
+
+
+def test_scan35_finds_the_array_not_the_blue_clamp():
+    """Scan #35 (screenshot): the old detector outlined a sliver on the blue
+    clamp's ridges; the array is in the white holder below it."""
+    import cv2
+
+    from papa.vision import electrodes as el
+
+    pic = cv2.imread("tests/data/real_scan35_screenshot.png")[365:972, 139:932]
+    f = 2000 / pic.shape[1]
+    found = el.detect(cv2.cvtColor(cv2.resize(pic, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC), cv2.COLOR_BGR2RGB))
+    assert len(found) == 1
+    c = found[0].corners / f + [139, 365]
+    assert c[:, 0].min() == pytest.approx(458, abs=5) and c[:, 0].max() == pytest.approx(495, abs=5)
+    assert c[:, 1].min() == pytest.approx(622, abs=5) and c[:, 1].max() == pytest.approx(652, abs=5)
