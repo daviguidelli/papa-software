@@ -1020,6 +1020,7 @@ def loadcell_live(since: int = 0, limit: int = 2000) -> dict:
 def tare() -> dict:
     hub.require_idle()
     hub.stop_sampler()
+    getattr(hub.loadcell, "settle", lambda: True)()
     counts = hub.loadcell.tare()
     _patch_calibration({"load_cell": {"tare_counts": int(counts)}})
     return {"tare_counts": counts, "saved": True}
@@ -3188,8 +3189,12 @@ def _loadcell_alive() -> None:
     start, not after the head has travelled to the cell."""
     try:
         hub.loadcell.read_counts()
+        settle = getattr(hub.loadcell, "settle", None)
+        steady = settle() if settle else True
     except Exception as exc:                               # noqa: BLE001
         raise HTTPException(409, f"The load cell is not answering ({exc}). Check its four wires and power, then try again. Nothing moved.") from exc
+    if not steady:
+        raise HTTPException(409, "The load cell is not settling (readings keep jumping). Check its wires and power, then try again. Nothing moved.")
 
 
 @app.post("/api/zhome/run")

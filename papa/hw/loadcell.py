@@ -67,6 +67,20 @@ class HX711LoadCell:
             value -= 1 << 24
         return value
 
+    def settle(self, min_s: float = 2.0, timeout_s: float = 6.0, window: int = 8) -> bool:
+        """Wait out the start-up swing. After a power dip or a long idle the chip
+        outputs wild values (hundreds of N) for a second or two. Read and discard
+        until the last `window` readings agree, then report whether they did."""
+        tol = max(300.0, abs(self.scale) * 5.0)          # about 0.05 N
+        t0, reads = time.monotonic(), []
+        while time.monotonic() - t0 < timeout_s:
+            reads.append(self.read_counts())
+            if time.monotonic() - t0 >= min_s and len(reads) >= window:
+                w = reads[-window:]
+                if max(w) - min(w) <= tol:
+                    return True
+        return False
+
     def grams(self, samples: int = 5) -> float:
         """Median of a few samples: one outlier should not stop a descent."""
         reads = [self.read_counts() for _ in range(max(1, samples))]
@@ -103,8 +117,9 @@ class LoadCellSampler:
     """
 
     def __init__(self, cell: Any, maxlen: int = 6000, idle_s: float = 1.5,
-                 min_interval_s: float = 0.05) -> None:
+                 min_interval_s: float = 0.05, warmup_s: float = 2.0) -> None:
         self.cell = cell
+        self.warmup_s = warmup_s
         self.idle_s = idle_s
         self.min_interval_s = min_interval_s
         self._buf: deque[tuple[int, float, int]] = deque(maxlen=maxlen)
@@ -137,6 +152,7 @@ class LoadCellSampler:
             t.join(timeout=2.0)
 
     def _run(self) -> None:
+        t_run = time.monotonic()
         while not self._stop.is_set() and time.monotonic() - self._touched < self.idle_s:
             t_start = time.monotonic()
             try:
@@ -146,6 +162,8 @@ class LoadCellSampler:
                 time.sleep(0.25)
                 continue
             self.error = ""
+            if time.monotonic() - t_run < self.warmup_s:      # start-up swing: do not show or use it
+                continue
             with self._lock:
                 self._seq += 1
                 self._buf.append((self._seq, t_start - self._t0, counts))
