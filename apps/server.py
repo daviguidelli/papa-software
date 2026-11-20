@@ -3718,6 +3718,157 @@ def align_routine(payload: dict) -> dict:
     return hub.routine.status.as_dict()
 
 
+# ---------- run every filled slot, in slot order; empty slots are skipped ----------
+
+def _run_plan(sc: dict) -> list[dict]:
+    """Slot 1, 2, ... in order: run the substrate found there, or skip an
+    empty slot (and say why a filled one cannot run)."""
+    sm = _slot_map(sc)
+    if not sm:
+        raise HTTPException(400, "Set the slot grid first (Slots → Set slot grid).")
+    subs = {s["id"]: s for s in ((_align_info().get("scan") or {}).get("substrates") or [])}
+    plan = []
+    for c in sm["cells"]:
+        sid = c["sid"]
+        if not sid:
+            plan.append({"slot": c["slot"], "sid": None, "run": False, "why": "empty"})
+            continue
+        s = subs.get(sid) or {}
+        probs = list(s.get("problems") or [])
+        plan.append({"slot": c["slot"], "sid": sid, "run": True, "problems": probs,
+                     "bridges_from": s.get("bridges_from"), "vs_master": s.get("vs_master")})
+    return plan
+
+
+@app.get("/api/align/run-plan")
+def align_run_plan() -> dict:
+    sc = _scan_or_400()
+    plan = _run_plan(sc)
+    return {"plan": plan, "runs": [p["slot"] for p in plan if p["run"]],
+            "skips": [p["slot"] for p in plan if not p["run"]], "batch": _BATCH.as_dict()}
+
+
+@app.get("/api/align/run-all/gcode")
+def align_run_all_gcode(z: float | None = None) -> Response:
+    """One G-code file for the whole mount: each filled slot's own G-code
+    (master path moved onto its array, or its own bridges) in slot order;
+    empty slots are skipped."""
+    sc = _scan_or_400()
+    plan = _run_plan(sc)
+    runs = [p for p in plan if p["run"]]
+    if not runs:
+        raise HTTPException(400, "No substrate in any slot.")
+    parts = [f"; PAPA: all filled slots, in slot order · scan {sc.get('scan_id', '-')} at {sc['time']}",
+             f"; runs slots {', '.join(str(p['slot']) for p in runs)}; empty (skipped): "
+             + (", ".join(str(p['slot']) for p in plan if not p['run']) or "none")]
+    for p in plan:
+        if not p["run"]:
+            parts.append(f"\n; ===== slot {p['slot']}: empty, skipped =====")
+            continue
+        parts.append(f"\n; ===== slot {p['slot']}: {p['sid']} =====")
+        parts.append(align_substrate_gcode(p["sid"], z).body.decode())
+    return Response("\n".join(parts) + "\n", media_type="text/plain",
+                    headers={"Content-Disposition": 'attachment; filename="all_slots.gcode"'})
+
+
+class _Batch:
+    def __init__(self) -> None:
+        self.running = False
+        self.mode = ""
+        self.queue: list[dict] = []
+        self.current: dict | None = None
+        self.done: list[dict] = []
+        self.error: str | None = None
+        self.stop = False
+
+    def as_dict(self) -> dict:
+        return {"running": self.running, "mode": self.mode, "current": self.current,
+                "queue": [{"slot": q["slot"], "sid": q["sid"]} for q in self.queue],
+                "done": self.done, "error": self.error, "stopping": self.stop and self.running}
+
+
+_BATCH = _Batch()
+
+
+@app.get("/api/align/run-all")
+def align_run_all_status() -> dict:
+    return _BATCH.as_dict()
+
+
+@app.post("/api/align/run-all")
+def align_run_all(payload: dict) -> dict:
+    """Run every filled slot one after the other, in slot order, on the
+    printer: mode "routine" (Routine 1: grip a swab, scrub, dispose) or
+    "scrub" (scrub with the swab already in the jaws). Empty slots are
+    skipped. Every slot is checked before anything moves; a failure stops
+    the rest."""
+    hub.require_idle()
+    sc = _scan_or_400()
+    mode = str(payload.get("mode") or "routine")
+    if mode not in ("routine", "scrub"):
+        raise HTTPException(400, "mode: routine or scrub")
+    force = bool(payload.get("force"))
+    plan = [p for p in _run_plan(sc) if p["run"]]
+    only = payload.get("slots")
+    if only:
+        plan = [p for p in plan if p["slot"] in {int(v) for v in only}]
+    if not plan:
+        raise HTTPException(400, "No substrate in any slot to run.")
+    jobs = []
+    for p in plan:                              # check them all before moving anything
+        try:
+            st = _substrate_scrub(p["sid"], force)
+        except HTTPException as exc:
+            raise HTTPException(exc.status_code, f"Slot {p['slot']} ({p['sid']}): {exc.detail}") from exc
+        jobs.append({"slot": p["slot"], "sid": p["sid"], "st": st})
+    b = _BATCH
+    b.__init__()
+    b.running, b.mode, b.queue = True, mode, jobs[:]
+
+    def run() -> None:
+        try:
+            while b.queue and not b.stop:
+                job = b.queue.pop(0)
+                b.current = {"slot": job["slot"], "sid": job["sid"]}
+                if mode == "routine":
+                    t = hub.routine.start(_auto_settings(), job["st"], hub.guard.ref, hub.guard.floor)
+                    t.join()
+                    err = hub.routine.status.error
+                else:
+                    t = hub.scrub.start(job["st"], hub.guard.ref, hub.guard.floor)
+                    t.join()
+                    err = getattr(hub.scrub.status, "error", None)
+                err = err or None
+                b.done.append({"slot": job["slot"], "sid": job["sid"], "error": err})
+                if err:
+                    b.error = f"Slot {job['slot']} ({job['sid']}): {err}"
+                    break
+            if b.stop and not b.error:
+                b.error = "Stopped" + (f" before slot {b.queue[0]['slot']}" if b.queue else "")
+        except Exception as exc:                 # noqa: BLE001
+            b.error = str(exc) or type(exc).__name__
+        finally:
+            b.current, b.running = None, False
+
+    hub.thread = threading.Thread(target=run, daemon=True, name="run-all-slots")
+    hub.thread.start()
+    return b.as_dict()
+
+
+@app.post("/api/align/run-all/stop")
+def align_run_all_stop(payload: dict | None = None) -> dict:
+    """Stop the run: now (stops the slot being worked on, like Stop) or, with
+    {after: true}, once the current slot is finished."""
+    _BATCH.stop = True
+    if not (payload or {}).get("after"):
+        for r in (hub.routine, hub.scrub):
+            try:
+                r.stop()
+            except Exception:                    # noqa: BLE001
+                pass
+    return _BATCH.as_dict()
+
+
 # ---------- Z home on the load cell, heights, park, routine 2 ----------
 
 def _zhome_settings() -> dict:

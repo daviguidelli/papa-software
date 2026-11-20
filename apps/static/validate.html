@@ -505,6 +505,14 @@
         </div>
         <button class="gold" id="alSlotGo" style="width:100%;margin-top:8px">G-code: template on chosen slots ↓</button>
         <p class="note" id="alSlotGoMsg" style="font-size:12.5px;margin:6px 0 0"></p>
+        <hr style="border:0;border-top:1px solid var(--line);margin:12px 0">
+        <p class="label" style="margin:0 0 6px">Run the whole mount</p>
+        <p class="mono" id="alRunPlan" style="font-size:12px;margin:0 0 8px"></p>
+        <button id="alRunG" style="width:100%">G-code: all filled slots ↓</button>
+        <button class="gold" id="alRunR" style="width:100%;margin-top:6px">Run all filled slots · Routine 1</button>
+        <button id="alRunS" style="width:100%;margin-top:6px">Run all filled slots · scrub only</button>
+        <div class="row" style="gap:6px;margin-top:6px"><button id="alRunStopAfter" style="flex:1">Stop after this slot</button><button class="bad" id="alRunStop" style="flex:1">Stop now</button></div>
+        <p class="note" id="alRunMsg" style="font-size:12.5px;margin:6px 0 0"></p>
       </aside>
       </div>
       <div class="row" id="alSlotRow" style="align-items:center;margin-top:8px;gap:8px" hidden>
@@ -1783,6 +1791,7 @@ function alSlotPaint(){
   const cs=sm.col_step_mm,rs=sm.row_step_mm;
   $('#alSlotStep').innerHTML=cs||rs?`one column: X ${cs?fmt(cs[0],2):'–'}, Y ${cs?fmt(cs[1],2):'–'} mm<br>one row: X ${rs?fmt(rs[0],2):'–'}, Y ${rs?fmt(rs[1],2):'–'} mm`:'Teach the camera points to get the X/Y shift between slots.';
   $('#alSlotGo').disabled=!src||!alSlotPick.size||!(cs||rs);
+  alRunPaint(null);alRunRefresh();
   $('#alSlotGoMsg').textContent=src?`${src} (slot ${srcCell.slot}) is the template; it runs on ${alSlotPick.size} slot${alSlotPick.size===1?'':'s'}: ${[...alSlotPick].sort((x,y)=>x-y).join(', ')||'–'}.`:'';
 }
 $('#alSlotGrid').onclick=e=>{const b=e.target.closest('[data-slot]');if(!b)return;const k=+b.dataset.slot;
@@ -1826,6 +1835,39 @@ $('#alMasterClear').onclick=()=>{if(confirm('Clear the whole master (slot, array
 $('#alSpSave').onclick=()=>{const v=q=>$(q).value===''?null:+$(q).value;const cx=v('#alSpCX'),cy=v('#alSpCY'),rx=v('#alSpRX'),ry=v('#alSpRY');
   alMasterPost({spacing:{col:cx===null&&cy===null?null:[cx||0,cy||0],row:rx===null&&ry===null?null:[rx||0,ry||0]}},'Mount spacing saved')};
 $('#alSpCam').onclick=()=>alMasterPost({spacing:null},'Using the camera grid for the spacing');
+
+// ---- run every filled slot ----
+let alRunPoll=null;
+function alRunPaint(b){
+  const a=S.al,sm=a&&a.slot_map;if(!sm)return;
+  const runs=sm.cells.filter(c=>c.sid).map(c=>c.slot),skips=sm.cells.filter(c=>!c.sid).map(c=>c.slot);
+  $('#alRunPlan').innerHTML=`Order: slot 1 → ${sm.rows*sm.cols}<br>runs: ${runs.join(', ')||'–'}<br>skips (empty): ${skips.join(', ')||'none'}`;
+  const busy=b&&b.running;
+  ['#alRunR','#alRunS'].forEach(q=>$(q).disabled=busy||!runs.length||!homedXY());
+  $('#alRunG').disabled=!runs.length;
+  $('#alRunStop').disabled=!busy;$('#alRunStopAfter').disabled=!busy||b.stopping;
+  if(b&&(b.running||b.done.length||b.error)){
+    const done=b.done.map(d=>`${d.slot}${d.error?'✗':'✓'}`).join(' ');
+    $('#alRunMsg').innerHTML=(b.running?`<b>Running ${b.mode==='routine'?'Routine 1':'scrub'}</b> · slot ${b.current?b.current.slot+' ('+b.current.sid+')':'…'}`
+      +(b.queue.length?` · next: ${b.queue.map(q=>q.slot).join(', ')}`:'')+(b.stopping?' · stopping after this slot':''):'<b>Run finished</b>')
+      +(done?`<br>done: ${done}`:'')+(b.error?`<br><span class="bad">${esc(b.error)}</span>`:'');
+  }else $('#alRunMsg').textContent=homedXY()?'':'Home XY first to run on the printer (the G-code works without).';
+}
+let alRunT=0;
+async function alRunRefresh(){if(!alRunPoll&&Date.now()-alRunT<2000)return;alRunT=Date.now();try{const b=await api('/api/align/run-all');alRunPaint(b);
+  if(b.running&&!alRunPoll)alRunPoll=setInterval(alRunRefresh,1500);
+  if(!b.running&&alRunPoll){clearInterval(alRunPoll);alRunPoll=null}}catch(e){}}
+async function alRunStart(mode){
+  const sm=S.al.slot_map,runs=sm.cells.filter(c=>c.sid).map(c=>c.slot),skips=sm.cells.filter(c=>!c.sid).map(c=>c.slot);
+  if(!confirm(`${mode==='routine'?'Routine 1 (grip a swab, scrub, dispose)':'Scrub (swab already in the jaws)'} on slots ${runs.join(', ')}, one after the other.\nEmpty slots skipped: ${skips.join(', ')||'none'}.\n\nThe printer will move. Start?`))return;
+  try{const r=await fetch('/api/align/run-all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+    const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);say('Running all filled slots','ok');alRunPaint(j);alRunRefresh()}
+  catch(e){say('Not started: '+(e.message||e),'err')}}
+$('#alRunR').onclick=()=>alRunStart('routine');
+$('#alRunS').onclick=()=>alRunStart('scrub');
+$('#alRunStop').onclick=async()=>{await fetch('/api/align/run-all/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});alRunRefresh()};
+$('#alRunStopAfter').onclick=async()=>{await fetch('/api/align/run-all/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({after:true})});alRunRefresh()};
+$('#alRunG').onclick=()=>{const q=alZq();if(q===null)return;run('G-code: all filled slots',()=>alDownload('/api/align/run-all/gcode'+q,'all_slots.gcode'))};
 </script>
 </body>
 </html>

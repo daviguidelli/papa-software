@@ -605,3 +605,36 @@ def test_master_path_moved_to_every_slot(aligned):
     assert a.get("/api/master").json()["spacing"]["source"] == "camera grid"
     a.post("/api/master", json={"clear": "all"})
     a.post("/api/align/slots", json={"clear": True})
+
+
+def test_run_every_filled_slot_skipping_empty_ones(aligned):
+    """The whole mount: slots in order, empty slots skipped, one G-code file
+    and a printer run that scrubs every filled slot one after the other."""
+    import re
+
+    srv, a = aligned.server, aligned
+    a.post("/api/align/scan", json={"save": False})
+    j = _grid_around(a)                                   # 2 x 3 grid: 6 slots, 3 arrays in it
+    subs = j["scan"]["substrates"]
+    a.post("/api/align/pattern", json={"targets": [s["id"] for s in subs], "sketch": SKETCH})
+    plan = a.get("/api/align/run-plan").json()
+    filled = sorted(s["slot"] for s in subs if s["slot"])
+    assert plan["runs"] == sorted(set(filled)) and set(plan["skips"]) == set(range(1, 7)) - set(filled)
+    g = a.get("/api/align/run-all/gcode", params={"z": 4.5})
+    assert g.status_code == 200, g.text
+    order = [int(m) for m in re.findall(r"; ===== slot (\d+)", g.text)]
+    assert order == list(range(1, 7))                     # every slot in order, empty ones marked skipped
+    for k in plan["skips"]:
+        assert f"slot {k}: empty, skipped" in g.text
+    # run them on the (simulated) printer
+    mock = srv.hub.printer._inner
+    mock.speed_factor, mock.homed, mock.z = 0, "xyz", 40.0
+    a.post("/api/guard/floor", json={"z": 39.0})
+    a.post("/api/scrub/start-here", json={})
+    r = a.post("/api/align/run-all", json={"mode": "scrub"})
+    assert r.status_code == 200, r.text
+    srv.hub.thread.join(timeout=60)
+    b = a.get("/api/align/run-all").json()
+    assert not b["running"] and b["error"] is None, b
+    assert [d["slot"] for d in b["done"]] == plan["runs"] and all(d["error"] is None for d in b["done"])
+    a.post("/api/align/slots", json={"clear": True})
