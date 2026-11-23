@@ -4151,6 +4151,121 @@ def routine2_run(payload: dict | None = None) -> dict:
     return hub.routine2.status.as_dict()
 
 
+# ---------- Routine 3 x 3: Routine 2 over the whole mount ----------
+
+# Mount-to-mount spacing from the caliper photos (IMG_5118-5122): reading minus
+# the 0.205 in mount-edge-to-pocket offset. Columns go +X, rows go down (-Y).
+GRID_COL_MM = (1.995 * 25.4, 0.0)        # 50.673 mm
+GRID_ROW_MM = (0.0, -2.011 * 25.4)       # -51.079 mm
+GRID_ANCHOR_SLOT = 2                     # Routine 2's slide A (Slide 1 corner) is this grid slot
+
+
+def _grid_spacing() -> tuple[list[float], list[float], str]:
+    """Entered mount spacing (Master path panel) if set, else the caliper values."""
+    sp = _master().get("spacing") or {}
+    col = sp.get("col") or list(GRID_COL_MM)
+    row = sp.get("row") or list(GRID_ROW_MM)
+    src = "entered" if (sp.get("col") or sp.get("row")) else "caliper photos (1.995 in x 2.011 in)"
+    return [float(v) for v in col], [float(v) for v in row], src
+
+
+def _grid_plan(payload: dict | None = None) -> dict:
+    """Each slot of the 3 x 3 mount: its top-left corner (Slide 1's corner, taken
+    as the anchor slot, moved by the mount spacing) and whether it runs: a slot
+    runs if the last scan found a substrate in it; empty slots are skipped."""
+    body = payload or {}
+    anchor = int(body.get("anchor_slot") or GRID_ANCHOR_SLOT)
+    rows = cols = 3
+    col, row, src = _grid_spacing()
+    s1 = next((x for x in hub.cal.slots if x.id == 1), None)
+    corner = (s1.x, s1.y) if s1 is not None and s1.calibrated else None
+    ar, ac = divmod(anchor - 1, cols)
+    filled, why_unknown = None, None
+    if body.get("slots") is not None:
+        filled = {int(v) for v in body["slots"]}
+    else:
+        sc = hub.align_scan
+        sm = _slot_map(sc) if sc else None
+        if sm is None:
+            why_unknown = "Scan the substrates with the slot grid set, so empty slots can be skipped."
+        else:
+            filled = {c["slot"] for c in sm["cells"] if c["sid"]}
+    cells = []
+    for k in range(1, rows * cols + 1):
+        r, c = divmod(k - 1, cols)
+        dx = (c - ac) * col[0] + (r - ar) * row[0]
+        dy = (c - ac) * col[1] + (r - ar) * row[1]
+        xy = None if corner is None else [round(corner[0] + dx, 3), round(corner[1] + dy, 3)]
+        run = filled is not None and k in filled
+        cells.append({"slot": k, "corner": xy, "offset_mm": [round(dx, 3), round(dy, 3)], "run": run,
+                      "why": None if run else ("empty" if filled is not None else "unknown")})
+    problems = []
+    if corner is None:
+        problems.append("Capture Slide 1's top-left corner (it is grid slot %d)." % anchor)
+    if why_unknown:
+        problems.append(why_unknown)
+    runs = [c["slot"] for c in cells if c["run"]]
+    if filled is not None and not runs:
+        problems.append("No substrate in any slot.")
+    return {"anchor_slot": anchor, "spacing": {"col": col, "row": row, "source": src},
+            "cells": cells, "runs": runs, "skips": [c["slot"] for c in cells if not c["run"]],
+            "problems": problems}
+
+
+@app.get("/api/routine3x3")
+def routine3x3_info() -> dict:
+    plan = _grid_plan()
+    bad = plan["problems"] + _routine2_extra()
+    if _zhome_settings().get("slide_mm") is None and "Set the slide height." not in bad:
+        bad.append("Set the slide height.")
+    return {**plan, "problems": bad, "ready": not bad, "status": hub.routine2.status.as_dict()}
+
+
+@app.post("/api/routine3x3/run")
+def routine3x3_run(payload: dict | None = None) -> dict:
+    """Routine 2 on every filled slot of the 3 x 3 mount, slot 1 to 9: check Z,
+    scrub, dispose, grip the next swab; park at the end. Each slot scrubs the
+    Scrub tab pattern from its corner at the slide height, like Routine 2's
+    slides. Empty slots are skipped."""
+    hub.require_idle()
+    hub.stop_sampler()
+    _loadcell_alive()
+    body = payload or {}
+    plan = _grid_plan(body)
+    if plan["problems"]:
+        raise HTTPException(400, " ".join(plan["problems"]))
+    st = _zhome_settings()
+    z = zhomemod.absolute(st, "slide_mm")
+    if z is None:
+        raise HTTPException(400, "Set the slide height first")
+    slides = []
+    for c in plan["cells"]:
+        if not c["run"]:
+            continue
+        s = dict(_scrub_settings())
+        s["start"] = {"x": c["corner"][0], "y": c["corner"][1], "z": z, "ref": hub.guard.ref}
+        s["rotation_deg"] = 0.0
+        slides.append((f"slot {c['slot']}", s))
+    safe = float(zhomemod.absolute(st, "safe_mm") or _auto_settings().get("safe_z") or 0)
+    lc, zc, sp = hub.cal.load_cell, hub.machine.zcal, hub.machine.speeds
+
+    def check_fn(stop):
+        r = zhomemod.check(hub.printer, hub.loadcell, lc, zc, sp, _zhome_settings(), safe, stop)
+        _patch_calibration({"zhome": {"last_check": r}})
+        return r
+
+    def park_fn():
+        zhomemod.park(hub.printer, safe)
+
+    try:
+        hub.thread = hub.routine2.start_many(_auto_settings(), slides, hub.guard.ref, hub.guard.floor,
+                                             check_fn, park_fn, int(body.get("swab_index", 0)),
+                                             _routine2_extra(), action="routine3x3")
+    except (routinemod.RoutineError, scrubmod.ScrubError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**hub.routine2.status.as_dict(), "runs": plan["runs"], "skips": plan["skips"]}
+
+
 @app.post("/api/routine2/stop")
 def routine2_stop() -> dict:
     hub.routine2.stop()

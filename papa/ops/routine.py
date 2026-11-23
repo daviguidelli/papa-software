@@ -112,15 +112,27 @@ class Routine2Runner(RoutineRunner):
     def start2(self, auto_st: dict, slides: list[dict], ref: str | None, floor: float | None,
                check_fn: Callable[[Callable[[], None]], dict], park_fn: Callable[[], None],
                swab_index: int = 0, extra_problems: list[str] | None = None) -> threading.Thread:
+        if len(slides) != 2:
+            raise RoutineError("Routine 2 scrubs exactly two slides.")
+        return self.start_many(auto_st, [("slide A", slides[0]), ("slide B", slides[1])], ref, floor,
+                               check_fn, park_fn, swab_index, extra_problems, action="routine2")
+
+    def start_many(self, auto_st: dict, slides: list[tuple[str, dict]], ref: str | None, floor: float | None,
+                   check_fn: Callable[[Callable[[], None]], dict], park_fn: Callable[[], None],
+                   swab_index: int = 0, extra_problems: list[str] | None = None,
+                   action: str = "routine3x3") -> threading.Thread:
+        """Routine 2's sequence for any number of slides: for each slide, check
+        Z on the load cell, scrub it, dispose of the swab and grip the next one
+        (swab n = the taught pickup + n x the next-swab step); park at the end."""
         bad = list(extra_problems or [])
         bad += automod.problems(auto_st, self.machine, "grip", ref)
         for m in automod.problems(auto_st, self.machine, "dispose", ref):
             if m not in bad:
                 bad.append(m)
-        for n, s in enumerate(slides, 1):
-            bad += [f"Slide {n}: {m}" for m in scrubmod.problems(s, self.machine, ref, floor)]
-        if len(slides) != 2:
-            bad.append("Routine 2 scrubs exactly two slides.")
+        for label, s in slides:
+            bad += [f"{label[:1].upper()}{label[1:]}: {m}" for m in scrubmod.problems(s, self.machine, ref, floor)]
+        if not slides:
+            bad.append("No slide to scrub.")
         if bad:
             raise RoutineError(" ".join(bad))
         safe = float(auto_st["safe_z"])
@@ -149,20 +161,22 @@ class Routine2Runner(RoutineRunner):
         def do_check() -> None:
             self.last_check = check_fn(self._check)
 
+        for n in range(len(slides)):              # every swab position must be reachable before anything moves
+            grip_at(swab_index + n)
         steps: list[tuple[str, Callable[[], None]]] = []
-        steps += [("Check Z on the load cell (Z unchanged)", do_check)]
-        steps += [scrub_step("Scrub slide A", slides[0])]
-        steps += self.auto.dispose_steps(auto_st)
-        steps += [(f"[position 1] {n}", f) for n, f in grip_at(swab_index)]
-        steps += [("Check Z on the load cell (Z unchanged)", do_check)]
-        steps += [scrub_step("Scrub slide B", slides[1])]
-        steps += self.auto.dispose_steps(auto_st)
-        steps += [(f"[position 2] {n}", f) for n, f in grip_at(swab_index + 1)]
+        r2 = action == "routine2"                 # Routine 2 keeps its original step names
+        for n, (label, raw) in enumerate(slides):
+            steps += [("Check Z on the load cell (Z unchanged)" if r2 else f"[{label}] Check Z on the load cell (Z unchanged)",
+                       do_check)]
+            steps += [scrub_step(f"Scrub {label}", raw)]
+            steps += [(m if r2 else f"[{label}] {m}", f) for m, f in self.auto.dispose_steps(auto_st)]
+            tag = f"[position {n + 1}]" if r2 else f"[swab {swab_index + n + 1}]"
+            steps += [(f"{tag} {m}", f) for m, f in grip_at(swab_index + n)]
         steps += [("Park at safe Z", park_fn)]
         self._abort.clear()
         self.auto._abort.clear()
         self.last_check = None
-        self.status = AutoStatus(running=True, action="routine2", steps=[Step(n) for n, _ in steps])
+        self.status = AutoStatus(running=True, action=action, steps=[Step(n) for n, _ in steps])
         self.thread = threading.Thread(target=self._run, args=(steps,), daemon=True)
         self.thread.start()
         return self.thread

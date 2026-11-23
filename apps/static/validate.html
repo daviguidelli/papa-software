@@ -353,6 +353,13 @@
       <ol class="runsteps" id="r2Steps" hidden></ol>
       <div class="kv" id="r2Check" style="margin-top:10px"></div>
       <p class="note" id="r2Msg"></p>
+
+      <h2>Routine 2 on the <em>3 × 3 mount</em></h2>
+      <p class="note" style="margin-top:0">Slide 1's top-left corner is taken as grid <b>slot <span id="g3Anchor">2</span></b>; every other slot's corner is that corner moved by the mount spacing. Only slots the last substrate scan found filled run, slot 1 to 9; empty slots are skipped. Each slot: check Z, scrub (the Scrub tab pattern at the slide height), dispose, grip the next swab (swab n = pickup + n × next-swab step); park at the end.</p>
+      <p class="mono" id="g3Spacing" style="font-size:12.5px"></p>
+      <div id="g3Grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,150px));gap:6px;margin:8px 0"></div>
+      <div class="auto-actions" style="margin-top:10px"><button class="bigbtn primary" id="g3Run"><b>Run routine 2 on the mount</b><small id="g3Sub">Checking…</small></button></div>
+      <p class="note" id="g3Msg"></p>
     </div>
 
     <details class="card fold" id="f-adv">
@@ -1357,9 +1364,10 @@ function paintR2(){
   $('#r2Steps').hidden=!steps.length;
   if(sh!==r2Cache){$('#r2Steps').innerHTML=sh;r2Cache=sh}
   const m=$('#r2Msg'),t=a.status||{};
-  if(run){m.textContent='Running routine 2…';m.className='note'}
+  const g3=t.action==='routine3x3';
+  if(run){m.textContent=g3?'Running routine 2 on the 3 × 3 mount…':'Running routine 2…';m.className='note'}
   else if(t.error){m.textContent=t.error;m.className='note err'}
-  else if(t.finished){m.textContent='Routine 2 finished. Parked at safe Z with a fresh swab at position 2.';m.className='note good'}
+  else if(t.finished){m.textContent=g3?'Mount finished. Parked at safe Z with a fresh swab in the jaws.':'Routine 2 finished. Parked at safe Z with a fresh swab at position 2.';m.className='note good'}
   else{m.textContent='';m.className='note'}
   const lc=a.last_check;
   $('#r2Check').innerHTML=lc?`<span>Latest Z check</span><span>drift ${lc.drift_mm>=0?'+':''}${fmt(lc.drift_mm,3)} mm at ${fmt(lc.force_n,3)} N</span>`:'';
@@ -1868,6 +1876,29 @@ $('#alRunS').onclick=()=>alRunStart('scrub');
 $('#alRunStop').onclick=async()=>{await fetch('/api/align/run-all/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});alRunRefresh()};
 $('#alRunStopAfter').onclick=async()=>{await fetch('/api/align/run-all/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({after:true})});alRunRefresh()};
 $('#alRunG').onclick=()=>{const q=alZq();if(q===null)return;run('G-code: all filled slots',()=>alDownload('/api/align/run-all/gcode'+q,'all_slots.gcode'))};
+
+// ---- Routine 2 on the 3 x 3 mount ----
+let g3Info=null,g3T=0;
+async function g3Load(force){if(!force&&Date.now()-g3T<3000)return;g3T=Date.now();
+  try{g3Info=await api('/api/routine3x3')}catch(e){g3Info=null}g3Paint()}
+function g3Paint(){const a=g3Info;if(!a)return;
+  $('#g3Anchor').textContent=a.anchor_slot;
+  const c=a.spacing.col,r=a.spacing.row;
+  $('#g3Spacing').textContent=`Spacing (${a.spacing.source}): next column X ${fmt(c[0],3)} Y ${fmt(c[1],3)} mm · next row X ${fmt(r[0],3)} Y ${fmt(r[1],3)} mm`;
+  let n=0;
+  $('#g3Grid').innerHTML=a.cells.map(x=>{const sw=x.run?++n:null;
+    return `<div style="border:1px solid ${x.slot===a.anchor_slot?'var(--gold,#d4af37)':'var(--line)'};padding:6px;font-size:12px;opacity:${x.run?1:.45}">
+      <b style="font-size:16px">${x.slot}</b>${x.slot===a.anchor_slot?' <span class="muted">= Slide 1</span>':''}<br>
+      <span class="${x.run?'good':'muted'}">${x.run?'runs · then grips swab '+sw:(x.why==='empty'?'empty · skipped':'not scanned')}</span><br>
+      <span class="mono muted">${x.corner?`X ${fmt(x.corner[0],2)} Y ${fmt(x.corner[1],2)}`:`Δ ${fmt(x.offset_mm[0],1)}, ${fmt(x.offset_mm[1],1)}`}</span></div>`}).join('');
+  const run=!!(a.status&&a.status.running)||!!(r2Info&&r2Info.status&&r2Info.status.running);
+  $('#g3Run').disabled=run||S.busy||!homedXY()||!a.ready;
+  $('#g3Sub').textContent=!homedXY()?'Home X and Y first':(a.problems[0]||`Slots ${a.runs.join(', ')} · ${a.runs.length} swab${a.runs.length===1?'':'s'} needed`);
+}
+$('#g3Run').onclick=()=>{const a=g3Info;if(!a)return;
+  if(!confirm(`Routine 2 on slots ${a.runs.join(', ')} (skipping ${a.skips.join(', ')||'none'}).\nNeeds ${a.runs.length} swabs: one in the jaws now, then swab positions 1–${a.runs.length}.\n\nThe printer will move. Keep a hand near E-STOP. Start?`))return;
+  run('Routine 2 on the mount',async()=>{r2Cache='';await post('/api/routine3x3/run',{});r2Info=await api('/api/routine2');paintR2();r2Watch();g3Load(true)})};
+setInterval(()=>{if(!document.hidden&&$('#g3Grid').offsetParent)g3Load()},4000);
 </script>
 </body>
 </html>

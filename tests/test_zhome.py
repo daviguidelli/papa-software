@@ -183,3 +183,47 @@ def test_zhome_after_restart_starts_a_fixed_height_above_the_contact(homed_cell)
     r = c.post("/api/zhome/run")
     assert r.status_code == 200, r.text
     assert abs(r.json()["contact_z_before"] - (50.0 - 0.0)) < 0.5, "the second Z home finds the same contact"
+
+
+def test_routine2_on_the_3x3_mount_slide1_is_slot2_empty_slots_skipped(homed_cell):
+    """Slide 1's corner is grid slot 2; each other slot's corner is that corner
+    moved by the mount spacing (1.995 in per column in +X, 2.011 in per row in
+    -Y). Only the slots given as filled run, in slot order, each with a Z
+    check, a scrub at the slide height, dispose and the next swab."""
+    c = homed_cell
+    c.post("/api/zhome/run")
+    c.server.hub.loadcell.contact_z = 50.187
+    c.post("/api/machine/move", json={"x": 150, "y": 200, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    c.post("/api/scrub/sketch", json={"substrate": {"w": 10, "h": 10}, "bridges": []})
+    c.post("/api/machine/move", json={"x": 40, "y": 77, "speed_mm_s": 100})
+    c.post("/api/auto/pickup2")
+    col, row = 1.995 * 25.4, 2.011 * 25.4
+    info = c.get("/api/routine3x3").json()
+    s1, s2, s5 = (next(x for x in info["cells"] if x["slot"] == k) for k in (1, 2, 5))
+    assert s2["corner"] == pytest.approx([150, 200])
+    assert s1["corner"] == pytest.approx([150 - col, 200], abs=1e-3)
+    assert s5["corner"] == pytest.approx([150, 200 - row], abs=1e-3)
+    r = c.post("/api/routine3x3/run", json={"slots": [2, 3]})       # the scan found slots 2 and 3 filled
+    assert r.status_code == 200, r.text
+    assert r.json()["runs"] == [2, 3] and 1 in r.json()["skips"]
+    s = wait2(c)
+    assert s["finished"] and not s["error"], s
+    names = [x["name"] for x in s["steps"]]
+    assert [n for n in names if n.startswith("Scrub")] == ["Scrub slot 2", "Scrub slot 3"]
+    assert sum(n.endswith("Check Z on the load cell (Z unchanged)") for n in names) == 2
+    assert names[-1] == "Park at safe Z"
+    xs = {ln.split("X")[1].split()[0] for ln in moves(c) if " X" in ln}
+    assert "150.0000" in xs and f"{150 + col:.4f}" in xs           # slot 2 and one column over
+    assert any("Z48.0000" in ln for ln in moves(c))
+
+
+def test_routine3x3_needs_a_scan_or_slots(homed_cell):
+    c = homed_cell
+    c.post("/api/zhome/run")
+    c.post("/api/machine/move", json={"x": 150, "y": 200, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    c.server.hub.align_scan = None
+    j = c.get("/api/routine3x3").json()
+    assert not j["ready"] and any("Scan the substrates" in p for p in j["problems"])
+    assert c.post("/api/routine3x3/run", json={}).status_code == 400
