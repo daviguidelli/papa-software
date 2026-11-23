@@ -422,3 +422,30 @@ def test_routine3x3_scrubs_the_area_on_the_chosen_corner_side(homed_cell, ref, x
     assert all(xs[0] - 0.01 <= x <= xs[1] + 0.01 and ys[0] - 0.01 <= y <= ys[1] + 0.01 for x, y in scrub), scrub[:4]
     c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
     c.post("/api/routine3x3/corner-ref", json={"corner": "low-x low-y"})
+
+
+def test_scrub_one_slot_from_its_corner_with_the_scrub_tab_pattern(homed_cell):
+    """Scrub one slot with the swab in the jaws: the Scrub tab's pattern from
+    that slot's point (lowest X, lowest Y corner), at the slide height."""
+    c = homed_cell
+    c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
+    c.post("/api/routine3x3/corner-ref", json={"corner": "low-x low-y"})
+    c.post("/api/zhome/run")
+    c.post("/api/scrub/sketch", json={"substrate": {"w": 10, "h": 8}, "bridges": []})
+    c.post("/api/routine3x3/slot-corner", json={"slot": 6, "x": 205.952, "y": 141.412})
+    before = len(moves(c))
+    r = c.post("/api/routine3x3/scrub", json={"slot": 6})
+    assert r.status_code == 200, r.text
+    assert r.json()["start"]["x"] == pytest.approx(205.952) and r.json()["start"]["y"] == pytest.approx(149.412)
+    c.server.hub.thread.join(timeout=60)
+    s = c.get("/api/scrub/status").json()
+    assert not s["running"] and not s.get("error"), s
+    pts, down = [], False
+    for ln in moves(c)[before:]:
+        if " Z" in ln:
+            down = abs(float(ln.split(" Z")[1].split()[0]) - 48.0) < 0.6
+        if down and " X" in ln and " Y" in ln:
+            pts.append((float(ln.split(" X")[1].split()[0]), float(ln.split(" Y")[1].split()[0])))
+    assert pts and all(205.94 <= x <= 215.96 and 141.40 <= y <= 149.42 for x, y in pts)
+    assert c.post("/api/routine3x3/scrub", json={"slot": 0}).status_code == 400
+    c.post("/api/routine3x3/slot-corner", json={"clear_all": True})

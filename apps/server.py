@@ -4290,6 +4290,43 @@ def _grid_plan(payload: dict | None = None) -> dict:
             "problems": problems}
 
 
+def _slot_scrub(k: int) -> dict:
+    """The Scrub tab's pattern and settings, started from slot k's point (the
+    chosen corner of its array), at the slide height (else the Scrub tab's Z)."""
+    cell = next((c for c in _grid_plan({"slots": [k]})["cells"] if c["slot"] == k), None)
+    if cell is None or cell["corner"] is None:
+        raise HTTPException(400, f"Slot {k} has no corner yet: set it (Save tip here / Type X/Y) or save "
+                                 "Routine 2's first slide.")
+    s = dict(_scrub_settings())
+    area = scrubmod.merged(s)["area"]
+    tx, ty = _pattern_top_left(cell["corner"][0], cell["corner"][1], float(area["h"]), float(area["w"]))
+    z = zhomemod.absolute(_zhome_settings(), "slide_mm")
+    if z is None:
+        z = (s.get("start") or {}).get("z")
+    if z is None:
+        raise HTTPException(400, "Set the slide height (Routine 2 setup) or the Scrub tab's start first.")
+    s["start"] = {"x": round(tx, 4), "y": round(ty, 4), "z": float(z), "ref": hub.guard.ref}
+    s["rotation_deg"] = 0.0
+    return s
+
+
+@app.post("/api/routine3x3/scrub")
+def routine3x3_scrub(payload: dict) -> dict:
+    """Scrub one slot with the swab already in the jaws: the Scrub tab's
+    pattern from that slot's point. Nothing else (no Z check, no swab swap)."""
+    hub.require_idle()
+    try:
+        k = int(payload.get("slot"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "slot: 1 to 9") from exc
+    st = _slot_scrub(k)
+    try:
+        hub.thread = hub.scrub.start(st, hub.guard.ref, hub.guard.floor)
+    except scrubmod.ScrubError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**hub.scrub.status.as_dict(), "slot": k, "start": st["start"]}
+
+
 @app.post("/api/routine3x3/corner-ref")
 def routine3x3_corner_ref(payload: dict) -> dict:
     v = payload.get("corner")
@@ -4449,11 +4486,8 @@ def routine3x3_run(payload: dict | None = None) -> dict:
     for c in plan["cells"]:
         if not c["run"]:
             continue
-        s = dict(_scrub_settings())
-        h_ = float(scrubmod.merged(s)["area"]["h"])
-        tx, ty = _pattern_top_left(c["corner"][0], c["corner"][1], h_, float(scrubmod.merged(s)["area"]["w"]))
-        s["start"] = {"x": tx, "y": ty, "z": z, "ref": hub.guard.ref}
-        s["rotation_deg"] = 0.0
+        s = _slot_scrub(c["slot"])
+        s["start"] = {**s["start"], "z": z}
         slides.append((f"slot {c['slot']}", s))
     safe = float(zhomemod.absolute(st, "safe_mm") or _auto_settings().get("safe_z") or 0)
     lc, zc, sp = hub.cal.load_cell, hub.machine.zcal, hub.machine.speeds

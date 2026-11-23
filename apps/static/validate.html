@@ -1950,6 +1950,8 @@ function g3Paint(){const a=g3Info;if(!a)return;
       <button class="sm" data-g3slot="${x.slot}" style="margin-top:6px;width:100%">Go here ↗</button>
       <button class="sm" data-g3own="${x.slot}" title="The tip is exactly on this slot's array corner: use these coordinates for this slot" style="margin-top:4px;width:100%">Save tip here</button>
       <div style="display:flex;gap:4px;margin-top:4px"><button class="sm" data-g3type="${x.slot}" style="flex:1">Type X/Y</button>${x.own?`<button class="sm" data-g3clr="${x.slot}" title="Back to the calculated corner" style="flex:0 0 auto">×</button>`:''}</div>
+      <div style="display:flex;gap:4px;margin-top:6px"><button class="sm primary" data-g3scrub="${x.slot}" title="Scrub this slot with the swab already in the jaws (Scrub tab pattern and settings)" style="flex:1">Scrub</button>
+      <button class="sm" data-g3one="${x.slot}" title="Check Z, scrub, dispose, grip the next swab, park" style="flex:1">Routine</button></div>
       <button class="sm" data-g3fix="${x.slot}" title="The tip is exactly on this slot's array corner: move every calculated slot by the same correction" style="margin-top:4px;width:100%;opacity:.8">Correct all from here</button></div>`}).join('');
   const run=!!(a.status&&a.status.running)||!!(r2Info&&r2Info.status&&r2Info.status.running);
   $('#g3Run').disabled=run||S.busy||!homedXY()||!a.ready;
@@ -1971,7 +1973,7 @@ function g3CkPaint(c){
   $('#g3CkAll').title=!hxy?'Home X and Y first':'';
   $('#g3CkFilled').title=!hxy?'Home X and Y first':!filled?'No filled slot in the last scan: use Tour all 9 slots':'';
   if(!run&&!(c&&(c.error||c.done.length))){$('#g3CkMsg').textContent=!hxy?'Home X and Y first (Home XY on the left), then tour.':'';}
-  $('#g3CkStop').disabled=!run;
+  $('#g3CkStop').disabled=!run&&!window.g3ScPoll;
   const m=$('#g3CkMsg');if(!c)return;
   if(run)m.innerHTML=`Checking ${c.z==null?'at the current height (Z unknown)':'at Z '+fmt(c.z,2)} · ${c.at?`over slot <b>${c.at.slot}</b>: X ${fmt(c.at.x,2)} Y ${fmt(c.at.y,2)}`:'rising…'}${c.done.length?` · done: ${c.done.join(', ')}`:''}`;
   else if(c.error)m.innerHTML=`<span class="bad">${esc(c.error)}</span>${c.done.length?` · done: ${c.done.join(', ')}`:''}`;
@@ -1992,7 +1994,7 @@ async function g3Ck(slots,dwell,zok){
   catch(e){m.innerHTML='<span class="bad">Not moved: '+esc(String(e.message||e))+'</span>';say('Grid check: '+(e.message||e),'err')}}
 $('#g3CkFilled').onclick=()=>g3Ck('filled');
 $('#g3CkAll').onclick=()=>g3Ck('all');
-$('#g3CkStop').onclick=async()=>{await fetch('/api/routine3x3/check/stop',{method:'POST'});g3CkRefresh()};
+$('#g3CkStop').onclick=async()=>{await fetch('/api/routine3x3/check/stop',{method:'POST'});try{await fetch('/api/scrub/stop',{method:'POST'})}catch(e){}g3CkRefresh()};
 $('#g3Grid').addEventListener('click',e=>{const d=e.target.closest('button[data-g3slot]');if(!d)return;
   if(!homedXY()){say('Home X and Y first','err');return}g3Ck([+d.dataset.g3slot],0)});
 g3CkRefresh();
@@ -2034,6 +2036,24 @@ document.addEventListener('click',e=>{
 
 $('#g3Ref').onchange=async e=>{try{const r=await fetch('/api/routine3x3/corner-ref',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({corner:e.target.value})});
   const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);g3Info=j;g3Paint();say(`Slot points are the arrays' ${j.corner_ref} corners`,'ok')}catch(x){say(String(x.message||x),'err')}};
+
+// ---- one slot: scrub only, or the routine ----
+var g3ScPoll=null;
+async function g3ScWatch(k){clearInterval(g3ScPoll);g3ScPoll=setInterval(async()=>{try{const s=await api('/api/scrub/status');const m=$('#g3CkMsg');
+  if(s.running){$('#g3CkStop').disabled=false;m.className='note';m.innerHTML=`Scrubbing slot <b>${k}</b>… (Stop is next to the tour buttons)`+(s.row!=null&&s.rows?` row ${s.row+1} of ${s.rows}`:'')}
+  else{clearInterval(g3ScPoll);g3ScPoll=null;m.innerHTML=s.error?`<span class="bad">Slot ${k}: ${esc(s.error)}</span>`:`<span class="good">Slot ${k} scrubbed.</span>`}}catch(e){}},700)}
+document.addEventListener('click',async e=>{
+  let b=e.target.closest('[data-g3scrub]');
+  if(b){const k=+b.dataset.g3scrub,c=(g3Info.cells.find(x=>x.slot===k)||{}).corner;
+    if(!confirm(`Scrub slot ${k} now with the swab in the jaws?\n\nScrub tab pattern from its point X ${c?fmt(c[0],3):'?'} Y ${c?fmt(c[1],3):'?'} (the array's ${$('#g3Ref').selectedOptions[0].text}), at the slide height.\n\nThe swab will touch the glass. Keep a hand near E-STOP.`))return;
+    try{const r=await fetch('/api/routine3x3/scrub',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot:k})});
+      const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);say(`Scrubbing slot ${k}`,'ok');g3ScWatch(k)}
+    catch(x){$('#g3CkMsg').innerHTML='<span class="bad">Slot '+k+' not scrubbed: '+esc(String(x.message||x))+'</span>'}
+    return}
+  b=e.target.closest('[data-g3one]');
+  if(b){const k=+b.dataset.g3one;
+    if(!confirm(`Routine on slot ${k} only: check Z on the load cell, scrub, dispose, grip the next swab, park.\n\nKeep a hand near E-STOP. Start?`))return;
+    run(`Routine on slot ${k}`,async()=>{r2Cache='';await post('/api/routine3x3/run',{slots:[k]});r2Info=await api('/api/routine2');paintR2();r2Watch();g3Load(true)})}});
 </script>
 </body>
 </html>
