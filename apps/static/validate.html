@@ -362,6 +362,11 @@
         <button class="sm" id="g3FlipC">Flip columns (X)</button>
         <button class="sm" id="g3FlipR">Flip rows (Y)</button>
       </div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px">
+        <label class="muted" style="font-size:12.5px">Routine 2's first slide (Slide 1's saved corner) is in slot
+          <select id="g3AnchorSel"></select></label>
+        <span class="muted" style="font-size:12.5px">If every slot lands one mount off, pick the slot it really is in.</span>
+      </div>
       <div id="g3Grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,150px));gap:6px;margin:8px 0"></div>
       <div class="card" style="padding:12px;margin:10px 0">
         <p class="label" style="margin:0 0 4px">Check the grid first · X and Y only</p>
@@ -1902,6 +1907,8 @@ async function g3Load(force){if(!force&&Date.now()-g3T<3000)return;g3T=Date.now(
   try{g3Info=await api('/api/routine3x3')}catch(e){g3Info=null}g3Paint()}
 function g3Paint(){const a=g3Info;if(!a)return;
   $('#g3Anchor').textContent=a.anchor_slot;
+  const sel=$('#g3AnchorSel');if(!sel.options.length)sel.innerHTML=[1,2,3,4,5,6,7,8,9].map(k=>`<option value="${k}">${k}</option>`).join('');
+  if(document.activeElement!==sel)sel.value=String(a.anchor_slot);
   const c=a.spacing.col,r=a.spacing.row;
   $('#g3Spacing').textContent=`Spacing (${a.spacing.source}): next column X ${fmt(c[0],3)} Y ${fmt(c[1],3)} mm · next row X ${fmt(r[0],3)} Y ${fmt(r[1],3)} mm`;
   const dir=(v,ax)=>{const i=Math.abs(v[0])>=Math.abs(v[1])?0:1;return (v[i]>=0?'+':'−')+(i?'Y':'X')};
@@ -1963,6 +1970,9 @@ async function g3Flip(axis){try{const r=await fetch('/api/routine3x3/flip',{meth
   const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);g3Info=j;g3Paint();say(axis==='col'?'Columns flipped':'Rows flipped','ok')}catch(e){say('Flip: '+(e.message||e),'err')}}
 $('#g3FlipC').onclick=()=>g3Flip('col');
 $('#g3FlipR').onclick=()=>g3Flip('row');
+
+$('#g3AnchorSel').onchange=async e=>{try{const r=await fetch('/api/routine3x3/anchor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot:+e.target.value})});
+  const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);g3Info=j;g3Paint();say(`Routine 2's first slide is now slot ${j.anchor_slot}`,'ok')}catch(x){say('Slot: '+(x.message||x),'err')}};
 </script>
 </body>
 </html>

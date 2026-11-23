@@ -292,3 +292,17 @@ def test_grid_check_without_known_z_asks_then_moves_xy_only(api):
     assert s["error"] is None and s["done"] == [3] and s["z"] is None
     p = c.get("/api/machine/position").json()
     assert p["x"] == pytest.approx(182 + 1.995 * 25.4, abs=1e-3)
+
+
+def test_grid_anchor_slot_can_be_changed(homed_cell):
+    c = homed_cell
+    c.post("/api/machine/move", json={"x": 182, "y": 91, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    j = c.post("/api/routine3x3/anchor", json={"slot": 1}).json()
+    assert j["anchor_slot"] == 1
+    cell = lambda k: next(x for x in j["cells"] if x["slot"] == k)["corner"]
+    assert cell(1) == pytest.approx([182, 91])
+    assert cell(2) == pytest.approx([182 + 1.995 * 25.4, 91], abs=1e-3)
+    assert c.get("/api/routine3x3").json()["anchor_slot"] == 1          # saved
+    assert c.post("/api/routine3x3/anchor", json={"slot": 12}).status_code == 400
+    c.post("/api/routine3x3/anchor", json={"slot": 2})

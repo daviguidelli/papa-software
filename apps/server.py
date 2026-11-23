@@ -4174,7 +4174,7 @@ def _grid_plan(payload: dict | None = None) -> dict:
     as the anchor slot, moved by the mount spacing) and whether it runs: a slot
     runs if the last scan found a substrate in it; empty slots are skipped."""
     body = payload or {}
-    anchor = int(body.get("anchor_slot") or GRID_ANCHOR_SLOT)
+    anchor = int(body.get("anchor_slot") or _master().get("grid_anchor") or GRID_ANCHOR_SLOT)
     rows = cols = 3
     col, row, src = _grid_spacing()
     s1 = next((x for x in hub.cal.slots if x.id == 1), None)
@@ -4211,6 +4211,21 @@ def _grid_plan(payload: dict | None = None) -> dict:
     return {"anchor_slot": anchor, "spacing": {"col": col, "row": row, "source": src},
             "cells": cells, "runs": runs, "skips": [c["slot"] for c in cells if not c["run"]],
             "problems": problems}
+
+
+@app.post("/api/routine3x3/anchor")
+def routine3x3_anchor(payload: dict) -> dict:
+    """Which grid slot Routine 2's first slide (Slide 1's saved corner) sits in."""
+    try:
+        k = int(payload.get("slot"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "slot: 1 to 9") from exc
+    if not 1 <= k <= 9:
+        raise HTTPException(400, "slot: 1 to 9")
+    m = _master()
+    m["grid_anchor"] = k
+    _save_master(m)
+    return routine3x3_info()
 
 
 @app.post("/api/routine3x3/flip")
