@@ -355,7 +355,7 @@
       <p class="note" id="r2Msg"></p>
 
       <h2>Routine 2 on the <em>3 × 3 mount</em></h2>
-      <p class="note" style="margin-top:0">Slide 1's top-left corner is taken as grid <b>slot <span id="g3Anchor">2</span></b>; every other slot's corner is that corner moved by the mount spacing. Only slots the last substrate scan found filled run, slot 1 to 9; empty slots are skipped. Each slot: check Z, scrub (the Scrub tab pattern at the slide height), dispose, grip the next swab (swab n = pickup + n × next-swab step); park at the end.</p>
+      <p class="note" style="margin-top:0">Routine 2's first slide (saved as <b>Slide 1 · top-left</b> in Where everything is) is grid <b>slot <span id="g3Anchor">2</span></b>; every other slot's corner is that corner moved by the mount spacing. Only slots the last substrate scan found filled run, slot 1 to 9; empty slots are skipped. Each slot: check Z, scrub (the Scrub tab pattern at the slide height), dispose, grip the next swab (swab n = pickup + n × next-swab step); park at the end.</p>
       <p class="mono" id="g3Spacing" style="font-size:12.5px"></p>
       <div id="g3Grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,150px));gap:6px;margin:8px 0"></div>
       <div class="card" style="padding:12px;margin:10px 0">
@@ -1406,7 +1406,7 @@ $('#r2Stop').onclick=async()=>{try{await post('/api/routine2/stop');log('stop re
 
 /* ---------- routine 2 setup rows ---------- */
 const SETUP=[
-  ['slide1','Slide 1 · top-left',async()=>post('/api/slide/corner',{id:1})],
+  ['slide1','Slide 1 · top-left (Routine 2\'s first slide = grid slot 2)',async()=>post('/api/slide/corner',{id:1})],
   ['slide2','Slide 2 · top-left',async()=>post('/api/slide/corner',{id:2})],
   ['swab1','Swab 1 · pickup',async()=>post('/api/auto/teach',{target:'pickup'})],
   ['swab2','Swab 2 · pickup',async()=>post('/api/auto/pickup2')],
@@ -1902,7 +1902,7 @@ function g3Paint(){const a=g3Info;if(!a)return;
   let n=0;
   $('#g3Grid').innerHTML=a.cells.map(x=>{const sw=x.run?++n:null;
     return `<div data-g3slot="${x.slot}" title="Go to slot ${x.slot}'s corner at the check height" style="cursor:pointer;border:1px solid ${x.slot===a.anchor_slot?'var(--gold,#d4af37)':'var(--line)'};padding:6px;font-size:12px;opacity:${x.run?1:.45}">
-      <b style="font-size:16px">${x.slot}</b>${x.slot===a.anchor_slot?' <span class="muted">= Slide 1</span>':''}<br>
+      <b style="font-size:16px">${x.slot}</b>${x.slot===a.anchor_slot?' <span class="muted">= Routine 2 slide 1</span>':''}<br>
       <span class="${x.run?'good':'muted'}">${x.run?'runs · then grips swab '+sw:(x.why==='empty'?'empty · skipped':'not scanned')}</span><br>
       <span class="mono muted">${x.corner?`X ${fmt(x.corner[0],2)} Y ${fmt(x.corner[1],2)}`:`Δ ${fmt(x.offset_mm[0],1)}, ${fmt(x.offset_mm[1],1)}`}</span></div>`}).join('');
   const run=!!(a.status&&a.status.running)||!!(r2Info&&r2Info.status&&r2Info.status.running);

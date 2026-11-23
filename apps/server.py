@@ -4201,7 +4201,8 @@ def _grid_plan(payload: dict | None = None) -> dict:
                       "why": None if run else ("empty" if filled is not None else "unknown")})
     problems = []
     if corner is None:
-        problems.append("Capture Slide 1's top-left corner (it is grid slot %d)." % anchor)
+        problems.append("Routine 2's first slide is not saved yet: set Slide 1 · top-left in Where everything is "
+                        "(it is grid slot %d)." % anchor)
     if why_unknown:
         problems.append(why_unknown)
     runs = [c["slot"] for c in cells if c["run"]]
