@@ -1934,18 +1934,23 @@ function g3CkPaint(c){
   if(!run&&!(c&&(c.error||c.done.length))){$('#g3CkMsg').textContent=!hxy?'Home X and Y first (Home XY on the left), then tour.':'';}
   $('#g3CkStop').disabled=!run;
   const m=$('#g3CkMsg');if(!c)return;
-  if(run)m.innerHTML=`Checking at Z ${fmt(c.z,2)} · ${c.at?`over slot <b>${c.at.slot}</b>: X ${fmt(c.at.x,2)} Y ${fmt(c.at.y,2)}`:'rising…'}${c.done.length?` · done: ${c.done.join(', ')}`:''}`;
+  if(run)m.innerHTML=`Checking ${c.z==null?'at the current height (Z unknown)':'at Z '+fmt(c.z,2)} · ${c.at?`over slot <b>${c.at.slot}</b>: X ${fmt(c.at.x,2)} Y ${fmt(c.at.y,2)}`:'rising…'}${c.done.length?` · done: ${c.done.join(', ')}`:''}`;
   else if(c.error)m.innerHTML=`<span class="bad">${esc(c.error)}</span>${c.done.length?` · done: ${c.done.join(', ')}`:''}`;
-  else if(c.done.length)m.innerHTML=`<span class="good">Checked slots ${c.done.join(', ')}</span> at Z ${fmt(c.z,2)}${c.at?` · now over slot ${c.at.slot}`:''}.`;
+  else if(c.done.length)m.innerHTML=`<span class="good">Checked slots ${c.done.join(', ')}</span> ${c.z==null?'at the current height':'at Z '+fmt(c.z,2)}${c.at?` · now over slot ${c.at.slot}`:''}.`;
 }
 async function g3CkRefresh(){try{const c=await api('/api/routine3x3/check');g3CkPaint(c);
   if(c.running&&!g3CkPoll)g3CkPoll=setInterval(g3CkRefresh,700);
   if(!c.running&&g3CkPoll){clearInterval(g3CkPoll);g3CkPoll=null;poll&&poll()}}catch(e){}}
-async function g3Ck(slots,dwell){
-  const body={slots,height_mm:+$('#g3H').value||30,dwell_s:dwell==null?(+$('#g3D').value||0):dwell,outline:$('#g3O').checked};
+async function g3Ck(slots,dwell,zok){
+  const body={slots,height_mm:+$('#g3H').value||30,dwell_s:dwell==null?(+$('#g3D').value||0):dwell,outline:$('#g3O').checked,z_unknown_ok:!!zok};
+  const m=$('#g3CkMsg');m.className='note';m.textContent=Array.isArray(slots)?`Going to slot ${slots.join(', ')}…`:'Starting the tour…';
   try{const r=await fetch('/api/routine3x3/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);g3CkPaint(j);g3CkRefresh()}
-  catch(e){say('Grid check: '+(e.message||e),'err')}}
+    const j=await r.json();
+    if(r.status===409&&!zok){
+      if(confirm((j.detail||j.error)+'\n\nTour at the CURRENT height (X and Y only, Z does not move)?'))return g3Ck(slots,dwell,true);
+      m.innerHTML='<span class="bad">Not moved: '+esc(j.detail||j.error)+'</span>';return}
+    if(!r.ok)throw new Error(j.detail||j.error||r.status);g3CkPaint(j);g3CkRefresh()}
+  catch(e){m.innerHTML='<span class="bad">Not moved: '+esc(String(e.message||e))+'</span>';say('Grid check: '+(e.message||e),'err')}}
 $('#g3CkFilled').onclick=()=>g3Ck('filled');
 $('#g3CkAll').onclick=()=>g3Ck('all');
 $('#g3CkStop').onclick=async()=>{await fetch('/api/routine3x3/check/stop',{method:'POST'});g3CkRefresh()};

@@ -4336,17 +4336,18 @@ def routine3x3_check(payload: dict | None = None) -> dict:
     slide = zhomemod.absolute(st, "slide_mm")
     safe = zhomemod.absolute(st, "safe_mm") or _auto_settings().get("safe_z")
     height = float(body.get("height_mm", 30.0))
-    if "z" not in p.homed:
-        raise HTTPException(400, "Z is not known: home Z on the load cell (or set Z) first.")
-    if slide is not None:
-        z = slide + height
+    z_known = "z" in p.homed
+    if not z_known and not body.get("z_unknown_ok"):
+        raise HTTPException(409, "Z is not known, so it cannot rise to the check height. Raise Z with Z+ until "
+                                 "the tip is well clear, then confirm to tour at the current height.")
+    if not z_known:
+        z = None                                      # Z untouched: X and Y moves only
     else:
-        z = p.z
-    if safe is not None:
-        z = max(z, float(safe))
-    z = max(z, p.z)                                   # never lower
-    lim = hub.machine.limits["z"]
-    z = min(z, float(lim[1]))
+        z = slide + height if slide is not None else p.z
+        if safe is not None:
+            z = max(z, float(safe))
+        z = max(z, p.z)                               # never lower
+        z = min(z, float(hub.machine.limits["z"][1]))
     dwell = max(0.0, min(30.0, float(body.get("dwell_s", 3.0))))
     outline = bool(body.get("outline"))
     area = scrubmod.merged(_scrub_settings())["area"]
@@ -4359,17 +4360,17 @@ def routine3x3_check(payload: dict | None = None) -> dict:
         if outline:
             path += [to_machine(hub.machine.axes, x0, y0, lx, ly) for lx, ly in ((w, 0), (w, h), (0, h), (0, 0))]
         for x, y in path:
-            if not hub.machine.in_limits(x, y, z):
+            if not hub.machine.in_limits(x, y, z if z is not None else hub.machine.limits["z"][1]):
                 raise HTTPException(400, f"Slot {k}: X {x:.2f} Y {y:.2f} is outside the machine limits.")
         pts.append((k, path))
     speed = float(body.get("speed_mm_s", 40.0))
     g = _GCHECK
     g.__init__()
-    g.running, g.z = True, round(z, 3)
+    g.running, g.z = True, (round(z, 3) if z is not None else None)
 
     def run() -> None:
         try:
-            if hub.printer.position().z < z - 1e-6:
+            if z is not None and hub.printer.position().z < z - 1e-6:
                 hub.printer.move(z=z, speed_mm_s=min(float(hub.machine.speeds.get("z_lift", 10.0)), 10.0))
             for k, path in pts:
                 for i, (x, y) in enumerate(path):

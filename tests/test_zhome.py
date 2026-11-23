@@ -276,3 +276,19 @@ def test_grid_rows_can_be_flipped_to_plus_y(homed_cell):
     j = c.post("/api/routine3x3/flip", json={"axis": "col"}).json()
     assert s7(j)[0] == pytest.approx(182 + 2.011 * 0 + 1.995 * 25.4, abs=1e-3)   # slot 7 is column 1: now +X of slot 2
     c.post("/api/master", json={"clear": "spacing"})
+
+
+def test_grid_check_without_known_z_asks_then_moves_xy_only(api):
+    c = api
+    c.post("/api/machine/home", json={"axes": "XY"})
+    c.post("/api/machine/move", json={"x": 182, "y": 91, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    r = c.post("/api/routine3x3/check", json={"slots": [3], "dwell_s": 0})
+    assert r.status_code == 409 and "Z is not known" in r.json()["error"]
+    r = c.post("/api/routine3x3/check", json={"slots": [3], "dwell_s": 0, "z_unknown_ok": True})
+    assert r.status_code == 200, r.text
+    c.server.hub.thread.join(timeout=10)
+    s = c.get("/api/routine3x3/check").json()
+    assert s["error"] is None and s["done"] == [3] and s["z"] is None
+    p = c.get("/api/machine/position").json()
+    assert p["x"] == pytest.approx(182 + 1.995 * 25.4, abs=1e-3)
