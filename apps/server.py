@@ -4197,7 +4197,8 @@ def _grid_plan(payload: dict | None = None) -> dict:
         r, c = divmod(k - 1, cols)
         dx = (c - ac + sc_) * col[0] + (r - ar + sr_) * row[0]
         dy = (c - ac + sc_) * col[1] + (r - ar + sr_) * row[1]
-        xy = None if corner is None else [round(corner[0] + dx, 3), round(corner[1] + dy, 3)]
+        nx, ny = (_master().get("grid_nudge") or [0.0, 0.0])
+        xy = None if corner is None else [round(corner[0] + dx + nx, 3), round(corner[1] + dy + ny, 3)]
         run = filled is not None and k in filled
         cells.append({"slot": k, "corner": xy, "offset_mm": [round(dx, 3), round(dy, 3)], "run": run,
                       "why": None if run else ("empty" if filled is not None else "unknown")})
@@ -4210,9 +4211,38 @@ def _grid_plan(payload: dict | None = None) -> dict:
     runs = [c["slot"] for c in cells if c["run"]]
     if filled is not None and not runs:
         problems.append("No substrate in any slot.")
-    return {"anchor_slot": anchor, "shift": [sc_, sr_], "spacing": {"col": col, "row": row, "source": src},
+    return {"anchor_slot": anchor, "shift": [sc_, sr_], "nudge": _master().get("grid_nudge") or [0.0, 0.0], "spacing": {"col": col, "row": row, "source": src},
             "cells": cells, "runs": runs, "skips": [c["slot"] for c in cells if not c["run"]],
             "problems": problems}
+
+
+@app.post("/api/routine3x3/correct")
+def routine3x3_correct(payload: dict) -> dict:
+    """The tip is exactly on this slot's array corner: {slot: k}. The difference
+    between where the tip is and where the grid put that corner is applied to
+    every slot (the mounts are identical). {reset: true} removes it."""
+    m = _master()
+    if payload.get("reset"):
+        m.pop("grid_nudge", None)
+    else:
+        try:
+            k = int(payload.get("slot"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "slot: 1 to 9") from exc
+        p = hub.printer.position()
+        if not all(a in p.homed for a in "xy"):
+            raise HTTPException(400, "Home X and Y first.")
+        cell = next((c for c in _grid_plan()["cells"] if c["slot"] == k), None)
+        if cell is None or cell["corner"] is None:
+            raise HTTPException(400, "Save Routine 2's first slide (Slide 1 · top-left) first.")
+        old = m.get("grid_nudge") or [0.0, 0.0]
+        dx, dy = p.x - cell["corner"][0], p.y - cell["corner"][1]
+        if abs(dx) > 15 or abs(dy) > 15:
+            raise HTTPException(400, f"The tip is {dx:+.2f}, {dy:+.2f} mm from slot {k}'s corner: more than 15 mm. "
+                                     "Is it on the right mount? Use the shift buttons for whole mounts.")
+        m["grid_nudge"] = [round(old[0] + dx, 3), round(old[1] + dy, 3)]
+    _save_master(m)
+    return routine3x3_info()
 
 
 @app.post("/api/routine3x3/shift")

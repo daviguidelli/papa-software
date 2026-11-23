@@ -321,3 +321,28 @@ def test_grid_shift_by_whole_mounts(homed_cell):
     assert cell(j, 4) == pytest.approx(cell(j0, 2), abs=1e-3)        # and one row toward slot 1
     j = c.post("/api/routine3x3/shift", json={"reset": True}).json()
     assert j["shift"] == [0, 0] and cell(j, 2) == pytest.approx(cell(j0, 2))
+
+
+def test_grid_correct_here_moves_every_slot_by_the_same_offset(homed_cell):
+    c = homed_cell
+    c.post("/api/routine3x3/correct", json={"reset": True})
+    c.post("/api/routine3x3/shift", json={"reset": True})
+    c.post("/api/machine/move", json={"x": 182, "y": 91, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    cell = lambda j, k: next(x for x in j["cells"] if x["slot"] == k)["corner"]
+    j0 = c.get("/api/routine3x3").json()
+    s5 = cell(j0, 5)
+    c.post("/api/machine/move", json={"x": s5[0] - 2.4, "y": s5[1] + 1.3, "speed_mm_s": 100})   # the true corner
+    j = c.post("/api/routine3x3/correct", json={"slot": 5}).json()
+    assert j["nudge"] == pytest.approx([-2.4, 1.3], abs=1e-3)
+    for k in (1, 5, 9):
+        assert cell(j, k) == pytest.approx([cell(j0, k)[0] - 2.4, cell(j0, k)[1] + 1.3], abs=1e-3)
+    # a second correction adds to the first
+    s6 = cell(j, 6)
+    c.post("/api/machine/move", json={"x": s6[0] + 0.5, "y": s6[1], "speed_mm_s": 100})
+    j = c.post("/api/routine3x3/correct", json={"slot": 6}).json()
+    assert j["nudge"] == pytest.approx([-1.9, 1.3], abs=1e-3)
+    c.post("/api/machine/move", json={"x": s6[0] - 30, "y": s6[1], "speed_mm_s": 100})
+    assert c.post("/api/routine3x3/correct", json={"slot": 6}).status_code == 400   # a whole mount off: use shift
+    j = c.post("/api/routine3x3/correct", json={"reset": True}).json()
+    assert j["nudge"] == [0.0, 0.0]
