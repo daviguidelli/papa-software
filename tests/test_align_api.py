@@ -638,3 +638,62 @@ def test_run_every_filled_slot_skipping_empty_ones(aligned):
     assert not b["running"] and b["error"] is None, b
     assert [d["slot"] for d in b["done"]] == plan["runs"] and all(d["error"] is None for d in b["done"])
     a.post("/api/align/slots", json={"clear": True})
+
+
+def test_slot_fine_tune_from_two_clicked_corners(aligned):
+    """Norm points set on the printer; the camera is calibrated from them (the
+    reference corner clicked on the photo of 4 slots); then on one slot the
+    array is clicked 0.5 mm off and turned 1 deg: the scrub pattern is moved
+    and turned by exactly that, from the clicked corner."""
+    import math
+
+    a, srv = aligned, aligned.server
+    for key in ("slot_corners", "slot_clicks", "cam_fit", "corner_ref", "slotcal_use"):
+        m = srv._master(); m.pop(key, None); srv._save_master(m)
+    a.post("/api/scrub/sketch", json={"substrate": {"w": 10, "h": 8}, "bridges": []})
+    mock = srv.hub.printer._inner
+    mock.homed, mock.z = "xyz", 40.0
+    a.post("/api/guard/floor", json={"z": 39.0})
+    a.post("/api/scrub/start-here", json={})                  # gives the Scrub tab a start Z
+    a.post("/api/align/scan", json={"save": False})
+    sc = srv.hub.align_scan
+    norms = {1: (150.0, 120.0), 3: (250.0, 120.0), 7: (150.0, 220.0), 9: (250.0, 220.0)}
+    for k, (x, y) in norms.items():
+        assert a.post("/api/routine3x3/slot-corner", json={"slot": k, "x": x, "y": y}).status_code == 200
+    truth = lambda mm: srv._mm_to_view([mm], sc)[0]            # where that printer point is on the photo
+    for k, p in norms.items():
+        v = truth(p)
+        assert a.post("/api/slotcal/click", json={"slot": k, "which": "bl", "x": v[0], "y": v[1]}).status_code == 200
+    j = a.post("/api/slotcal/calibrate", json={}).json()
+    assert j["calibrated"] and j["fit"]["max_mm"] < 0.3, j["fit"]
+    # slot 9: array clicked 0.5 mm in +X, 0.3 mm in -Y, turned +1 deg
+    bl = np.array(norms[9]) + [0.5, -0.3]
+    d0 = np.array([10.0, 8.0])                              # lowest X/Y corner -> opposite corner, +X +Y
+    t = math.radians(1.0)
+    tr = bl + [d0[0] * math.cos(t) - d0[1] * math.sin(t), d0[0] * math.sin(t) + d0[1] * math.cos(t)]
+    for which, p in (("bl", bl), ("tr", tr)):
+        v = truth(p)
+        a.post("/api/slotcal/click", json={"slot": 9, "which": which, "x": v[0], "y": v[1]})
+    m9 = next(s for s in a.get("/api/slotcal").json()["slots"] if s["slot"] == 9)["measure"]
+    assert m9["applied"] and m9["shift_mm"] == pytest.approx([0.5, -0.3], abs=0.15)
+    assert m9["turn_deg"] == pytest.approx(1.0, abs=0.3) and m9["size"] == pytest.approx(1.0, abs=0.03)
+    st = srv._slot_scrub(9)
+    assert st["rotation_deg"] == pytest.approx(1.0, abs=0.3)
+    # the pattern's start (its top-left: lowest X, highest Y) turned about the clicked corner
+    exp = bl + [-8 * math.sin(t) * -1 * 0 + (0 * math.cos(t) - 8 * math.sin(t)), 0 * math.sin(t) + 8 * math.cos(t)]
+    assert [st["start"]["x"], st["start"]["y"]] == pytest.approx(exp.tolist(), abs=0.2)
+    # a slot clicked far off is flagged and not run by accident
+    v1, v2 = truth(np.array(norms[1]) + [4, 0]), truth(np.array(norms[1]) + [14, 8])
+    a.post("/api/slotcal/click", json={"slot": 1, "which": "bl", "x": v1[0], "y": v1[1]})
+    a.post("/api/slotcal/click", json={"slot": 1, "which": "tr", "x": v2[0], "y": v2[1]})
+    m1 = next(s for s in a.get("/api/slotcal").json()["slots"] if s["slot"] == 1)["measure"]
+    assert not m1["applied"] and any("norm point" in p for p in m1["problems"])
+    with pytest.raises(Exception):
+        srv._slot_scrub(1)
+    assert srv._slot_scrub(1, force=True)["start"]["x"] == pytest.approx(154.0, abs=0.2)
+    # a new photo makes the old clicks stale
+    a.post("/api/align/scan", json={"save": False})
+    m9 = next(s for s in a.get("/api/slotcal").json()["slots"] if s["slot"] == 9)["measure"]
+    assert m9 == {"stale": True}
+    for key in ("slot_corners", "slot_clicks", "cam_fit"):
+        m = srv._master(); m.pop(key, None); srv._save_master(m)

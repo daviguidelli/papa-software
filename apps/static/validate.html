@@ -392,6 +392,25 @@
       </div>
       <div id="g3Grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,150px));gap:6px;margin:8px 0"></div>
       <div class="card" style="padding:12px;margin:10px 0">
+        <p class="label" style="margin:0 0 4px">Fine-tune each array from the camera</p>
+        <p class="note" style="margin:0 0 8px">Each slot's saved point is the <b>norm</b> (red cross on its photo). Press <b>Click corners</b> on a slot and click the array's reference corner (the same corner as the norm point), then the <b>opposite</b> corner. The machine works out how far that array is shifted and turned from the norm, and moves and turns the whole scrub pattern (bridges included) to match. Up to <span id="scLim"></span> it is applied automatically; more is flagged.</p>
+        <p class="mono" id="scInfo" style="font-size:12.5px;margin:0 0 6px"></p>
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="sm" id="scPhoto">Take a new photo</button>
+          <button class="sm" id="scCal">Calibrate the camera from the norm points</button>
+          <label class="muted" style="font-size:12.5px"><input type="checkbox" id="scUse" checked> use the clicked corners when scrubbing</label>
+        </div>
+        <p class="note" style="margin:6px 0 0">Calibrate once (camera not moved since): with nothing moved since the points were saved, click the reference corner on 3 or more slots, then press Calibrate. After that, every new photo only needs the two clicks per slot.</p>
+        <div id="scPanel" hidden style="margin-top:10px">
+          <p class="note" id="scStep" style="margin:0 0 6px"></p>
+          <div id="scWrap" style="position:relative;display:inline-block;max-width:100%;cursor:crosshair">
+            <img id="scImg" alt="Slot photo" style="display:block;max-width:100%;border:1px solid var(--line)">
+            <svg id="scSvg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></svg>
+          </div>
+          <div class="row" style="gap:8px;margin-top:6px"><button class="sm" id="scRedo">Redo the clicks</button><button class="sm" id="scClose">Close</button></div>
+        </div>
+      </div>
+      <div class="card" style="padding:12px;margin:10px 0">
         <p class="label" style="margin:0 0 4px">Check the grid first · X and Y only</p>
         <p class="note" style="margin:0 0 8px">Rises to the check height and stops over each slot's corner. It never lowers, scrubs or grips. Look whether the tip is over each array's top-left corner. Press <b>Go here</b> on a slot above to go to just that one.</p>
         <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
@@ -1950,12 +1969,14 @@ function g3Paint(){const a=g3Info;if(!a)return;
       <button class="sm" data-g3slot="${x.slot}" style="margin-top:6px;width:100%">Go here ↗</button>
       <button class="sm" data-g3own="${x.slot}" title="The tip is exactly on this slot's array corner: use these coordinates for this slot" style="margin-top:4px;width:100%">Save tip here</button>
       <div style="display:flex;gap:4px;margin-top:4px"><button class="sm" data-g3type="${x.slot}" style="flex:1">Type X/Y</button>${x.own?`<button class="sm" data-g3clr="${x.slot}" title="Back to the calculated corner" style="flex:0 0 auto">×</button>`:''}</div>
+      ${scLine(x.slot)}
+      <button class="sm" data-sccl="${x.slot}" style="margin-top:6px;width:100%">Click corners</button>
       <div style="display:flex;gap:4px;margin-top:6px"><button class="sm primary" data-g3scrub="${x.slot}" title="Scrub this slot with the swab already in the jaws (Scrub tab pattern and settings)" style="flex:1">Scrub</button>
       <button class="sm" data-g3one="${x.slot}" title="Check Z, scrub, dispose, grip the next swab, park" style="flex:1">Routine</button></div>
       <button class="sm" data-g3fix="${x.slot}" title="The tip is exactly on this slot's array corner: move every calculated slot by the same correction" style="margin-top:4px;width:100%;opacity:.8">Correct all from here</button></div>`}).join('');
   const run=!!(a.status&&a.status.running)||!!(r2Info&&r2Info.status&&r2Info.status.running);
   $('#g3Run').disabled=run||S.busy||!homedXY()||!a.ready;
-  g3CkPaint();
+  g3CkPaint();if(!scInfo)scLoad();
   $('#g3Sub').textContent=!homedXY()?'Home X and Y first':(a.problems[0]||`Slots ${a.runs.join(', ')} · ${a.runs.length} swab${a.runs.length===1?'':'s'} needed`);
 }
 $('#g3Run').onclick=()=>{const a=g3Info;if(!a)return;
@@ -2054,6 +2075,47 @@ document.addEventListener('click',async e=>{
   if(b){const k=+b.dataset.g3one;
     if(!confirm(`Routine on slot ${k} only: check Z on the load cell, scrub, dispose, grip the next swab, park.\n\nKeep a hand near E-STOP. Start?`))return;
     run(`Routine on slot ${k}`,async()=>{r2Cache='';await post('/api/routine3x3/run',{slots:[k]});r2Info=await api('/api/routine2');paintR2();r2Watch();g3Load(true)})}});
+
+// ---- fine-tune each array from the camera ----
+var scInfo=null,scCur=null,scT=0;
+function scLine(k){const s=scInfo&&scInfo.slots.find(x=>x.slot===k);if(!s)return '';const m=s.measure;
+  if(!m)return `<span class="muted" style="font-size:11px">${s.clicked.bl||s.clicked.tr?'corners: '+(s.clicked.bl?'ref ✓ ':'')+(s.clicked.tr?'opp ✓':''):'not clicked'}</span>`;
+  if(m.stale)return '<span class="muted" style="font-size:11px">clicks are from an older photo</span>';
+  if(m.no_calibration)return '<span class="warn" style="font-size:11px">clicked · calibrate the camera</span>';
+  const sh=m.shift_mm;
+  return `<span class="mono ${m.applied?'good':'bad'}" style="font-size:11px">Δ X ${sh[0]>=0?'+':''}${fmt(sh[0],2)} Y ${sh[1]>=0?'+':''}${fmt(sh[1],2)} · ${m.turn_deg>=0?'+':''}${fmt(m.turn_deg,2)}° ${m.applied?'✓':'⚠ '+esc(m.problems.join('; '))}</span>`}
+async function scLoad(force){if(!force&&Date.now()-scT<3500)return;scT=Date.now();try{scInfo=await api('/api/slotcal')}catch(e){scInfo=null;return}scPaint()}
+function scPaint(){const a=scInfo;if(!a)return;
+  $('#scLim').textContent=`${a.limits.shift_mm} mm and ${a.limits.turn_deg}°`;
+  $('#scInfo').innerHTML=(a.photo?`Photo: scan ${a.photo.scan_id??'–'} at ${esc(a.photo.time||'')}`:'No photo yet: Take a new photo.')
+    +' · '+(a.calibrated?`<span class="good">camera calibrated</span> from ${a.fit.pairs.length} slots, rms ${fmt(a.fit.rms_mm,2)} mm, worst ${fmt(a.fit.max_mm,2)} mm`:'<span class="warn">camera not calibrated from the norm points yet</span>');
+  if(document.activeElement!==$('#scUse'))$('#scUse').checked=a.use!==false;
+  if(g3Info)g3Paint&&0;}
+async function scOpen(k){scCur={k,step:0};$('#scPanel').hidden=false;await scShow();$('#scPanel').scrollIntoView({block:'nearest'})}
+async function scShow(){const k=scCur.k;let p;try{p=await api('/api/slotcal/photo?slot='+k)}catch(e){$('#scStep').innerHTML='<span class="bad">'+esc(String(e.message||e))+'</span>';return}
+  scCur.p=p;$('#scImg').src=p.image;$('#scSvg').setAttribute('viewBox',`0 0 ${p.size[0]} ${p.size[1]}`);
+  scCur.step=p.bl?(p.tr?2:1):0;scDraw();}
+function scDraw(){const p=scCur.p,k=scCur.k,svg=$('#scSvg');let h='';
+  const cross=(q,col,l)=>q?`<g stroke="${col}" stroke-width="2"><line x1="${q[0]-14}" y1="${q[1]}" x2="${q[0]+14}" y2="${q[1]}"/><line x1="${q[0]}" y1="${q[1]-14}" x2="${q[0]}" y2="${q[1]+14}"/></g><text x="${q[0]+8}" y="${q[1]-8}" fill="${col}" font-size="16" font-family="monospace">${l}</text>`:'';
+  h+=cross(p.norm,'#ff4040','norm');
+  if(p.bl&&p.tr)h+=`<line x1="${p.bl[0]}" y1="${p.bl[1]}" x2="${p.tr[0]}" y2="${p.tr[1]}" stroke="#5ad65a" stroke-width="1.5" stroke-dasharray="6 4"/>`;
+  h+=cross(p.bl,'#5ad65a','1 ref');h+=cross(p.tr,'#3cc8e6','2 opposite');
+  svg.innerHTML=h;
+  const ref=$('#g3Ref')&&$('#g3Ref').selectedOptions[0]?$('#g3Ref').selectedOptions[0].text.split(' (')[0]:'reference';
+  $('#scStep').innerHTML=`<b>Slot ${k}</b> · `+(scCur.step===0?`click the array's <b>reference corner</b> (the corner with the ${esc(ref)}, the same corner as the red norm).`
+    :scCur.step===1?`now click the <b>opposite corner</b> of the array.`:`done. ${scLine(k)} · Redo to click again.`);}
+$('#scWrap').addEventListener('click',async e=>{if(!scCur||scCur.step>1)return;const r=$('#scImg').getBoundingClientRect(),p=scCur.p;
+  const x=(e.clientX-r.left)/r.width*p.size[0],y=(e.clientY-r.top)/r.height*p.size[1],which=scCur.step===0?'bl':'tr';
+  try{scInfo=await post('/api/slotcal/click',{slot:scCur.k,which,x,y,offset:p.offset,scale:p.scale});p[which]=[x,y];scCur.step++;scDraw();scPaint();g3Paint()}
+  catch(x){$('#scStep').innerHTML='<span class="bad">'+esc(String(x.message||x))+'</span>'}});
+$('#scRedo').onclick=async()=>{if(!scCur)return;scInfo=await post('/api/slotcal/click',{slot:scCur.k,clear:true});scCur.p.bl=scCur.p.tr=null;scCur.step=0;scDraw();scPaint();g3Paint()};
+$('#scClose').onclick=()=>{$('#scPanel').hidden=true;scCur=null};
+$('#scPhoto').onclick=()=>run('New photo',async()=>{await post('/api/align/scan',{save:false});await scLoad(true);if(scCur)await scShow();g3Load(true)});
+$('#scCal').onclick=()=>run('Calibrate the camera',async()=>{scInfo=await post('/api/slotcal/calibrate',{});scPaint();g3Paint();if(scCur)await scShow();
+  say(`Camera calibrated: rms ${fmt(scInfo.fit.rms_mm,2)} mm, worst ${fmt(scInfo.fit.max_mm,2)} mm`,'ok')});
+$('#scUse').onchange=async e=>{scInfo=await post('/api/slotcal/use',{use:e.target.checked});scPaint();g3Paint()};
+document.addEventListener('click',e=>{const b=e.target.closest('[data-sccl]');if(b)scOpen(+b.dataset.sccl)});
+setInterval(()=>{if(!document.hidden&&$('#g3Grid').offsetParent)scLoad()},4000);
 </script>
 </body>
 </html>

@@ -4298,7 +4298,7 @@ def _grid_plan(payload: dict | None = None) -> dict:
             "problems": problems}
 
 
-def _slot_scrub(k: int) -> dict:
+def _slot_scrub(k: int, force: bool = False) -> dict:
     """The Scrub tab's pattern and settings, started from slot k's point (the
     chosen corner of its array), at the slide height (else the Scrub tab's Z)."""
     cell = next((c for c in _grid_plan({"slots": [k]})["cells"] if c["slot"] == k), None)
@@ -4307,14 +4307,28 @@ def _slot_scrub(k: int) -> dict:
                                  "Routine 2's first slide.")
     s = dict(_scrub_settings())
     area = scrubmod.merged(s)["area"]
-    tx, ty = _pattern_top_left(cell["corner"][0], cell["corner"][1], float(area["h"]), float(area["w"]))
+    bx, by = cell["corner"]
+    turn = 0.0
+    meas = _slot_measure(k, cell) if _master().get("slotcal_use", True) else None
+    if meas and meas.get("corner"):
+        if not meas["applied"] and not force:
+            raise HTTPException(409, f"Slot {k}: the clicked array is {'; '.join(meas['problems'])}. Check the clicks "
+                                     "or run it on purpose.")
+        bx, by = meas["corner"]
+        turn = float(meas["turn_deg"])
+    tx, ty = _pattern_top_left(bx, by, float(area["h"]), float(area["w"]))
+    if turn:
+        import math
+        c_, s_ = math.cos(math.radians(turn)), math.sin(math.radians(turn))
+        vx, vy = tx - bx, ty - by                           # turn the whole array about its clicked corner
+        tx, ty = bx + c_ * vx - s_ * vy, by + s_ * vx + c_ * vy
     z = zhomemod.absolute(_zhome_settings(), "slide_mm")
     if z is None:
         z = (s.get("start") or {}).get("z")
     if z is None:
         raise HTTPException(400, "Set the slide height (Routine 2 setup) or the Scrub tab's start first.")
     s["start"] = {"x": round(tx, 4), "y": round(ty, 4), "z": float(z), "ref": hub.guard.ref}
-    s["rotation_deg"] = 0.0
+    s["rotation_deg"] = round(turn, 4)
     return s
 
 
@@ -4327,7 +4341,7 @@ def routine3x3_scrub(payload: dict) -> dict:
         k = int(payload.get("slot"))
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, "slot: 1 to 9") from exc
-    st = _slot_scrub(k)
+    st = _slot_scrub(k, bool(payload.get("force")))
     try:
         hub.thread = hub.scrub.start(st, hub.guard.ref, hub.guard.floor)
     except scrubmod.ScrubError as exc:
@@ -4494,7 +4508,7 @@ def routine3x3_run(payload: dict | None = None) -> dict:
     for c in plan["cells"]:
         if not c["run"]:
             continue
-        s = _slot_scrub(c["slot"])
+        s = _slot_scrub(c["slot"], bool(body.get("force")))
         s["start"] = {**s["start"], "z": z}
         slides.append((f"slot {c['slot']}", s))
     safe = float(zhomemod.absolute(st, "safe_mm") or _auto_settings().get("safe_z") or 0)
@@ -4631,6 +4645,255 @@ def routine3x3_check(payload: dict | None = None) -> dict:
 def routine3x3_check_stop() -> dict:
     _GCHECK.stop = True
     return _GCHECK.as_dict()
+
+
+# ---------- per-slot fine tuning from the camera: click the array's two corners ----------
+
+SLOTCAL_MAX_SHIFT_MM = 2.0      # applied automatically up to this far from the norm point...
+SLOTCAL_MAX_TURN_DEG = 3.0      # ...and this much turn; beyond, the slot is flagged
+SLOTCAL_SIZE_TOL = 0.12         # clicked diagonal within 12 % of the array's diagonal
+
+
+def _slot_clicks() -> dict:
+    return {int(k): v for k, v in (_master().get("slot_clicks") or {}).items()}
+
+
+def _cam_fit() -> Any:
+    """Straightened-view pixels -> printer mm: the affine fit from the norm
+    points (or None)."""
+    import numpy as np
+
+    f = _master().get("cam_fit")
+    return None if not f else np.asarray(f["A"], float)
+
+
+def _view_to_mm(pts: Any, sc: dict | None = None) -> Any:
+    """View px -> printer mm: the slot-corner calibration if made, else the
+    camera points, else None."""
+    import numpy as np
+
+    pts = np.asarray(pts, float).reshape(-1, 2)
+    A = _cam_fit()
+    if A is not None:
+        return np.c_[pts, np.ones(len(pts))] @ A.T
+    axes_fit, _ = _camera_axes()
+    sc = sc or hub.align_scan
+    if axes_fit is None or sc is None:
+        return None
+    c = corrmod.get_correction(sc["rgb"].shape[1::-1])
+    return axes_fit.plate_to_mm(c.corrected_to_plate(pts))
+
+
+def _mm_to_view(pts: Any, sc: dict | None = None) -> Any:
+    import numpy as np
+
+    pts = np.asarray(pts, float).reshape(-1, 2)
+    A = _cam_fit()
+    if A is not None:
+        M = np.vstack([A, [0, 0, 1]])
+        q = np.c_[pts, np.ones(len(pts))] @ np.linalg.inv(M).T
+        return q[:, :2]
+    axes_fit, _ = _camera_axes()
+    sc = sc or hub.align_scan
+    if axes_fit is None or sc is None:
+        return None
+    c = corrmod.get_correction(sc["rgb"].shape[1::-1])
+    return (axes_fit.mm_to_plate(pts) - c._origin) / c._step
+
+
+def _array_box(x: float, y: float) -> tuple[Any, Any]:
+    """From a slot's norm point (the chosen corner): the opposite corner of the
+    array (pattern w x h) and the diagonal vector, in printer mm, unturned."""
+    import numpy as np
+
+    from papa.ops.geometry import axis_matrix
+
+    area = scrubmod.merged(_scrub_settings())["area"]
+    w, h = float(area["w"]), float(area["h"])
+    (ax, ay), (bx, by) = axis_matrix(hub.machine.axes)
+    ext = np.array([abs(w * ax + h * bx), abs(w * ay + h * by)])
+    sx, sy = CORNER_REFS[_corner_ref()]
+    sx, sy = (sx or -1), (sy or -1)
+    d0 = np.array([-sx * ext[0], -sy * ext[1]])
+    return np.array([x, y]) + d0, d0
+
+
+def _slot_measure(k: int, cell: dict | None = None) -> dict | None:
+    """What the clicked corners say about slot k on the current photo: where
+    the array's reference corner really is, how far from the norm point, how
+    turned, whether the diagonal is the right size, and whether it is applied."""
+    import math
+
+    import numpy as np
+
+    clk = _slot_clicks().get(k)
+    sc = hub.align_scan
+    if not clk or not clk.get("bl") or not clk.get("tr") or sc is None:
+        return None
+    if clk.get("scan") != sc.get("scan_id") or clk.get("time") != sc.get("time"):
+        return {"stale": True}
+    mm = _view_to_mm([clk["bl"], clk["tr"]], sc)
+    if mm is None:
+        return {"no_calibration": True}
+    cell = cell or next((c for c in _grid_plan()["cells"] if c["slot"] == k), None)
+    if cell is None or cell["corner"] is None:
+        return None
+    norm = np.asarray(cell["corner"], float)
+    _, d0 = _array_box(*norm)
+    bl, tr = mm[0], mm[1]
+    d = tr - bl
+    turn = math.degrees(math.atan2(d[1], d[0]) - math.atan2(d0[1], d0[0]))
+    turn = (turn + 180) % 360 - 180
+    size = float(np.linalg.norm(d) / max(1e-6, np.linalg.norm(d0)))
+    shift = bl - norm
+    problems = []
+    if abs(size - 1) > SLOTCAL_SIZE_TOL:
+        problems.append(f"the clicked corners are {size * 100:.0f} % of the array's diagonal: check which corners")
+    if float(np.hypot(*shift)) > SLOTCAL_MAX_SHIFT_MM:
+        problems.append(f"{float(np.hypot(*shift)):.2f} mm from the norm point (more than {SLOTCAL_MAX_SHIFT_MM:g})")
+    if abs(turn) > SLOTCAL_MAX_TURN_DEG:
+        problems.append(f"turned {turn:+.2f} deg (more than {SLOTCAL_MAX_TURN_DEG:g})")
+    return {"corner": bl.round(3).tolist(), "opposite": tr.round(3).tolist(), "shift_mm": shift.round(3).tolist(),
+            "turn_deg": round(turn, 3), "size": round(size, 3), "problems": problems, "applied": not problems}
+
+
+def _slot_cell_quad(k: int) -> Any:
+    """Slot k's cell of the slot grid in view px, or None."""
+    import cv2
+    import numpy as np
+
+    sl = _slots()
+    if not sl:
+        return None
+    rows, cols = int(sl["rows"]), int(sl["cols"])
+    if not 1 <= k <= rows * cols:
+        return None
+    r, c = divmod(k - 1, cols)
+    H = cv2.getPerspectiveTransform(np.float32([[0, 0], [cols, 0], [cols, rows], [0, rows]]), np.float32(sl["corners"]))
+    return cv2.perspectiveTransform(np.float64([[[c, r], [c + 1, r], [c + 1, r + 1], [c, r + 1]]]), H)[0]
+
+
+@app.get("/api/slotcal")
+def slotcal_info() -> dict:
+    f = _master().get("cam_fit")
+    plan = _grid_plan()
+    out = []
+    for cell in plan["cells"]:
+        k = cell["slot"]
+        clk = _slot_clicks().get(k) or {}
+        out.append({"slot": k, "norm": cell["corner"], "clicked": {w: bool(clk.get(w)) for w in ("bl", "tr")},
+                    "measure": _slot_measure(k, cell)})
+    sc = hub.align_scan
+    return {"slots": out, "calibrated": bool(f), "fit": {k: f[k] for k in ("rms_mm", "max_mm", "pairs")} if f else None,
+            "photo": {"scan_id": sc.get("scan_id"), "time": sc.get("time")} if sc else None,
+            "limits": {"shift_mm": SLOTCAL_MAX_SHIFT_MM, "turn_deg": SLOTCAL_MAX_TURN_DEG},
+            "use": _master().get("slotcal_use", True), "corner_ref": _corner_ref()}
+
+
+@app.get("/api/slotcal/photo")
+def slotcal_photo(slot: int) -> dict:
+    """Slot k's part of the current photo (straightened), with the norm point
+    and the clicks in its pixels."""
+    import cv2
+    import numpy as np
+
+    sc = _scan_or_400()
+    view = _view_image(sc)
+    H, W = view.shape[:2]
+    quad = _slot_cell_quad(slot)
+    cell = next((c for c in _grid_plan()["cells"] if c["slot"] == slot), None)
+    norm_v = None
+    if cell and cell["corner"] is not None:
+        nv = _mm_to_view([cell["corner"]], sc)
+        if nv is not None:
+            norm_v = nv[0]
+    if quad is not None:
+        (x0, y0), (x1, y1) = quad.min(0), quad.max(0)
+        pad = 0.12 * max(x1 - x0, y1 - y0)
+    elif norm_v is not None:
+        x0, y0, x1, y1 = norm_v[0] - 300, norm_v[1] - 300, norm_v[0] + 300, norm_v[1] + 300
+        pad = 0
+    else:
+        x0, y0, x1, y1, pad = 0, 0, W, H, 0
+    X0, Y0 = int(max(0, x0 - pad)), int(max(0, y0 - pad))
+    X1, Y1 = int(min(W, x1 + pad)), int(min(H, y1 + pad))
+    k = min(1.0, 1400 / max(1, X1 - X0, Y1 - Y0))
+    crop = cv2.resize(view[Y0:Y1, X0:X1], None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+    to = lambda p: None if p is None else ((np.asarray(p, float) - [X0, Y0]) * k).round(2).tolist()
+    clk = _slot_clicks().get(slot) or {}
+    fresh = clk.get("scan") == sc.get("scan_id") and clk.get("time") == sc.get("time")
+    return {"image": _jpeg(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR), 90), "offset": [X0, Y0], "scale": k,
+            "size": [crop.shape[1], crop.shape[0]], "norm": to(norm_v),
+            "bl": to(clk.get("bl")) if fresh else None, "tr": to(clk.get("tr")) if fresh else None}
+
+
+@app.post("/api/slotcal/click")
+def slotcal_click(payload: dict) -> dict:
+    """{slot, which: "bl" (the reference corner) | "tr" (the opposite corner),
+    x, y} in the slot photo's pixels; or {slot, clear: true}."""
+    import numpy as np
+
+    sc = _scan_or_400()
+    k = int(payload.get("slot") or 0)
+    if not 1 <= k <= 9:
+        raise HTTPException(400, "slot: 1 to 9")
+    m = _master()
+    allc = dict(m.get("slot_clicks") or {})
+    if payload.get("clear"):
+        allc.pop(str(k), None)
+    else:
+        which = payload.get("which")
+        if which not in ("bl", "tr"):
+            raise HTTPException(400, "which: bl or tr")
+        off, sc_ = np.asarray(payload.get("offset") or [0, 0], float), float(payload.get("scale") or 1)
+        v = (np.array([float(payload["x"]), float(payload["y"])]) / sc_ + off).round(2).tolist()
+        cur = dict(allc.get(str(k)) or {})
+        if cur.get("scan") != sc.get("scan_id") or cur.get("time") != sc.get("time"):
+            cur = {}                                    # clicks from an older photo do not count
+        cur.update({which: v, "scan": sc.get("scan_id"), "time": sc.get("time")})
+        allc[str(k)] = cur
+    m["slot_clicks"] = allc
+    _save_master(m)
+    return slotcal_info()
+
+
+@app.post("/api/slotcal/calibrate")
+def slotcal_calibrate(payload: dict | None = None) -> dict:
+    """Fit the camera to the printer from the slots whose norm point was set on
+    the printer (Save tip here / typed) and whose reference corner was clicked
+    on this photo: each such slot is the same spot seen twice."""
+    import numpy as np
+
+    sc = _scan_or_400()
+    own = {int(k): v for k, v in (_master().get("slot_corners") or {}).items()}
+    pairs = []
+    for k, clk in _slot_clicks().items():
+        if k in own and clk.get("bl") and clk.get("scan") == sc.get("scan_id") and clk.get("time") == sc.get("time"):
+            pairs.append((k, clk["bl"], own[k]))
+    if len(pairs) < 3:
+        raise HTTPException(400, f"Click the reference corner on at least 3 slots whose point was set on the printer "
+                                 f"(have {len(pairs)}).")
+    V = np.array([p[1] for p in pairs], float)
+    P = np.array([p[2] for p in pairs], float)
+    X = np.c_[V, np.ones(len(V))]
+    A, *_ = np.linalg.lstsq(X, P, rcond=None)
+    A = A.T                                              # 2 x 3
+    err = np.hypot(*(X @ A.T - P).T)
+    m = _master()
+    m["cam_fit"] = {"A": A.round(8).tolist(), "rms_mm": round(float(np.sqrt(np.mean(err ** 2))), 3),
+                    "max_mm": round(float(err.max()), 3),
+                    "pairs": [{"slot": k, "err_mm": round(float(e), 3)} for (k, _, _), e in zip(pairs, err)],
+                    "scan": sc.get("scan_id"), "time": time.strftime("%Y-%m-%d %H:%M")}
+    _save_master(m)
+    return slotcal_info()
+
+
+@app.post("/api/slotcal/use")
+def slotcal_use(payload: dict) -> dict:
+    m = _master()
+    m["slotcal_use"] = bool(payload.get("use"))
+    _save_master(m)
+    return slotcal_info()
 
 
 @app.post("/api/routine2/stop")
