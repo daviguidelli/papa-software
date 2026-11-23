@@ -1907,6 +1907,7 @@ function g3Paint(){const a=g3Info;if(!a)return;
       <span class="mono muted">${x.corner?`X ${fmt(x.corner[0],2)} Y ${fmt(x.corner[1],2)}`:`Δ ${fmt(x.offset_mm[0],1)}, ${fmt(x.offset_mm[1],1)}`}</span></div>`}).join('');
   const run=!!(a.status&&a.status.running)||!!(r2Info&&r2Info.status&&r2Info.status.running);
   $('#g3Run').disabled=run||S.busy||!homedXY()||!a.ready;
+  g3CkPaint();
   $('#g3Sub').textContent=!homedXY()?'Home X and Y first':(a.problems[0]||`Slots ${a.runs.join(', ')} · ${a.runs.length} swab${a.runs.length===1?'':'s'} needed`);
 }
 $('#g3Run').onclick=()=>{const a=g3Info;if(!a)return;
@@ -1915,10 +1916,15 @@ $('#g3Run').onclick=()=>{const a=g3Info;if(!a)return;
 setInterval(()=>{if(!document.hidden&&$('#g3Grid').offsetParent)g3Load()},4000);
 
 // ---- grid check: X/Y only, high above the slides ----
-let g3CkPoll=null;
+let g3CkPoll=null,g3CkLast=null;
 function g3CkPaint(c){
-  const run=c&&c.running;
-  ['#g3CkFilled','#g3CkAll'].forEach(q=>$(q).disabled=run||S.busy||!homedXY());
+  if(c)g3CkLast=c;else c=g3CkLast;
+  const run=c&&c.running,hxy=homedXY(),filled=!!(g3Info&&g3Info.runs&&g3Info.runs.length);
+  $('#g3CkAll').disabled=run||S.busy||!hxy;
+  $('#g3CkFilled').disabled=run||S.busy||!hxy||!filled;
+  $('#g3CkAll').title=!hxy?'Home X and Y first':'';
+  $('#g3CkFilled').title=!hxy?'Home X and Y first':!filled?'No filled slot in the last scan: use Tour all 9 slots':'';
+  if(!run&&!(c&&(c.error||c.done.length))){$('#g3CkMsg').textContent=!hxy?'Home X and Y first (Home XY on the left), then tour.':'';}
   $('#g3CkStop').disabled=!run;
   const m=$('#g3CkMsg');if(!c)return;
   if(run)m.innerHTML=`Checking at Z ${fmt(c.z,2)} · ${c.at?`over slot <b>${c.at.slot}</b>: X ${fmt(c.at.x,2)} Y ${fmt(c.at.y,2)}`:'rising…'}${c.done.length?` · done: ${c.done.join(', ')}`:''}`;
