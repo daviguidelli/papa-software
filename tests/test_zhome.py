@@ -306,3 +306,18 @@ def test_grid_anchor_slot_can_be_changed(homed_cell):
     assert c.get("/api/routine3x3").json()["anchor_slot"] == 1          # saved
     assert c.post("/api/routine3x3/anchor", json={"slot": 12}).status_code == 400
     c.post("/api/routine3x3/anchor", json={"slot": 2})
+
+
+def test_grid_shift_by_whole_mounts(homed_cell):
+    c = homed_cell
+    c.post("/api/machine/move", json={"x": 182, "y": 91, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    cell = lambda j, k: next(x for x in j["cells"] if x["slot"] == k)["corner"]
+    j0 = c.get("/api/routine3x3").json()
+    j = c.post("/api/routine3x3/shift", json={"cols": 1}).json()
+    assert j["shift"] == [1, 0]
+    assert cell(j, 1) == pytest.approx(cell(j0, 2), abs=1e-3)        # slot 1 now where slot 2 was
+    j = c.post("/api/routine3x3/shift", json={"rows": -1}).json()
+    assert cell(j, 4) == pytest.approx(cell(j0, 2), abs=1e-3)        # and one row toward slot 1
+    j = c.post("/api/routine3x3/shift", json={"reset": True}).json()
+    assert j["shift"] == [0, 0] and cell(j, 2) == pytest.approx(cell(j0, 2))

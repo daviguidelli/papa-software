@@ -4191,10 +4191,12 @@ def _grid_plan(payload: dict | None = None) -> dict:
         else:
             filled = {c["slot"] for c in sm["cells"] if c["sid"]}
     cells = []
+    sh = _master().get("grid_shift") or [0, 0]          # whole grid moved by whole mounts (columns, rows)
+    sc_, sr_ = int(sh[0]), int(sh[1])
     for k in range(1, rows * cols + 1):
         r, c = divmod(k - 1, cols)
-        dx = (c - ac) * col[0] + (r - ar) * row[0]
-        dy = (c - ac) * col[1] + (r - ar) * row[1]
+        dx = (c - ac + sc_) * col[0] + (r - ar + sr_) * row[0]
+        dy = (c - ac + sc_) * col[1] + (r - ar + sr_) * row[1]
         xy = None if corner is None else [round(corner[0] + dx, 3), round(corner[1] + dy, 3)]
         run = filled is not None and k in filled
         cells.append({"slot": k, "corner": xy, "offset_mm": [round(dx, 3), round(dy, 3)], "run": run,
@@ -4208,9 +4210,28 @@ def _grid_plan(payload: dict | None = None) -> dict:
     runs = [c["slot"] for c in cells if c["run"]]
     if filled is not None and not runs:
         problems.append("No substrate in any slot.")
-    return {"anchor_slot": anchor, "spacing": {"col": col, "row": row, "source": src},
+    return {"anchor_slot": anchor, "shift": [sc_, sr_], "spacing": {"col": col, "row": row, "source": src},
             "cells": cells, "runs": runs, "skips": [c["slot"] for c in cells if not c["run"]],
             "problems": problems}
+
+
+@app.post("/api/routine3x3/shift")
+def routine3x3_shift(payload: dict) -> dict:
+    """Move every slot's corner by whole mounts: {cols: +1 | -1} (toward slot
+    3 / toward slot 1), {rows: +1 | -1} (toward slot 7 / toward slot 1), or
+    {reset: true}. Saved."""
+    m = _master()
+    sh = list(m.get("grid_shift") or [0, 0])
+    if payload.get("reset"):
+        sh = [0, 0]
+    else:
+        sh[0] += int(payload.get("cols") or 0)
+        sh[1] += int(payload.get("rows") or 0)
+    if abs(sh[0]) > 3 or abs(sh[1]) > 3:
+        raise HTTPException(400, "That moves the grid more than 3 mounts.")
+    m["grid_shift"] = sh
+    _save_master(m)
+    return routine3x3_info()
 
 
 @app.post("/api/routine3x3/anchor")
