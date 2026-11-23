@@ -4169,6 +4169,42 @@ def _grid_spacing() -> tuple[list[float], list[float], str]:
     return [float(v) for v in col], [float(v) for v in row], src
 
 
+CORNER_REFS = {          # which corner of the array a slot's point is, in printer terms: (X side, Y side)
+    "low-x low-y": (-1, -1), "high-x low-y": (1, -1), "low-x high-y": (-1, 1), "high-x high-y": (1, 1),
+    "pattern-start": (0, 0),
+}
+
+
+def _corner_ref() -> str:
+    """Which corner of the electrode array each slot's point is (see
+    CORNER_REFS); "pattern-start" means the point is the pattern's own (0, 0)."""
+    v = _master().get("corner_ref") or "low-x low-y"
+    return v if v in CORNER_REFS else "low-x low-y"
+
+
+def _pattern_top_left(x: float, y: float, h: float, w: float | None = None) -> tuple[float, float]:
+    """The pattern's start (its own (0, 0), the sketch's top-left) from a slot's
+    point, whichever corner of the array the point is. The array is the
+    pattern's w x h rectangle; the point is its corner on the chosen X and Y side."""
+    from papa.ops.geometry import axis_matrix
+
+    sx, sy = CORNER_REFS[_corner_ref()]
+    if sx == 0:
+        return x, y
+    if w is None:
+        w = float(scrubmod.merged(_scrub_settings())["area"]["w"])
+    (ax, ay), (bx, by) = axis_matrix(hub.machine.axes)
+    ext_x = abs(w * ax + h * bx)                 # the rectangle's size along machine X and Y
+    ext_y = abs(w * ay + h * by)
+    x0 = x if sx < 0 else x - ext_x              # rectangle's low X and low Y
+    y0 = y if sy < 0 else y - ext_y
+    # the pattern's (0, 0) is the corner local +x and local +y run away from
+    dx_, dy_ = w * ax + h * bx, w * ay + h * by
+    sx0 = x0 if dx_ >= 0 else x0 + ext_x
+    sy0 = y0 if dy_ >= 0 else y0 + ext_y
+    return sx0, sy0
+
+
 def _fit_grid(own: dict, cols: int) -> tuple | None:
     """Least-squares grid through the slots set by hand, with a column moving
     X only and a row moving Y only: ((x of column 1, X per column),
@@ -4249,9 +4285,20 @@ def _grid_plan(payload: dict | None = None) -> dict:
     runs = [c["slot"] for c in cells if c["run"]]
     if filled is not None and not runs:
         problems.append("No substrate in any slot.")
-    return {"anchor_slot": anchor, "shift": [sc_, sr_], "nudge": _master().get("grid_nudge") or [0.0, 0.0], "spacing": {"col": col, "row": row, "source": src},
+    return {"anchor_slot": anchor, "corner_ref": _corner_ref(), "shift": [sc_, sr_], "nudge": _master().get("grid_nudge") or [0.0, 0.0], "spacing": {"col": col, "row": row, "source": src},
             "cells": cells, "runs": runs, "skips": [c["slot"] for c in cells if not c["run"]],
             "problems": problems}
+
+
+@app.post("/api/routine3x3/corner-ref")
+def routine3x3_corner_ref(payload: dict) -> dict:
+    v = payload.get("corner")
+    if v not in CORNER_REFS:
+        raise HTTPException(400, "corner: " + ", ".join(CORNER_REFS))
+    m = _master()
+    m["corner_ref"] = v
+    _save_master(m)
+    return routine3x3_info()
 
 
 @app.post("/api/routine3x3/slot-corner")
@@ -4403,7 +4450,9 @@ def routine3x3_run(payload: dict | None = None) -> dict:
         if not c["run"]:
             continue
         s = dict(_scrub_settings())
-        s["start"] = {"x": c["corner"][0], "y": c["corner"][1], "z": z, "ref": hub.guard.ref}
+        h_ = float(scrubmod.merged(s)["area"]["h"])
+        tx, ty = _pattern_top_left(c["corner"][0], c["corner"][1], h_, float(scrubmod.merged(s)["area"]["w"]))
+        s["start"] = {"x": tx, "y": ty, "z": z, "ref": hub.guard.ref}
         s["rotation_deg"] = 0.0
         slides.append((f"slot {c['slot']}", s))
     safe = float(zhomemod.absolute(st, "safe_mm") or _auto_settings().get("safe_z") or 0)
@@ -4499,7 +4548,9 @@ def routine3x3_check(payload: dict | None = None) -> dict:
         x0, y0 = cells[k]["corner"]
         path = [(x0, y0)]
         if outline:
-            path += [to_machine(hub.machine.axes, x0, y0, lx, ly) for lx, ly in ((w, 0), (w, h), (0, h), (0, 0))]
+            tx, ty = _pattern_top_left(x0, y0, h, w)        # trace exactly the area the routine scrubs
+            path += [to_machine(hub.machine.axes, tx, ty, lx, ly) for lx, ly in ((0, 0), (w, 0), (w, h), (0, h))]
+            path += [(x0, y0)]
         for x, y in path:
             if not hub.machine.in_limits(x, y, z if z is not None else hub.machine.limits["z"][1]):
                 raise HTTPException(400, f"Slot {k}: X {x:.2f} Y {y:.2f} is outside the machine limits.")

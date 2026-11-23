@@ -389,3 +389,36 @@ def test_grid_fitted_from_three_diagonal_slots(homed_cell):
     assert "fitted" in j["spacing"]["source"]
     assert not any("off a straight" in p for p in j["problems"])
     c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
+
+
+@pytest.mark.parametrize("ref,xs,ys", [("low-x low-y", (205.673, 215.673), (90.079, 98.079)),
+                                       ("high-x high-y", (195.673, 205.673), (82.079, 90.079))])
+def test_routine3x3_scrubs_the_area_on_the_chosen_corner_side(homed_cell, ref, xs, ys):
+    """A slot's point is a corner of the array; the scrub stays inside the
+    10 x 8 mm rectangle on that corner's side, at the slide height."""
+    c = homed_cell
+    c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
+    c.post("/api/zhome/run")
+    c.server.hub.loadcell.contact_z = 50.187
+    c.post("/api/scrub/sketch", json={"substrate": {"w": 10, "h": 8}, "bridges": []})
+    c.post("/api/machine/move", json={"x": 40, "y": 77, "speed_mm_s": 100})
+    c.post("/api/auto/pickup2")
+    c.post("/api/routine3x3/slot-corner", json={"slot": 3, "x": 205.673, "y": 90.079})
+    assert c.post("/api/routine3x3/corner-ref", json={"corner": ref}).json()["corner_ref"] == ref
+    before = len(moves(c))
+    r = c.post("/api/routine3x3/run", json={"slots": [3]})
+    assert r.status_code == 200, r.text
+    s = wait2(c)
+    assert s["finished"] and not s["error"], s
+    low = [ln for ln in moves(c)[before:] if "Z48.0000" in ln or (" X" in ln and " Y" in ln)]
+    scrub = []
+    down = False
+    for ln in moves(c)[before:]:
+        if " Z" in ln:
+            down = abs(float(ln.split(" Z")[1].split()[0]) - 48.0) < 0.6
+        if down and " X" in ln and " Y" in ln:
+            scrub.append((float(ln.split(" X")[1].split()[0]), float(ln.split(" Y")[1].split()[0])))
+    assert scrub, low[:5]
+    assert all(xs[0] - 0.01 <= x <= xs[1] + 0.01 and ys[0] - 0.01 <= y <= ys[1] + 0.01 for x, y in scrub), scrub[:4]
+    c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
+    c.post("/api/routine3x3/corner-ref", json={"corner": "low-x low-y"})

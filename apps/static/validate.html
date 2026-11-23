@@ -357,6 +357,15 @@
       <h2>Routine 2 on the <em>3 × 3 mount</em></h2>
       <p class="note" style="margin-top:0">Routine 2's first slide (saved as <b>Slide 1 · top-left</b> in Where everything is) is grid <b>slot <span id="g3Anchor">2</span></b>; every other slot's corner is that corner moved by the mount spacing. Only slots the last substrate scan found filled run, slot 1 to 9; empty slots are skipped. Each slot: check Z, scrub (the Scrub tab pattern at the slide height), dispose, grip the next swab (swab n = pickup + n × next-swab step); park at the end.</p>
       <p class="mono" id="g3Spacing" style="font-size:12.5px"></p>
+      <label class="muted" style="font-size:12.5px">Each slot's point is the array's corner with the
+        <select id="g3Ref">
+          <option value="low-x low-y">lowest X and lowest Y (array runs toward +X, +Y)</option>
+          <option value="high-x low-y">highest X and lowest Y (array runs toward −X, +Y)</option>
+          <option value="low-x high-y">lowest X and highest Y (array runs toward +X, −Y)</option>
+          <option value="high-x high-y">highest X and highest Y (array runs toward −X, −Y)</option>
+          <option value="pattern-start">pattern's own start corner</option>
+        </select></label>
+      <p class="note" style="margin:4px 0 0">To tell: at a slot's point, jog a few mm in +X and +Y. If the tip goes over the array, it is "lowest X and lowest Y". Then tick <b>trace each pattern outline</b> and Go here: the head traces exactly the area the routine will scrub.</p>
       <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
         <span class="muted" style="font-size:12.5px" id="g3Dirs"></span>
         <button class="sm" id="g3FlipC">Flip columns (X)</button>
@@ -1921,6 +1930,7 @@ async function g3Load(force){if(!force&&Date.now()-g3T<3000)return;g3T=Date.now(
   try{g3Info=await api('/api/routine3x3')}catch(e){g3Info=null}g3Paint()}
 function g3Paint(){const a=g3Info;if(!a)return;
   $('#g3Anchor').textContent=a.anchor_slot;
+  if(document.activeElement!==$('#g3Ref'))$('#g3Ref').value=a.corner_ref||'low-x low-y';
   const ng=a.nudge||[0,0];
   $('#g3NudgeMsg').textContent=(ng[0]||ng[1])?`every slot moved X ${ng[0]>=0?'+':''}${fmt(ng[0],2)}, Y ${ng[1]>=0?'+':''}${fmt(ng[1],2)} mm`:'none';
   const shf=a.shift||[0,0];
@@ -2021,6 +2031,9 @@ document.addEventListener('click',e=>{
     g3Own({slot:k,x:p[0],y:p[1]},`Slot ${k} set to X ${p[0]} Y ${p[1]}`);return}
   b=e.target.closest('[data-g3clr]');
   if(b){const k=+b.dataset.g3clr;g3Own({slot:k,clear:true},`Slot ${k} back to the calculated corner`)}});
+
+$('#g3Ref').onchange=async e=>{try{const r=await fetch('/api/routine3x3/corner-ref',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({corner:e.target.value})});
+  const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);g3Info=j;g3Paint();say(`Slot points are the arrays' ${j.corner_ref} corners`,'ok')}catch(x){say(String(x.message||x),'err')}};
 </script>
 </body>
 </html>
