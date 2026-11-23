@@ -4199,11 +4199,14 @@ def _grid_plan(payload: dict | None = None) -> dict:
         dy = (c - ac + sc_) * col[1] + (r - ar + sr_) * row[1]
         nx, ny = (_master().get("grid_nudge") or [0.0, 0.0])
         xy = None if corner is None else [round(corner[0] + dx + nx, 3), round(corner[1] + dy + ny, 3)]
+        own = (_master().get("slot_corners") or {}).get(str(k))
+        if own is not None:                       # set by hand for this slot: used as it is
+            xy = [round(float(own[0]), 3), round(float(own[1]), 3)]
         run = filled is not None and k in filled
-        cells.append({"slot": k, "corner": xy, "offset_mm": [round(dx, 3), round(dy, 3)], "run": run,
+        cells.append({"slot": k, "corner": xy, "own": own is not None, "offset_mm": [round(dx, 3), round(dy, 3)], "run": run,
                       "why": None if run else ("empty" if filled is not None else "unknown")})
     problems = []
-    if corner is None:
+    if corner is None and not all(c["own"] for c in cells if c["run"]):
         problems.append("Routine 2's first slide is not saved yet: set Slide 1 · top-left in Where everything is "
                         "(it is grid slot %d)." % anchor)
     if why_unknown:
@@ -4214,6 +4217,43 @@ def _grid_plan(payload: dict | None = None) -> dict:
     return {"anchor_slot": anchor, "shift": [sc_, sr_], "nudge": _master().get("grid_nudge") or [0.0, 0.0], "spacing": {"col": col, "row": row, "source": src},
             "cells": cells, "runs": runs, "skips": [c["slot"] for c in cells if not c["run"]],
             "problems": problems}
+
+
+@app.post("/api/routine3x3/slot-corner")
+def routine3x3_slot_corner(payload: dict) -> dict:
+    """Set one slot's array corner by hand: {slot, here: true} takes the tip's
+    X and Y now; {slot, x, y} takes typed values; {slot, clear: true} goes back
+    to the calculated grid; {clear_all: true} for every slot. Saved."""
+    m = _master()
+    own = dict(m.get("slot_corners") or {})
+    if payload.get("clear_all"):
+        own = {}
+    else:
+        try:
+            k = int(payload.get("slot"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "slot: 1 to 9") from exc
+        if not 1 <= k <= 9:
+            raise HTTPException(400, "slot: 1 to 9")
+        if payload.get("clear"):
+            own.pop(str(k), None)
+        else:
+            if payload.get("here"):
+                p = hub.printer.position()
+                if not all(a in p.homed for a in "xy"):
+                    raise HTTPException(400, "Home X and Y first.")
+                x, y = p.x, p.y
+            else:
+                try:
+                    x, y = float(payload["x"]), float(payload["y"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise HTTPException(400, "x and y in mm") from exc
+            if not hub.machine.in_limits(x, y, hub.machine.limits["z"][1]):
+                raise HTTPException(400, f"X {x:.2f} Y {y:.2f} is outside the machine limits.")
+            own[str(k)] = [round(x, 3), round(y, 3)]
+    m["slot_corners"] = own
+    _save_master(m)
+    return routine3x3_info()
 
 
 @app.post("/api/routine3x3/correct")

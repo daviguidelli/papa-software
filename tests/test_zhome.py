@@ -346,3 +346,26 @@ def test_grid_correct_here_moves_every_slot_by_the_same_offset(homed_cell):
     assert c.post("/api/routine3x3/correct", json={"slot": 6}).status_code == 400   # a whole mount off: use shift
     j = c.post("/api/routine3x3/correct", json={"reset": True}).json()
     assert j["nudge"] == [0.0, 0.0]
+
+
+def test_slot_corner_set_by_hand_overrides_the_grid(homed_cell):
+    c = homed_cell
+    c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
+    c.post("/api/machine/move", json={"x": 182, "y": 91, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    cell = lambda j, k: next(x for x in j["cells"] if x["slot"] == k)
+    c.post("/api/machine/move", json={"x": 130.4, "y": 92.1, "speed_mm_s": 100})
+    j = c.post("/api/routine3x3/slot-corner", json={"slot": 1, "here": True}).json()
+    assert cell(j, 1)["corner"] == pytest.approx([130.4, 92.1]) and cell(j, 1)["own"]
+    j = c.post("/api/routine3x3/slot-corner", json={"slot": 3, "x": 233.5, "y": 90.2}).json()
+    assert cell(j, 3)["corner"] == pytest.approx([233.5, 90.2])
+    assert not cell(j, 2)["own"]                                         # others stay calculated
+    assert c.post("/api/routine3x3/slot-corner", json={"slot": 4, "x": -50, "y": 0}).status_code == 400
+    j = c.post("/api/routine3x3/slot-corner", json={"slot": 1, "clear": True}).json()
+    assert not cell(j, 1)["own"]
+    # the tour goes to the hand-set corner
+    j = c.post("/api/routine3x3/check", json={"slots": [3], "dwell_s": 0}).json()
+    c.server.hub.thread.join(timeout=10)
+    p = c.get("/api/machine/position").json()
+    assert (p["x"], p["y"]) == pytest.approx((233.5, 90.2))
+    c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
