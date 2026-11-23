@@ -365,7 +365,7 @@
       <div id="g3Grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,150px));gap:6px;margin:8px 0"></div>
       <div class="card" style="padding:12px;margin:10px 0">
         <p class="label" style="margin:0 0 4px">Check the grid first · X and Y only</p>
-        <p class="note" style="margin:0 0 8px">Rises to the check height and stops over each slot's corner. It never lowers, scrubs or grips. Look whether the tip is over each array's top-left corner. Click a slot above to go to just that one.</p>
+        <p class="note" style="margin:0 0 8px">Rises to the check height and stops over each slot's corner. It never lowers, scrubs or grips. Look whether the tip is over each array's top-left corner. Press <b>Go here</b> on a slot above to go to just that one.</p>
         <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
           <label class="muted" style="font-size:12.5px">Height above the slides, mm <input id="g3H" type="number" value="30" min="5" step="5" style="width:70px"></label>
           <label class="muted" style="font-size:12.5px">Pause at each, s <input id="g3D" type="number" value="3" min="0" max="30" step="1" style="width:60px"></label>
@@ -1908,10 +1908,11 @@ function g3Paint(){const a=g3Info;if(!a)return;
   $('#g3Dirs').textContent=`Slot 1 → 3 runs ${dir(c)} · slot 1 → 7 runs ${dir(r)}. If the tour lands on the wrong side, flip:`;
   let n=0;
   $('#g3Grid').innerHTML=a.cells.map(x=>{const sw=x.run?++n:null;
-    return `<div data-g3slot="${x.slot}" title="Go to slot ${x.slot}'s corner at the check height" style="cursor:pointer;border:1px solid ${x.slot===a.anchor_slot?'var(--gold,#d4af37)':'var(--line)'};padding:6px;font-size:12px;opacity:${x.run?1:.45}">
+    return `<div style="border:1px solid ${x.slot===a.anchor_slot?'var(--gold,#d4af37)':'var(--line)'};padding:6px;font-size:12px">
       <b style="font-size:16px">${x.slot}</b>${x.slot===a.anchor_slot?' <span class="muted">= Routine 2 slide 1</span>':''}<br>
       <span class="${x.run?'good':'muted'}">${x.run?'runs · then grips swab '+sw:(x.why==='empty'?'empty · skipped':'not scanned')}</span><br>
-      <span class="mono muted">${x.corner?`X ${fmt(x.corner[0],2)} Y ${fmt(x.corner[1],2)}`:`Δ ${fmt(x.offset_mm[0],1)}, ${fmt(x.offset_mm[1],1)}`}</span></div>`}).join('');
+      <span class="mono muted">${x.corner?`X ${fmt(x.corner[0],2)} Y ${fmt(x.corner[1],2)}`:`Δ ${fmt(x.offset_mm[0],1)}, ${fmt(x.offset_mm[1],1)}`}</span><br>
+      <button class="sm" data-g3slot="${x.slot}" style="margin-top:6px;width:100%">Go here ↗</button></div>`}).join('');
   const run=!!(a.status&&a.status.running)||!!(r2Info&&r2Info.status&&r2Info.status.running);
   $('#g3Run').disabled=run||S.busy||!homedXY()||!a.ready;
   g3CkPaint();
@@ -1954,7 +1955,7 @@ async function g3Ck(slots,dwell,zok){
 $('#g3CkFilled').onclick=()=>g3Ck('filled');
 $('#g3CkAll').onclick=()=>g3Ck('all');
 $('#g3CkStop').onclick=async()=>{await fetch('/api/routine3x3/check/stop',{method:'POST'});g3CkRefresh()};
-$('#g3Grid').addEventListener('click',e=>{const d=e.target.closest('[data-g3slot]');if(!d)return;
+$('#g3Grid').addEventListener('click',e=>{const d=e.target.closest('button[data-g3slot]');if(!d)return;
   if(!homedXY()){say('Home X and Y first','err');return}g3Ck([+d.dataset.g3slot],0)});
 g3CkRefresh();
 
