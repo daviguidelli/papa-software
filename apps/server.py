@@ -4169,6 +4169,28 @@ def _grid_spacing() -> tuple[list[float], list[float], str]:
     return [float(v) for v in col], [float(v) for v in row], src
 
 
+def _fit_grid(own: dict, cols: int) -> tuple | None:
+    """Least-squares grid through the slots set by hand, with a column moving
+    X only and a row moving Y only: ((x of column 1, X per column),
+    (y of row 1, Y per row), worst distance of a set slot from the grid);
+    None unless they span 2+ columns and 2+ rows."""
+    import numpy as np
+
+    if len(own) < 2:
+        return None
+    rc = {k: divmod(k - 1, cols) for k in own}
+    c = np.array([rc[k][1] for k in own], float)
+    r = np.array([rc[k][0] for k in own], float)
+    if len(set(c)) < 2 or len(set(r)) < 2:
+        return None
+    x = np.array([float(own[k][0]) for k in own])
+    y = np.array([float(own[k][1]) for k in own])
+    cx, ox = np.polyfit(c, x, 1)
+    ry, oy = np.polyfit(r, y, 1)
+    res = float(np.max(np.hypot(ox + c * cx - x, oy + r * ry - y)))
+    return (float(ox), float(cx)), (float(oy), float(ry)), res
+
+
 def _grid_plan(payload: dict | None = None) -> dict:
     """Each slot of the 3 x 3 mount: its top-left corner (Slide 1's corner, taken
     as the anchor slot, moved by the mount spacing) and whether it runs: a slot
@@ -4191,6 +4213,14 @@ def _grid_plan(payload: dict | None = None) -> dict:
         else:
             filled = {c["slot"] for c in sm["cells"] if c["sid"]}
     cells = []
+    own_all = {int(k): v for k, v in (_master().get("slot_corners") or {}).items()}
+    fit = _fit_grid(own_all, cols)
+    if fit is not None:
+        # slots set by hand span 2+ columns and 2+ rows: the bases are identical and
+        # square to the printer, so a column moves X only and a row moves Y only
+        (ox, cx), (oy, ry), res = fit
+        col, row = [cx, 0.0], [0.0, ry]
+        src = f"fitted to slots {', '.join(map(str, sorted(own_all)))} set by hand"
     sh = _master().get("grid_shift") or [0, 0]          # whole grid moved by whole mounts (columns, rows)
     sc_, sr_ = int(sh[0]), int(sh[1])
     for k in range(1, rows * cols + 1):
@@ -4199,6 +4229,8 @@ def _grid_plan(payload: dict | None = None) -> dict:
         dy = (c - ac + sc_) * col[1] + (r - ar + sr_) * row[1]
         nx, ny = (_master().get("grid_nudge") or [0.0, 0.0])
         xy = None if corner is None else [round(corner[0] + dx + nx, 3), round(corner[1] + dy + ny, 3)]
+        if fit is not None:
+            xy = [round(ox + c * cx, 3), round(oy + r * ry, 3)]
         own = (_master().get("slot_corners") or {}).get(str(k))
         if own is not None:                       # set by hand for this slot: used as it is
             xy = [round(float(own[0]), 3), round(float(own[1]), 3)]
@@ -4206,7 +4238,10 @@ def _grid_plan(payload: dict | None = None) -> dict:
         cells.append({"slot": k, "corner": xy, "own": own is not None, "offset_mm": [round(dx, 3), round(dy, 3)], "run": run,
                       "why": None if run else ("empty" if filled is not None else "unknown")})
     problems = []
-    if corner is None and not all(c["own"] for c in cells if c["run"]):
+    if fit is not None and fit[2] > 1.5:
+        problems.append(f"The slots set by hand are up to {fit[2]:.1f} mm off a straight, evenly spaced grid: "
+                        "check them.")
+    if corner is None and fit is None and not all(c["own"] for c in cells if c["run"]):
         problems.append("Routine 2's first slide is not saved yet: set Slide 1 · top-left in Where everything is "
                         "(it is grid slot %d)." % anchor)
     if why_unknown:

@@ -369,3 +369,23 @@ def test_slot_corner_set_by_hand_overrides_the_grid(homed_cell):
     p = c.get("/api/machine/position").json()
     assert (p["x"], p["y"]) == pytest.approx((233.5, 90.2))
     c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
+
+
+def test_grid_fitted_from_three_diagonal_slots(homed_cell):
+    """Slots 3, 5 and 7 set by hand (the user's readings): they stay exactly as
+    set, the other six come from the fitted grid (column -X, row +Y)."""
+    c = homed_cell
+    c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
+    for k, (x, y) in {3: (205.673, 90.079), 5: (257.673, 142.079), 7: (308.0, 192.079)}.items():
+        assert c.post("/api/routine3x3/slot-corner", json={"slot": k, "x": x, "y": y}).status_code == 200
+    j = c.get("/api/routine3x3").json()
+    cell = lambda k: next(x for x in j["cells"] if x["slot"] == k)
+    assert cell(3)["corner"] == pytest.approx([205.673, 90.079]) and cell(3)["own"]
+    assert cell(1)["corner"] == pytest.approx([308.279, 90.412], abs=0.01)
+    assert cell(9)["corner"] == pytest.approx([205.952, 192.412], abs=0.01)
+    assert cell(4)["corner"] == pytest.approx([308.279, 141.412], abs=0.01)
+    assert j["spacing"]["col"] == pytest.approx([-51.163, 0], abs=0.01)
+    assert j["spacing"]["row"] == pytest.approx([0, 51.0], abs=0.01)
+    assert "fitted" in j["spacing"]["source"]
+    assert not any("off a straight" in p for p in j["problems"])
+    c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
