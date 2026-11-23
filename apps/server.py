@@ -4213,6 +4213,24 @@ def _grid_plan(payload: dict | None = None) -> dict:
             "problems": problems}
 
 
+@app.post("/api/routine3x3/flip")
+def routine3x3_flip(payload: dict) -> dict:
+    """Turn round which way the grid's columns ({axis: "col"}) or rows
+    ({axis: "row"}) run on the printer. Saved as the mount spacing."""
+    col, row, _ = _grid_spacing()
+    ax = payload.get("axis")
+    if ax == "col":
+        col = [-col[0], -col[1]]
+    elif ax == "row":
+        row = [-row[0], -row[1]]
+    else:
+        raise HTTPException(400, "axis: col or row")
+    m = _master()
+    m["spacing"] = {"col": [round(v, 4) for v in col], "row": [round(v, 4) for v in row]}
+    _save_master(m)
+    return routine3x3_info()
+
+
 @app.get("/api/routine3x3")
 def routine3x3_info() -> dict:
     plan = _grid_plan()

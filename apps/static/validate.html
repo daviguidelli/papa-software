@@ -357,6 +357,11 @@
       <h2>Routine 2 on the <em>3 × 3 mount</em></h2>
       <p class="note" style="margin-top:0">Routine 2's first slide (saved as <b>Slide 1 · top-left</b> in Where everything is) is grid <b>slot <span id="g3Anchor">2</span></b>; every other slot's corner is that corner moved by the mount spacing. Only slots the last substrate scan found filled run, slot 1 to 9; empty slots are skipped. Each slot: check Z, scrub (the Scrub tab pattern at the slide height), dispose, grip the next swab (swab n = pickup + n × next-swab step); park at the end.</p>
       <p class="mono" id="g3Spacing" style="font-size:12.5px"></p>
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+        <span class="muted" style="font-size:12.5px" id="g3Dirs"></span>
+        <button class="sm" id="g3FlipC">Flip columns (X)</button>
+        <button class="sm" id="g3FlipR">Flip rows (Y)</button>
+      </div>
       <div id="g3Grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,150px));gap:6px;margin:8px 0"></div>
       <div class="card" style="padding:12px;margin:10px 0">
         <p class="label" style="margin:0 0 4px">Check the grid first · X and Y only</p>
@@ -1899,6 +1904,8 @@ function g3Paint(){const a=g3Info;if(!a)return;
   $('#g3Anchor').textContent=a.anchor_slot;
   const c=a.spacing.col,r=a.spacing.row;
   $('#g3Spacing').textContent=`Spacing (${a.spacing.source}): next column X ${fmt(c[0],3)} Y ${fmt(c[1],3)} mm · next row X ${fmt(r[0],3)} Y ${fmt(r[1],3)} mm`;
+  const dir=(v,ax)=>{const i=Math.abs(v[0])>=Math.abs(v[1])?0:1;return (v[i]>=0?'+':'−')+(i?'Y':'X')};
+  $('#g3Dirs').textContent=`Slot 1 → 3 runs ${dir(c)} · slot 1 → 7 runs ${dir(r)}. If the tour lands on the wrong side, flip:`;
   let n=0;
   $('#g3Grid').innerHTML=a.cells.map(x=>{const sw=x.run?++n:null;
     return `<div data-g3slot="${x.slot}" title="Go to slot ${x.slot}'s corner at the check height" style="cursor:pointer;border:1px solid ${x.slot===a.anchor_slot?'var(--gold,#d4af37)':'var(--line)'};padding:6px;font-size:12px;opacity:${x.run?1:.45}">
@@ -1945,6 +1952,11 @@ $('#g3CkStop').onclick=async()=>{await fetch('/api/routine3x3/check/stop',{metho
 $('#g3Grid').addEventListener('click',e=>{const d=e.target.closest('[data-g3slot]');if(!d)return;
   if(!homedXY()){say('Home X and Y first','err');return}g3Ck([+d.dataset.g3slot],0)});
 g3CkRefresh();
+
+async function g3Flip(axis){try{const r=await fetch('/api/routine3x3/flip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({axis})});
+  const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);g3Info=j;g3Paint();say(axis==='col'?'Columns flipped':'Rows flipped','ok')}catch(e){say('Flip: '+(e.message||e),'err')}}
+$('#g3FlipC').onclick=()=>g3Flip('col');
+$('#g3FlipR').onclick=()=>g3Flip('row');
 </script>
 </body>
 </html>

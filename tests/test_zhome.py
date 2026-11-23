@@ -262,3 +262,17 @@ def test_grid_check_visits_each_slot_corner_high_and_never_lowers(homed_cell):
     assert f"{round(200 - 2 * row, 3):.4f}" in ys                                       # bottom row
     r = c.post("/api/routine3x3/check", json={"slots": "filled"})
     assert r.status_code == 400                                                   # no scan: nothing known filled
+
+
+def test_grid_rows_can_be_flipped_to_plus_y(homed_cell):
+    c = homed_cell
+    c.post("/api/machine/move", json={"x": 182, "y": 91, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    s7 = lambda j: next(x for x in j["cells"] if x["slot"] == 7)["corner"]
+    assert s7(c.get("/api/routine3x3").json())[1] == pytest.approx(91 - 2 * 2.011 * 25.4, abs=1e-3)
+    j = c.post("/api/routine3x3/flip", json={"axis": "row"}).json()
+    assert s7(j)[1] == pytest.approx(91 + 2 * 2.011 * 25.4, abs=1e-3)
+    assert j["spacing"]["source"] == "entered"
+    j = c.post("/api/routine3x3/flip", json={"axis": "col"}).json()
+    assert s7(j)[0] == pytest.approx(182 + 2.011 * 0 + 1.995 * 25.4, abs=1e-3)   # slot 7 is column 1: now +X of slot 2
+    c.post("/api/master", json={"clear": "spacing"})
