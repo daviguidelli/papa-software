@@ -227,3 +227,38 @@ def test_routine3x3_needs_a_scan_or_slots(homed_cell):
     j = c.get("/api/routine3x3").json()
     assert not j["ready"] and any("Scan the substrates" in p for p in j["problems"])
     assert c.post("/api/routine3x3/run", json={}).status_code == 400
+
+
+def test_grid_check_visits_each_slot_corner_high_and_never_lowers(homed_cell):
+    """The X/Y dry run: rises to the slide height + 30 mm (or safe Z), visits
+    each slot's corner (Slide 1 = slot 2, mount spacing), never moves below
+    that height, never grips or scrubs."""
+    import time as _t
+    c = homed_cell
+    c.post("/api/zhome/run")
+    c.post("/api/machine/move", json={"x": 150, "y": 200, "speed_mm_s": 100})
+    c.post("/api/slide/corner", json={"id": 1})
+    c.post("/api/scrub/sketch", json={"substrate": {"w": 10, "h": 8}, "bridges": []})
+    c.server.hub.align_scan = None
+    before = len(moves(c))
+    r = c.post("/api/routine3x3/check", json={"slots": "all", "height_mm": 30, "dwell_s": 0, "outline": True})
+    assert r.status_code == 200, r.text
+    z = r.json()["z"]
+    assert z >= 48.0 + 30 - 1e-6                         # slide height 48 + 30
+    for _ in range(400):
+        s = c.get("/api/routine3x3/check").json()
+        if not s["running"]:
+            break
+        _t.sleep(0.02)
+    assert s["error"] is None and s["done"] == list(range(1, 10)), s
+    new = moves(c)[before:]
+    zs = [float(ln.split("Z")[1].split()[0]) for ln in new if " Z" in ln]
+    assert all(v >= z - 1e-6 for v in zs), "never below the check height"
+    assert c.get("/api/machine/position").json()["z"] >= z - 1e-6
+    col, row = 1.995 * 25.4, 2.011 * 25.4
+    xs = {ln.split("X")[1].split()[0] for ln in new if " X" in ln}
+    ys = {ln.split("Y")[1].split()[0] for ln in new if " Y" in ln}
+    assert f"{round(150 - col, 3):.4f}" in xs and f"{round(150 + col, 3):.4f}" in xs    # slots 1 and 3
+    assert f"{round(200 - 2 * row, 3):.4f}" in ys                                       # bottom row
+    r = c.post("/api/routine3x3/check", json={"slots": "filled"})
+    assert r.status_code == 400                                                   # no scan: nothing known filled

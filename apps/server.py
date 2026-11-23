@@ -4266,6 +4266,119 @@ def routine3x3_run(payload: dict | None = None) -> dict:
     return {**hub.routine2.status.as_dict(), "runs": plan["runs"], "skips": plan["skips"]}
 
 
+class _GridCheck:
+    def __init__(self) -> None:
+        self.running = False
+        self.stop = False
+        self.at: dict | None = None
+        self.done: list[int] = []
+        self.error: str | None = None
+        self.z: float | None = None
+
+    def as_dict(self) -> dict:
+        return {"running": self.running, "at": self.at, "done": self.done, "error": self.error, "z": self.z}
+
+
+_GCHECK = _GridCheck()
+
+
+@app.get("/api/routine3x3/check")
+def routine3x3_check_status() -> dict:
+    return _GCHECK.as_dict()
+
+
+@app.post("/api/routine3x3/check")
+def routine3x3_check(payload: dict | None = None) -> dict:
+    """Dry run of the mount's X/Y: visit each slot's corner high above the
+    slides (never lowering, no scrub, no grip) and pause there, optionally
+    tracing the pattern's outline. slots: list, or "filled" (default) or
+    "all"; height_mm above the slide height (default 30); dwell_s; outline."""
+    hub.require_idle()
+    p = hub.printer.position()
+    if not all(a in p.homed for a in "xy"):
+        raise HTTPException(400, "Home X and Y first.")
+    body = payload or {}
+    plan = _grid_plan({k: v for k, v in body.items() if k == "anchor_slot"})
+    if any("Slide 1" in m for m in plan["problems"]):
+        raise HTTPException(400, plan["problems"][0])
+    which = body.get("slots", "filled")
+    if which == "all":
+        slots = [c["slot"] for c in plan["cells"]]
+    elif which == "filled":
+        if not plan["runs"]:
+            raise HTTPException(400, " ".join(plan["problems"]) or "No filled slot: tour all 9 instead.")
+        slots = plan["runs"]
+    else:
+        slots = [int(v) for v in which]
+    cells = {c["slot"]: c for c in plan["cells"]}
+    if any(k not in cells for k in slots):
+        raise HTTPException(400, "Slots are 1 to 9.")
+    st = _zhome_settings()
+    slide = zhomemod.absolute(st, "slide_mm")
+    safe = zhomemod.absolute(st, "safe_mm") or _auto_settings().get("safe_z")
+    height = float(body.get("height_mm", 30.0))
+    if "z" not in p.homed:
+        raise HTTPException(400, "Z is not known: home Z on the load cell (or set Z) first.")
+    if slide is not None:
+        z = slide + height
+    else:
+        z = p.z
+    if safe is not None:
+        z = max(z, float(safe))
+    z = max(z, p.z)                                   # never lower
+    lim = hub.machine.limits["z"]
+    z = min(z, float(lim[1]))
+    dwell = max(0.0, min(30.0, float(body.get("dwell_s", 3.0))))
+    outline = bool(body.get("outline"))
+    area = scrubmod.merged(_scrub_settings())["area"]
+    w, h = float(area["w"]), float(area["h"])
+    pts: list[tuple[int, list[tuple[float, float]]]] = []
+    from papa.ops.geometry import to_machine
+    for k in slots:
+        x0, y0 = cells[k]["corner"]
+        path = [(x0, y0)]
+        if outline:
+            path += [to_machine(hub.machine.axes, x0, y0, lx, ly) for lx, ly in ((w, 0), (w, h), (0, h), (0, 0))]
+        for x, y in path:
+            if not hub.machine.in_limits(x, y, z):
+                raise HTTPException(400, f"Slot {k}: X {x:.2f} Y {y:.2f} is outside the machine limits.")
+        pts.append((k, path))
+    speed = float(body.get("speed_mm_s", 40.0))
+    g = _GCHECK
+    g.__init__()
+    g.running, g.z = True, round(z, 3)
+
+    def run() -> None:
+        try:
+            if hub.printer.position().z < z - 1e-6:
+                hub.printer.move(z=z, speed_mm_s=min(float(hub.machine.speeds.get("z_lift", 10.0)), 10.0))
+            for k, path in pts:
+                for i, (x, y) in enumerate(path):
+                    if g.stop:
+                        raise RuntimeError("Stopped")
+                    hub.printer.move(x=x, y=y, speed_mm_s=speed)
+                    if i == 0:
+                        g.at = {"slot": k, "x": round(x, 3), "y": round(y, 3)}
+                        t0 = time.monotonic()
+                        while time.monotonic() - t0 < dwell and not g.stop:
+                            time.sleep(0.05)
+                g.done.append(k)
+        except Exception as exc:                 # noqa: BLE001
+            g.error = str(exc) or type(exc).__name__
+        finally:
+            g.running = False
+
+    hub.thread = threading.Thread(target=run, daemon=True, name="grid-check")
+    hub.thread.start()
+    return g.as_dict()
+
+
+@app.post("/api/routine3x3/check/stop")
+def routine3x3_check_stop() -> dict:
+    _GCHECK.stop = True
+    return _GCHECK.as_dict()
+
+
 @app.post("/api/routine2/stop")
 def routine2_stop() -> dict:
     hub.routine2.stop()

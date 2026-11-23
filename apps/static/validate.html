@@ -358,6 +358,20 @@
       <p class="note" style="margin-top:0">Slide 1's top-left corner is taken as grid <b>slot <span id="g3Anchor">2</span></b>; every other slot's corner is that corner moved by the mount spacing. Only slots the last substrate scan found filled run, slot 1 to 9; empty slots are skipped. Each slot: check Z, scrub (the Scrub tab pattern at the slide height), dispose, grip the next swab (swab n = pickup + n × next-swab step); park at the end.</p>
       <p class="mono" id="g3Spacing" style="font-size:12.5px"></p>
       <div id="g3Grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,150px));gap:6px;margin:8px 0"></div>
+      <div class="card" style="padding:12px;margin:10px 0">
+        <p class="label" style="margin:0 0 4px">Check the grid first · X and Y only</p>
+        <p class="note" style="margin:0 0 8px">Rises to the check height and stops over each slot's corner. It never lowers, scrubs or grips. Look whether the tip is over each array's top-left corner. Click a slot above to go to just that one.</p>
+        <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
+          <label class="muted" style="font-size:12.5px">Height above the slides, mm <input id="g3H" type="number" value="30" min="5" step="5" style="width:70px"></label>
+          <label class="muted" style="font-size:12.5px">Pause at each, s <input id="g3D" type="number" value="3" min="0" max="30" step="1" style="width:60px"></label>
+          <label class="muted" style="font-size:12.5px"><input id="g3O" type="checkbox"> trace each pattern outline</label>
+        </div>
+        <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+          <button id="g3CkFilled">Tour the filled slots</button><button id="g3CkAll">Tour all 9 slots</button>
+          <button class="danger sm" id="g3CkStop" disabled>Stop</button>
+        </div>
+        <p class="note" id="g3CkMsg" style="margin:6px 0 0"></p>
+      </div>
       <div class="auto-actions" style="margin-top:10px"><button class="bigbtn primary" id="g3Run"><b>Run routine 2 on the mount</b><small id="g3Sub">Checking…</small></button></div>
       <p class="note" id="g3Msg"></p>
     </div>
@@ -1887,7 +1901,7 @@ function g3Paint(){const a=g3Info;if(!a)return;
   $('#g3Spacing').textContent=`Spacing (${a.spacing.source}): next column X ${fmt(c[0],3)} Y ${fmt(c[1],3)} mm · next row X ${fmt(r[0],3)} Y ${fmt(r[1],3)} mm`;
   let n=0;
   $('#g3Grid').innerHTML=a.cells.map(x=>{const sw=x.run?++n:null;
-    return `<div style="border:1px solid ${x.slot===a.anchor_slot?'var(--gold,#d4af37)':'var(--line)'};padding:6px;font-size:12px;opacity:${x.run?1:.45}">
+    return `<div data-g3slot="${x.slot}" title="Go to slot ${x.slot}'s corner at the check height" style="cursor:pointer;border:1px solid ${x.slot===a.anchor_slot?'var(--gold,#d4af37)':'var(--line)'};padding:6px;font-size:12px;opacity:${x.run?1:.45}">
       <b style="font-size:16px">${x.slot}</b>${x.slot===a.anchor_slot?' <span class="muted">= Slide 1</span>':''}<br>
       <span class="${x.run?'good':'muted'}">${x.run?'runs · then grips swab '+sw:(x.why==='empty'?'empty · skipped':'not scanned')}</span><br>
       <span class="mono muted">${x.corner?`X ${fmt(x.corner[0],2)} Y ${fmt(x.corner[1],2)}`:`Δ ${fmt(x.offset_mm[0],1)}, ${fmt(x.offset_mm[1],1)}`}</span></div>`}).join('');
@@ -1899,6 +1913,32 @@ $('#g3Run').onclick=()=>{const a=g3Info;if(!a)return;
   if(!confirm(`Routine 2 on slots ${a.runs.join(', ')} (skipping ${a.skips.join(', ')||'none'}).\nNeeds ${a.runs.length} swabs: one in the jaws now, then swab positions 1–${a.runs.length}.\n\nThe printer will move. Keep a hand near E-STOP. Start?`))return;
   run('Routine 2 on the mount',async()=>{r2Cache='';await post('/api/routine3x3/run',{});r2Info=await api('/api/routine2');paintR2();r2Watch();g3Load(true)})};
 setInterval(()=>{if(!document.hidden&&$('#g3Grid').offsetParent)g3Load()},4000);
+
+// ---- grid check: X/Y only, high above the slides ----
+let g3CkPoll=null;
+function g3CkPaint(c){
+  const run=c&&c.running;
+  ['#g3CkFilled','#g3CkAll'].forEach(q=>$(q).disabled=run||S.busy||!homedXY());
+  $('#g3CkStop').disabled=!run;
+  const m=$('#g3CkMsg');if(!c)return;
+  if(run)m.innerHTML=`Checking at Z ${fmt(c.z,2)} · ${c.at?`over slot <b>${c.at.slot}</b>: X ${fmt(c.at.x,2)} Y ${fmt(c.at.y,2)}`:'rising…'}${c.done.length?` · done: ${c.done.join(', ')}`:''}`;
+  else if(c.error)m.innerHTML=`<span class="bad">${esc(c.error)}</span>${c.done.length?` · done: ${c.done.join(', ')}`:''}`;
+  else if(c.done.length)m.innerHTML=`<span class="good">Checked slots ${c.done.join(', ')}</span> at Z ${fmt(c.z,2)}${c.at?` · now over slot ${c.at.slot}`:''}.`;
+}
+async function g3CkRefresh(){try{const c=await api('/api/routine3x3/check');g3CkPaint(c);
+  if(c.running&&!g3CkPoll)g3CkPoll=setInterval(g3CkRefresh,700);
+  if(!c.running&&g3CkPoll){clearInterval(g3CkPoll);g3CkPoll=null;poll&&poll()}}catch(e){}}
+async function g3Ck(slots,dwell){
+  const body={slots,height_mm:+$('#g3H').value||30,dwell_s:dwell==null?(+$('#g3D').value||0):dwell,outline:$('#g3O').checked};
+  try{const r=await fetch('/api/routine3x3/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json();if(!r.ok)throw new Error(j.detail||j.error||r.status);g3CkPaint(j);g3CkRefresh()}
+  catch(e){say('Grid check: '+(e.message||e),'err')}}
+$('#g3CkFilled').onclick=()=>g3Ck('filled');
+$('#g3CkAll').onclick=()=>g3Ck('all');
+$('#g3CkStop').onclick=async()=>{await fetch('/api/routine3x3/check/stop',{method:'POST'});g3CkRefresh()};
+$('#g3Grid').addEventListener('click',e=>{const d=e.target.closest('[data-g3slot]');if(!d)return;
+  if(!homedXY()){say('Home X and Y first','err');return}g3Ck([+d.dataset.g3slot],0)});
+g3CkRefresh();
 </script>
 </body>
 </html>
