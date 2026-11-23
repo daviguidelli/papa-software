@@ -987,14 +987,22 @@ def gripper(action: str, payload: dict | None = None) -> dict:
 @app.get("/api/loadcell")
 def loadcell() -> dict:
     """One filtered reading. grams is null until the scale has been calibrated."""
-    lc = hub.loadcell
-    scaled = bool(getattr(lc, "scaled", True))
-    counts = lc.read_counts()
-    off = getattr(lc, "offset", 0)
-    sc = getattr(lc, "scale", 1.0) or 1.0
-    return {"counts": counts, "offset": off, "scale": sc, "scaled": scaled,
-            "grams": round(lc.grams(), 3) if scaled else None,
-            "newtons": round(lc.newtons(), 3) if scaled else None}
+    try:
+        lc = hub.loadcell
+        scaled = bool(getattr(lc, "scaled", True))
+        counts = lc.read_counts()
+        off = getattr(lc, "offset", 0)
+        sc = getattr(lc, "scale", 1.0) or 1.0
+        return {"counts": counts, "offset": off, "scale": sc, "scaled": scaled,
+                "grams": round(lc.grams(), 3) if scaled else None,
+                "newtons": round(lc.newtons(), 3) if scaled else None}
+    except HTTPException:
+        raise
+    except Exception as exc:                                   # noqa: BLE001
+        msg = str(exc) or type(exc).__name__
+        hint = (" The HX711 never said a reading was ready: check its power (VCC to 3.3 V, GND) and the "
+                "DAT (GPIO 5, pin 29) and CLK (GPIO 6, pin 31) wires." if "not ready" in msg else "")
+        raise HTTPException(409, f"The load cell did not answer: {type(exc).__name__}: {msg}.{hint}") from exc
 
 
 @app.get("/api/loadcell/live")

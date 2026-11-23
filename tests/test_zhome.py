@@ -449,3 +449,17 @@ def test_scrub_one_slot_from_its_corner_with_the_scrub_tab_pattern(homed_cell):
     assert pts and all(205.94 <= x <= 215.96 and 141.40 <= y <= 149.42 for x, y in pts)
     assert c.post("/api/routine3x3/scrub", json={"slot": 0}).status_code == 400
     c.post("/api/routine3x3/slot-corner", json={"clear_all": True})
+
+
+def test_loadcell_reading_failure_is_a_readable_message(api):
+    lc = api.server.hub.loadcell
+
+    def dead():
+        raise TimeoutError("HX711 not ready: check DAT/CLK wiring and power")
+    old = lc.read_counts
+    lc.read_counts = dead
+    try:
+        r = api.get("/api/loadcell")
+        assert r.status_code == 409 and "HX711 not ready" in r.json()["error"] and "pin 29" in r.json()["error"]
+    finally:
+        lc.read_counts = old
